@@ -20,6 +20,12 @@ pub fn for_role(cfg: &Config) -> Vec<ServiceSpec> {
     if let Some(spec) = network() {
         services.push(spec);
     }
+    // SFTP everywhere (REQ-15): the same shadow password that logs into the UI logs
+    // into SFTP; files dropped there land in the user's home, visible in the Files
+    // screen. Runs on both roles so users can SFTP to any host that shares homes.
+    if let Some(spec) = sshd() {
+        services.push(spec);
+    }
     match cfg.role {
         Role::Main => {
             match postgres(cfg) {
@@ -112,6 +118,65 @@ fn airflow(cfg: &Config) -> Vec<ServiceSpec> {
             exec: exec(&["dag-processor"]),
         },
     ]
+}
+
+/// OpenSSH in SFTP-serving mode (REQ-15). Host keys live in the config volume so
+/// they're stable across restarts and image upgrades; auth is PAM/shadow — the
+/// same credential as the web UI. Interactive shells are allowed (the password is
+/// the host account password anyway); the value is SFTP file transfer.
+fn sshd() -> Option<ServiceSpec> {
+    let sshd_bin = Path::new("/usr/sbin/sshd");
+    if !sshd_bin.exists() {
+        return None;
+    }
+    let keydir = PathBuf::from("/var/lib/pebbles/ssh");
+    if let Err(err) = std::fs::create_dir_all(&keydir) {
+        tracing::error!(%err, "cannot create sshd key dir; SFTP disabled");
+        return None;
+    }
+    let host_key = keydir.join("ssh_host_ed25519_key");
+    let pre = if host_key.exists() {
+        vec![]
+    } else {
+        vec![Exec {
+            program: "ssh-keygen".into(),
+            args: vec![
+                "-t".into(),
+                "ed25519".into(),
+                "-f".into(),
+                host_key.display().to_string(),
+                "-N".into(),
+                "".into(),
+            ],
+            envs: vec![],
+            run_as: None,
+        }]
+    };
+    // Privilege-separation dir sshd insists on.
+    let _ = std::fs::create_dir_all("/run/sshd");
+    Some(ServiceSpec {
+        name: "sshd".into(),
+        pre,
+        exec: Exec {
+            program: sshd_bin.to_path_buf(),
+            args: vec![
+                "-D".into(), // foreground; the supervisor owns the lifecycle
+                "-e".into(), // log to stderr
+                "-h".into(),
+                host_key.display().to_string(),
+                "-o".into(),
+                "PidFile=none".into(),
+                "-o".into(),
+                "UsePAM=yes".into(),
+                "-o".into(),
+                "PasswordAuthentication=yes".into(),
+                "-o".into(),
+                "Subsystem=sftp internal-sftp".into(),
+            ],
+            envs: vec![],
+            run_as: None,
+        },
+    })
 }
 
 /// Loopback + DHCP on eth0, via busybox, only when the runtime didn't already

@@ -51,6 +51,27 @@ class FakeDaemon:
             if sub == "log":
                 return {"id": None, "ok": True, "stdout": "abc123 first commit\n", "stderr": ""}
             return {"id": None, "ok": True, "stdout": "", "stderr": ""}
+        if op == "browse":
+            base = payload["path"].rstrip("/.")
+            items = []
+            for p in sorted(self.files):
+                if "/" in p[len(base) :].lstrip("/") if base else "/" in p:
+                    continue
+                if base and not p.startswith(base + "/"):
+                    continue
+                name = p[len(base) :].lstrip("/") if base else p
+                if "/" in name:
+                    continue
+                items.append({"name": name, "dir": False, "size": len(self.files[p]), "mtime": 0})
+            return {"id": None, "ok": True, "items": items}
+        if op in ("mkdir", "delete", "rename", "upload"):
+            if op == "upload":
+                import base64
+
+                self.files[payload["path"]] = base64.b64decode(payload["b64"]).decode()
+            if op == "delete":
+                self.files.pop(payload.get("path", ""), None)
+            return {"id": None, "ok": True}
         if op == "list":
             entries = sorted(
                 p.split("/", 1)[1]
@@ -459,6 +480,38 @@ def test_usage_hosts_and_settings_pages():
         assert c.post(
             "/settings/cluster", data={"action": action, **extra}
         ).status_code == 302
+
+
+def test_files_browse_upload_download_and_traversal_guard():
+    c = signed_in()
+    assert client().get("/files").status_code == 302
+    assert c.get("/files").status_code == 200
+
+    import io
+
+    up = c.post(
+        "/files/action",
+        data={
+            "action": "upload",
+            "dir": "",
+            "file": (io.BytesIO(b"hello pebbles"), "notes.txt"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert up.status_code == 302
+
+    listing = c.get("/files").get_data(as_text=True)
+    assert "notes.txt" in listing
+
+    dl = c.get("/files/download/notes.txt")
+    assert dl.status_code == 200 and b"hello pebbles" in dl.data
+
+    assert c.post("/files/action", data={"action": "mkdir", "dir": "", "name": "data"}).status_code == 302
+
+    # Path traversal is refused (redirect to home, never escapes).
+    assert c.get("/files/..%2f..%2fetc").status_code in (200, 302, 404)
+    dl_bad = c.get("/files/download/..%2f..%2fetc%2fpasswd")
+    assert dl_bad.status_code in (404, 422)
 
 
 def test_notebook_names_are_validated():

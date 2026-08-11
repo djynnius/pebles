@@ -26,7 +26,9 @@ docker exec pebbles curl -s --unix-socket /run/pebbles/pebblesd.sock \
 That provisions a real UNIX account (uid in the reserved 70000+ range, private
 `/home/maya`) and the same password signs into the web UI. From there: **Lake
 catalogs** creates a DuckLake catalog (the form shows the equivalent
-`CREATE CATALOG` SQL), **Notebooks** gives you SQL, Python and R cells (state
+`CREATE CATALOG` SQL), **Files** browses your home with upload/download/folders
+(the same files you reach over SFTP — `sftp maya@<host>` with your Pebbles
+password), **Notebooks** gives you SQL, Python and R cells (state
 persists across cells; files live in `~/notebooks`; numpy/pandas/scikit-learn/
 polars/tidymodels and friends are preinstalled via miniforge, and
 `pip install --user` or personal conda envs add more), **Dashboards** turns saved

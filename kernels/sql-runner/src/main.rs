@@ -23,6 +23,37 @@ const MAX_READ_BYTES: usize = 4096;
 const MAX_RESULT_BYTES: usize = 262_144;
 const EXTENSION_DIR: &str = "/opt/pebbles/duckdb/extensions";
 
+/// Minimal standard-base64 decoder (file uploads arrive base64 over JSON; no dep
+/// worth pulling for this). Ignores whitespace; returns None on invalid input.
+fn b64_decode(s: &str) -> Option<Vec<u8>> {
+    fn val(c: u8) -> Option<u8> {
+        match c {
+            b'A'..=b'Z' => Some(c - b'A'),
+            b'a'..=b'z' => Some(c - b'a' + 26),
+            b'0'..=b'9' => Some(c - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let mut out = Vec::new();
+    let mut buf = 0u32;
+    let mut bits = 0u32;
+    for &c in s.as_bytes() {
+        if c == b'=' || c.is_ascii_whitespace() {
+            continue;
+        }
+        let v = val(c)? as u32;
+        buf = (buf << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buf >> bits) as u8);
+        }
+    }
+    Some(out)
+}
+
 fn lake_root() -> String {
     std::env::var("PEBBLES_LAKE_ROOT").unwrap_or_else(|_| "/var/lib/pebbles/lake".to_string())
 }
@@ -302,6 +333,91 @@ fn handle(request: &Value, executors: &mut Executors) -> Value {
             },
             None => fail("list needs a path".into()),
         },
+        // Richer directory listing for the Files screen: name, dir?, size, mtime.
+        Some("browse") => match request.get("path").and_then(Value::as_str) {
+            Some(path) => match std::fs::read_dir(path) {
+                Ok(entries) => {
+                    let mut items: Vec<Value> = entries
+                        .filter_map(|e| {
+                            let e = e.ok()?;
+                            let meta = e.metadata().ok()?;
+                            let mtime = meta
+                                .modified()
+                                .ok()
+                                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                                .map(|d| d.as_secs())
+                                .unwrap_or(0);
+                            Some(json!({
+                                "name": e.file_name().into_string().ok()?,
+                                "dir": meta.is_dir(),
+                                "size": meta.len(),
+                                "mtime": mtime,
+                            }))
+                        })
+                        .collect();
+                    items.sort_by(|a, b| {
+                        (b["dir"].as_bool(), a["name"].as_str())
+                            .cmp(&(a["dir"].as_bool(), b["name"].as_str()))
+                    });
+                    json!({"id": id, "ok": true, "items": items})
+                }
+                Err(e) => fail(e.to_string()),
+            },
+            None => fail("browse needs a path".into()),
+        },
+        // File upload: base64 content written as raw bytes (parents created).
+        Some("upload") => match (
+            request.get("path").and_then(Value::as_str),
+            request.get("b64").and_then(Value::as_str),
+        ) {
+            (Some(path), Some(b64)) => match b64_decode(b64) {
+                Some(bytes) => {
+                    if let Some(parent) = std::path::Path::new(path).parent() {
+                        if !parent.as_os_str().is_empty() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                    }
+                    match std::fs::write(path, bytes) {
+                        Ok(()) => json!({"id": id, "ok": true}),
+                        Err(e) => fail(e.to_string()),
+                    }
+                }
+                None => fail("invalid base64".into()),
+            },
+            _ => fail("upload needs a path and b64".into()),
+        },
+        Some("mkdir") => match request.get("path").and_then(Value::as_str) {
+            Some(path) => match std::fs::create_dir_all(path) {
+                Ok(()) => json!({"id": id, "ok": true}),
+                Err(e) => fail(e.to_string()),
+            },
+            None => fail("mkdir needs a path".into()),
+        },
+        Some("delete") => match request.get("path").and_then(Value::as_str) {
+            Some(path) => {
+                let meta = std::fs::symlink_metadata(path);
+                let result = match meta {
+                    Ok(m) if m.is_dir() => std::fs::remove_dir_all(path),
+                    Ok(_) => std::fs::remove_file(path),
+                    Err(e) => Err(e),
+                };
+                match result {
+                    Ok(()) => json!({"id": id, "ok": true}),
+                    Err(e) => fail(e.to_string()),
+                }
+            }
+            None => fail("delete needs a path".into()),
+        },
+        Some("rename") => match (
+            request.get("from").and_then(Value::as_str),
+            request.get("to").and_then(Value::as_str),
+        ) {
+            (Some(from), Some(to)) => match std::fs::rename(from, to) {
+                Ok(()) => json!({"id": id, "ok": true}),
+                Err(e) => fail(e.to_string()),
+            },
+            _ => fail("rename needs from and to".into()),
+        },
         Some("sql") => match request.get("sql").and_then(Value::as_str) {
             Some(sql) => run_sql(&id, sql, request.get("catalog").and_then(Value::as_str)),
             None => fail("sql needs a sql string".into()),
@@ -358,7 +474,8 @@ fn handle(request: &Value, executors: &mut Executors) -> Value {
             run_git(&id, &args, request.get("cwd").and_then(Value::as_str))
         }
         other => fail(format!(
-            "unknown op {other:?} (proto 1: ping/read/write/list/sql/python/r/shell/git)"
+            "unknown op {other:?} (proto 1: ping/read/write/list/browse/mkdir/delete/\
+             rename/sql/python/r/shell/git)"
         )),
     }
 }
@@ -402,6 +519,16 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base64_round_trips_common_inputs() {
+        assert_eq!(b64_decode("aGVsbG8=").unwrap(), b"hello");
+        assert_eq!(b64_decode("").unwrap(), b"");
+        assert_eq!(b64_decode("YQ==").unwrap(), b"a");
+        // whitespace ignored (MIME-style wrapping)
+        assert_eq!(b64_decode("aGVs\nbG8=").unwrap(), b"hello");
+        assert!(b64_decode("not base64!").is_none());
+    }
 
     #[test]
     fn git_subcommands_are_whitelisted() {

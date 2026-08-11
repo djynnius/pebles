@@ -7,6 +7,23 @@ All notable changes to Pebbles are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Phase 2 — SFTP & Files parity (REQ-15/32)**: OpenSSH now runs under pebblesd
+  supervision on both roles, PAM/shadow-authenticated — the same password that
+  signs into the web UI logs into SFTP, and files dropped there land in the
+  user's home. Host keys live in the config volume (stable across restarts and
+  upgrades). New **Files** screen: browse your home with breadcrumbs, upload
+  (multi-file), download, create folders, and delete — every operation runs
+  through your own session as your uid, with path-traversal refused server-side.
+  The kernel gained `browse`/`upload`/`mkdir`/`delete`/`rename` ops (upload
+  decodes base64 with a dependency-free decoder). Smoke proves sshd
+  authenticates maya's UNIX password to uid 70000 and the Files ops land
+  correctly-owned files in her home.
+
+### Fixed
+- Hard timeouts so a hung Airflow CLI can't wedge a request handler or CI: the
+  trigger path runs the CLI under a 60 s cap and every smoke curl carries
+  `--max-time`. The api-server now serves all apps (`--apps all`) so task
+  supervisors reach the execution API.
 - **M1.8 — admin completeness**: the operator's cockpit. **Usage** page: host
   CPU load, memory, and per-mount disk — explicitly resources, never credits
   (REQ-48). **Hosts** page: this container with its Main badge plus every

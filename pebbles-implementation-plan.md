@@ -285,6 +285,16 @@ Sequencing: M1.1→M1.2→M1.3 is the compute spine and unlocks the matrix topol
 M1.4→M1.5 build on the session APIs; M1.6 depends on M1.1 (engines) and the budget
 raise; M1.7 is independent after M1.4's shell; M1.8 closes the phase.
 
+## 9c. Phase 2 milestones (v1.0)
+
+Several PRD Phase 2 items landed early: the R kernel (miniforge, REQ-51/52),
+pending-approval registration (M1.8), and the upgrade path (M0.6 nightly). What
+remains, ordered:
+
+| # | Milestone | Scope |
+|---|---|---|
+| M2.1 | **SFTP & Files** | sshd under pebblesd supervision with host keys persisted in the config volume — the Pebbles password IS the SFTP password (REQ-15, already true at the shadow level); Files screen: browse/upload/download/new-folder in the user's home, everything through their session (REQ-32's Files surface). Smoke: password SFTP drop lands owned by the user and
+
 ## 10. Risks and decisions needing owner sign-off
 
 1. **Incus over LXD** (§2.1) — named everywhere; LXD compat incidental. *Sign-off needed.*

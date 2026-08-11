@@ -271,6 +271,54 @@ rm -f "$jar5"
 grep -q 'event: result' <<<"$sse" && grep -q '"c": 3' <<<"$sse" \
   || { echo "FAIL: SSE stream missing the result event: $sse" >&2; exit 1; }
 
+echo "==> Phase 2: SFTP is served and answers with maya's identity (REQ-15)"
+# sshd runs under supervision. Prove it speaks SSH and PAM-authenticates maya's
+# UNIX password over a real key-exchange — no password-injection tool in the image.
+ctr_exec sh -c 'i=0; while [ $i -lt 30 ] && ! (exec 3<>/dev/tcp/127.0.0.1/22) 2>/dev/null; do i=$((i+1)); sleep 1; done; exec 3<&-' \
+  || { echo "FAIL: sshd never listened on 22" >&2; exit 1; }
+banner="$(ctr_exec sh -c 'exec 3<>/dev/tcp/127.0.0.1/22; head -1 <&3')"
+grep -qi 'SSH-2.0' <<<"$banner" || { echo "FAIL: no SSH banner: $banner" >&2; exit 1; }
+# id via a forced-command-free auth check: sshd + PAM accepts maya's shadow password.
+authlog="$(ctr_exec sh -c '
+  SSHPASS=pebbles-demo-1 python3 - <<PY 2>&1 || true
+import subprocess, pty, os, sys, time
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp("ssh", ["ssh","-oStrictHostKeyChecking=no","-oPreferredAuthentications=password",
+                      "-oPubkeyAuthentication=no","maya@127.0.0.1","id -u"])
+buf=b""
+try:
+    for _ in range(50):
+        try: data=os.read(fd,1024)
+        except OSError: break
+        if not data: break
+        buf+=data
+        if b"assword" in buf and b"70000" not in buf:
+            os.write(fd, b"pebbles-demo-1\n"); buf=b""
+        if b"70000" in buf: break
+        time.sleep(0.1)
+except Exception as e: print(e)
+print(buf.decode(errors="replace"))
+PY')"
+grep -q '70000' <<<"$authlog" \
+  || { echo "FAIL: SFTP/SSH did not authenticate maya to uid 70000: $authlog" >&2; exit 1; }
+echo "    sshd authenticated maya via her UNIX password → uid 70000"
+
+echo "==> Files screen: browse/upload/delete run as the user (REQ-15/32)"
+pd -H 'Content-Type: application/json' \
+  -d '{"id":50,"op":"upload","path":"reports/q1.txt","b64":"cGViYmxlcw=="}' \
+  "http://pebblesd/sessions/$id_maya/exec" | grep -q '"ok":true' \
+  || { echo "FAIL: Files upload op failed" >&2; exit 1; }
+browse="$(pd -H 'Content-Type: application/json' \
+  -d '{"id":51,"op":"browse","path":"reports"}' "http://pebblesd/sessions/$id_maya/exec")"
+expect '"name":"q1.txt"' "browse lists the uploaded file" "$browse"
+[ "$(ctr_exec stat -c '%u' /home/maya/reports/q1.txt)" = "70000" ] \
+  || { echo "FAIL: uploaded file not owned by maya" >&2; exit 1; }
+pd -H 'Content-Type: application/json' \
+  -d '{"id":52,"op":"delete","path":"reports/q1.txt"}' \
+  "http://pebblesd/sessions/$id_maya/exec" | grep -q '"ok":true' \
+  || { echo "FAIL: Files delete op failed" >&2; exit 1; }
+
 echo "==> M1.7: the git loop runs as the user, fully offline (REQ-32/33)"
 git_op() { # git_op <json-args> <cwd-or-empty>
   local cwd=""

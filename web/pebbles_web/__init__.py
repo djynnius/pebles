@@ -6,6 +6,7 @@ privileged action is an API call to pebblesd over its unix socket, via
 `pebblesd_client` — which will be generated from pebblesd's OpenAPI schema.
 """
 
+import base64
 import json
 import os
 import re
@@ -528,6 +529,91 @@ def create_app(pebblesd: PebblesdClient | None = None) -> Flask:
                     {"path": line[2:], "staged": False, "unstaged": True, "untracked": True}
                 )
         return info
+
+    def _safe_rel(path: str) -> str | None:
+        """Normalize a home-relative path, refusing traversal outside the home."""
+        clean = os.path.normpath("/" + path.strip()).lstrip("/")
+        if clean == ".":
+            clean = ""
+        if clean.startswith("..") or "/../" in f"/{clean}/":
+            return None
+        return clean
+
+    @app.get("/files")
+    @app.get("/files/<path:subpath>")
+    def files_page(subpath=""):  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return redirect(url_for("login_form"))
+        rel = _safe_rel(subpath)
+        if rel is None:
+            return redirect(url_for("files_page"))
+        items, err = [], None
+        try:
+            got = _session_op(user["username"], {"op": "browse", "path": rel or "."})
+            if got.get("ok"):
+                items = got.get("items", [])
+            else:
+                err = got.get("error")
+        except (OSError, RuntimeError, ValueError) as exc:
+            err = str(exc)
+        crumbs, acc = [], ""
+        for part in [p for p in rel.split("/") if p]:
+            acc = f"{acc}/{part}" if acc else part
+            crumbs.append({"name": part, "path": acc})
+        return render_template(
+            "files.html", user=user, rel=rel, items=items, crumbs=crumbs, error=err
+        )
+
+    @app.post("/files/action")
+    def files_action():  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return redirect(url_for("login_form"))
+        action = request.form.get("action", "")
+        base = _safe_rel(request.form.get("dir", "")) or ""
+        username = user["username"]
+
+        def child(name: str) -> str | None:
+            name = (name or "").strip().strip("/")
+            if not name or "/" in name or name in ("..", "."):
+                return None
+            return f"{base}/{name}" if base else name
+
+        if action == "mkdir":
+            target = child(request.form.get("name", ""))
+            if target:
+                _session_op(username, {"op": "mkdir", "path": target})
+        elif action == "delete":
+            target = _safe_rel(request.form.get("path", ""))
+            if target:
+                _session_op(username, {"op": "delete", "path": target})
+        elif action == "upload":
+            for f in request.files.getlist("file"):
+                target = child(f.filename)
+                if target:
+                    b64 = base64.b64encode(f.read()).decode("ascii")
+                    _session_op(username, {"op": "upload", "path": target, "b64": b64})
+        return redirect(url_for("files_page", subpath=base))
+
+    @app.get("/files/download/<path:subpath>")
+    def files_download(subpath):  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return redirect(url_for("login_form"))
+        rel = _safe_rel(subpath)
+        if rel is None:
+            return jsonify({"error": "bad path"}), 422
+        got = _session_op(user["username"], {"op": "read", "path": rel})
+        if not got.get("ok"):
+            return jsonify({"error": got.get("error", "not found")}), 404
+        return Response(
+            got.get("content", ""),
+            mimetype="application/octet-stream",
+            headers={
+                "Content-Disposition": f'attachment; filename="{os.path.basename(rel)}"'
+            },
+        )
 
     @app.get("/repos")
     def repos_page():  # pyright: ignore[reportUnusedFunction]
