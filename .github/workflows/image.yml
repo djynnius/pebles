@@ -60,6 +60,7 @@ jobs:
   build:
     if: github.event_name == 'push'
     strategy:
+      fail-fast: false # one arch failing must not cancel the other's push
       matrix:
         include:
           - arch: amd64
