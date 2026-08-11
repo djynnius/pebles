@@ -264,6 +264,26 @@ Sequencing: M0.1→M0.2 strictly first; M0.3→M0.4→M0.5 is the dependency spi
 conversion/matrix work starts in parallel from M0.2 (it only needs a bootable image) —
 the runtime matrix must not be left for last.
 
+## 9b. Phase 1 milestones (MVP — all P0)
+
+Target exit (PRD §6): *"the four personas complete their §4 needs without touching a
+terminal (except Ade's install)."*
+
+| # | Milestone | Scope / exit criteria |
+|---|---|---|
+| M1.1 | **Engine registration** | Join tokens: mint/list/revoke via API + admin UI (REQ-05); engine role handshakes with the main, reports resources, receives credentials; uid/gid audit at registration **refuses on conflict**; account replication to the engine (REQ-11/14); lake-path reachability check fails loudly (REQ-26); main brokers sessions to remote engines over the engine's API; Engines list with the state model subset (Available / In use / Stopped / No access). The **main+engine topology joins the CI matrix** here. |
+| M1.2 | **Groups & access** | Groups CRUD = real UNIX groups replicated to hosts (`usermod -aG`, REQ-14); grants target groups only (personal primary group for "user only", REQ-13); grants on catalogs/schemas/engines; engine visibility filtered by access (REQ-07); Users/Groups admin screens. |
+| M1.3 | **Dedicated sessions & draining** | Opt-in dedicated at attach; the REQ-19 drain state machine: no new shared sessions, natural completion, reservation visible + cancellable, configurable wait notification, one reservation per engine; auto-release after 30 min idle; Sessions panel in engine config (REQ-23). |
+| M1.4 | **Workbench shell & notebooks** | The 46 px icon rail + routing document tabs + ≶1280 px overlay/push rule (REQ-29/30); notebook editor with Python + SQL cells; `kernels/python-kernel` under the session identity; live cell output over SSE (REQ-31). |
+| M1.5 | **Dashboards** | Gallery + rearrangeable single-dashboard view fed by saved SQL against engines (REQ-28). |
+| M1.6 | **Jobs on hidden Airflow** | Airflow 3.x in its own venv (image budget raised deliberately in this PR); workflows compile to DAGs; operators call pebblesd — "run X on engine Y as user Z" (REQ-38/41); drag-and-drop builder, triggers/cadence/test-run (REQ-39/40); run detail with logs (REQ-42). |
+| M1.7 | **Git** | Clone into `~/repos` from Files (REQ-32); all git ops as the requesting uid via the `git` CLI (REQ-33); Settings → Git (REQ-34); Source-control rail panel: branch, stage, diff tab, commit/push/pull (REQ-35). |
+| M1.8 | **Admin completeness** | Usage (host resources, never credits), Hosts with role badges, Settings per REQ-48; **empty/loading/error states for every screen** (REQ-49); registration-pending approval flow (REQ-06); deregister invalidates credentials (REQ-08). |
+
+Sequencing: M1.1→M1.2→M1.3 is the compute spine and unlocks the matrix topology;
+M1.4→M1.5 build on the session APIs; M1.6 depends on M1.1 (engines) and the budget
+raise; M1.7 is independent after M1.4's shell; M1.8 closes the phase.
+
 ## 10. Risks and decisions needing owner sign-off
 
 1. **Incus over LXD** (§2.1) — named everywhere; LXD compat incidental. *Sign-off needed.*
