@@ -78,6 +78,16 @@ jobs:
             scripts/smoke/install-to-first-query.sh "${{ matrix.image }}"
 
   main-plus-engine:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runtime: docker
+            image: pebbles:it
+            ctr: docker
+          - runtime: podman
+            image: localhost/pebbles:it
+            ctr: sudo podman
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -89,5 +99,10 @@ jobs:
           load: true
           tags: pebbles:it
           cache-from: type=gha
-      - name: main+engine topology (docker)
-        run: scripts/smoke/main-plus-engine.sh pebbles:it
+      - name: Load the image into rootful podman
+        if: matrix.runtime == 'podman'
+        run: |
+          docker save pebbles:it | sudo podman load
+          sudo podman tag docker.io/library/pebbles:it localhost/pebbles:it
+      - name: main+engine topology (${{ matrix.runtime }})
+        run: CTR_CMD="${{ matrix.ctr }}" scripts/smoke/main-plus-engine.sh "${{ matrix.image }}"

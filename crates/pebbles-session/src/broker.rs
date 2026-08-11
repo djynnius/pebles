@@ -29,6 +29,43 @@ pub enum SessionError {
     Kernel(String),
     #[error("kernel handshake failed: {0}")]
     Handshake(String),
+    #[error("engine is draining — reserved for {0}; no new shared sessions start (REQ-19)")]
+    Draining(String),
+    #[error("a dedicated reservation is already pending for {0}")]
+    ReservationHeld(String),
+    #[error("dedicated sessions are disabled on this engine")]
+    DedicatedDisabled,
+}
+
+/// What opening a session yields: a live session, or — for a dedicated request on
+/// a busy engine — a reservation that fulfills when the engine drains empty.
+/// Never refusal, never preemption (REQ-19).
+pub enum OpenOutcome {
+    Session(SessionInfo),
+    Reserved(ReservationView),
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ReservationView {
+    pub username: String,
+    pub waited_secs: u64,
+    pub notified: bool,
+}
+
+/// The engine's user-facing state (REQ-23 subset; grows in the UI).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EngineState {
+    Available,
+    InUse(usize),
+    Draining(String),
+    Dedicated(String),
+}
+
+struct PendingReservation {
+    request: OpenRequest,
+    requested_at: Instant,
+    notified: bool,
+    fulfilled: Option<SessionInfo>,
 }
 
 #[derive(Debug, Clone)]
@@ -57,6 +94,10 @@ pub struct BrokerConfig {
     pub engine_memory_bytes: u64,
     pub max_sessions: usize,
     pub idle_timeout: Duration,
+    /// Per-engine toggle (REQ-18).
+    pub allow_dedicated: bool,
+    /// Notify the requester when a drain has waited this long (REQ-19; default 15 min).
+    pub drain_notify: Duration,
 }
 
 struct SessionIo {
@@ -75,25 +116,78 @@ pub struct Broker {
     cfg: BrokerConfig,
     admission: StdMutex<AdmissionControl>,
     sessions: StdMutex<HashMap<u64, Arc<SessionEntry>>>,
+    reservation: StdMutex<Option<PendingReservation>>,
     next_id: AtomicU64,
 }
 
 impl Broker {
     /// Build the broker and start its idle reaper (idle sessions close after
-    /// `idle_timeout` — the auto-stop side of REQ-18/21).
+    /// `idle_timeout` — the auto-stop side of REQ-18/21; dedicated sessions
+    /// auto-release the same way).
     pub fn start(cfg: BrokerConfig) -> Arc<Self> {
         let admission = AdmissionControl::new(cfg.engine_memory_bytes, cfg.max_sessions);
         let broker = Arc::new(Self {
             cfg,
             admission: StdMutex::new(admission),
             sessions: StdMutex::new(HashMap::new()),
+            reservation: StdMutex::new(None),
             next_id: AtomicU64::new(0),
         });
         tokio::spawn(reap_idle(Arc::downgrade(&broker)));
         broker
     }
 
-    pub async fn open(&self, req: OpenRequest) -> Result<SessionInfo, SessionError> {
+    pub async fn open(&self, req: OpenRequest) -> Result<OpenOutcome, SessionError> {
+        match req.mode {
+            SessionMode::Shared => {
+                // Draining (REQ-19): a pending reservation stops new shared
+                // sessions; existing ones finish naturally.
+                if let Some(pending) = &*self.reservation.lock().unwrap() {
+                    if pending.fulfilled.is_none() {
+                        return Err(SessionError::Draining(pending.request.username.clone()));
+                    }
+                }
+                Ok(OpenOutcome::Session(self.open_now(req).await?))
+            }
+            SessionMode::Dedicated => {
+                if !self.cfg.allow_dedicated {
+                    return Err(SessionError::DedicatedDisabled);
+                }
+                if self.sessions.lock().unwrap().is_empty()
+                    && self.reservation.lock().unwrap().is_none()
+                {
+                    return Ok(OpenOutcome::Session(self.open_now(req).await?));
+                }
+                let mut slot = self.reservation.lock().unwrap();
+                if let Some(existing) = &*slot {
+                    // One reservation per engine; a fulfilled record frees the
+                    // slot (its holder has their session — a new request starts
+                    // the next drain when they release).
+                    if existing.fulfilled.is_none() {
+                        return Err(SessionError::ReservationHeld(
+                            existing.request.username.clone(),
+                        ));
+                    }
+                }
+                let view = ReservationView {
+                    username: req.username.clone(),
+                    waited_secs: 0,
+                    notified: false,
+                };
+                tracing::info!(user = %req.username, "dedicated reservation placed; engine draining");
+                *slot = Some(PendingReservation {
+                    request: req,
+                    requested_at: Instant::now(),
+                    notified: false,
+                    fulfilled: None,
+                });
+                Ok(OpenOutcome::Reserved(view))
+            }
+        }
+    }
+
+    /// The immediate path: admission + spawn (both shared and empty-engine dedicated).
+    async fn open_now(&self, req: OpenRequest) -> Result<SessionInfo, SessionError> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst) + 1;
         let spec = SessionSpec {
             user: req.username.clone(),
@@ -115,6 +209,88 @@ impl Broker {
                 self.admission.lock().unwrap().release(id);
                 Err(err)
             }
+        }
+    }
+
+    /// The drain completes: an empty engine with a pending reservation starts the
+    /// dedicated session. Called after every close (explicit or idle-reaped).
+    async fn try_fulfill(&self) {
+        let request = {
+            let slot = self.reservation.lock().unwrap();
+            match &*slot {
+                Some(p) if p.fulfilled.is_none() && self.sessions.lock().unwrap().is_empty() => {
+                    Some(p.request.clone())
+                }
+                _ => None,
+            }
+        };
+        let Some(request) = request else { return };
+        match self.open_now(request).await {
+            Ok(info) => {
+                tracing::info!(session = info.id, user = %info.username, "drain complete; dedicated session started");
+                if let Some(p) = self.reservation.lock().unwrap().as_mut() {
+                    p.fulfilled = Some(info);
+                }
+            }
+            Err(err) => {
+                tracing::error!(%err, "fulfilling dedicated reservation failed; reservation cleared");
+                *self.reservation.lock().unwrap() = None;
+            }
+        }
+    }
+
+    /// Pending/ready state for the UI and the API ("none" when no reservation).
+    pub fn reservation_status(&self) -> Option<(ReservationView, Option<SessionInfo>)> {
+        let mut slot = self.reservation.lock().unwrap();
+        let pending = slot.as_mut()?;
+        // REQ-19: after the configured wait, the requester gets notified.
+        if pending.fulfilled.is_none()
+            && !pending.notified
+            && pending.requested_at.elapsed() >= self.cfg.drain_notify
+        {
+            pending.notified = true;
+            tracing::warn!(user = %pending.request.username, "drain still waiting; requester notified");
+        }
+        Some((
+            ReservationView {
+                username: pending.request.username.clone(),
+                waited_secs: pending.requested_at.elapsed().as_secs(),
+                notified: pending.notified,
+            },
+            pending.fulfilled.clone(),
+        ))
+    }
+
+    /// Cancel a pending reservation (requester or admin); a fulfilled one is a
+    /// live session and closes through the normal path instead.
+    pub fn cancel_reservation(&self) -> bool {
+        let mut slot = self.reservation.lock().unwrap();
+        match &*slot {
+            Some(p) if p.fulfilled.is_none() => {
+                tracing::info!(user = %p.request.username, "reservation cancelled; drain ends");
+                *slot = None;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn state(&self) -> EngineState {
+        if let Some(p) = &*self.reservation.lock().unwrap() {
+            if p.fulfilled.is_none() {
+                return EngineState::Draining(p.request.username.clone());
+            }
+        }
+        let sessions = self.sessions.lock().unwrap();
+        if let Some(dedicated) = sessions
+            .values()
+            .find(|e| e.info.mode == SessionMode::Dedicated)
+        {
+            return EngineState::Dedicated(dedicated.info.username.clone());
+        }
+        match sessions.len() {
+            0 => EngineState::Available,
+            n => EngineState::InUse(n),
         }
     }
 
@@ -236,7 +412,20 @@ impl Broker {
         let mut io = entry.io.lock().await;
         let _ = io.child.start_kill();
         let _ = io.child.wait().await;
+        drop(io);
         tracing::info!(session = id, "session closed");
+        // A closing dedicated session releases its reservation record.
+        {
+            let mut slot = self.reservation.lock().unwrap();
+            if slot
+                .as_ref()
+                .and_then(|p| p.fulfilled.as_ref())
+                .is_some_and(|s| s.id == id)
+            {
+                *slot = None;
+            }
+        }
+        self.try_fulfill().await;
         Ok(())
     }
 
@@ -308,19 +497,33 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn open_exec_close_round_trip_and_admission_release() {
-        let dir = tempfile::tempdir().unwrap();
-        let broker = Broker::start(BrokerConfig {
-            kernel: stub_kernel(dir.path()),
+    fn test_broker(dir: &std::path::Path) -> Arc<Broker> {
+        Broker::start(BrokerConfig {
+            kernel: stub_kernel(dir),
             engine_memory_bytes: 100,
             max_sessions: 4,
             idle_timeout: Duration::from_secs(3600),
-        });
+            allow_dedicated: true,
+            drain_notify: Duration::from_secs(900),
+        })
+    }
 
-        let info = broker.open(request(dir.path(), 60)).await.unwrap();
+    fn session(outcome: OpenOutcome) -> SessionInfo {
+        match outcome {
+            OpenOutcome::Session(info) => info,
+            OpenOutcome::Reserved(_) => panic!("expected a live session, got a reservation"),
+        }
+    }
+
+    #[tokio::test]
+    async fn open_exec_close_round_trip_and_admission_release() {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = test_broker(dir.path());
+
+        let info = session(broker.open(request(dir.path(), 60)).await.unwrap());
         assert_eq!(info.id, 1);
         assert_eq!(broker.list().len(), 1);
+        assert_eq!(broker.state(), EngineState::InUse(1));
 
         let reply = broker
             .exec(info.id, serde_json::json!({"id": 1, "op": "ping"}))
@@ -329,7 +532,7 @@ mod tests {
         assert_eq!(reply["ok"], true);
 
         // REQ-20 across the broker: a second 60-byte session exceeds the 100-byte
-        // engine, and closing the first frees the reservation.
+        // engine, and closing the first frees its memory.
         let refused = broker.open(request(dir.path(), 60)).await;
         assert!(matches!(
             refused,
@@ -344,15 +547,73 @@ mod tests {
     #[tokio::test]
     async fn exec_on_unknown_session_is_not_found() {
         let dir = tempfile::tempdir().unwrap();
-        let broker = Broker::start(BrokerConfig {
-            kernel: stub_kernel(dir.path()),
-            engine_memory_bytes: 100,
-            max_sessions: 4,
-            idle_timeout: Duration::from_secs(3600),
-        });
+        let broker = test_broker(dir.path());
         assert!(matches!(
             broker.exec(42, serde_json::json!({})).await,
             Err(SessionError::NotFound(42))
         ));
+    }
+
+    #[tokio::test]
+    async fn dedicated_drains_never_refuses_and_fulfills_on_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = test_broker(dir.path());
+
+        let shared = session(broker.open(request(dir.path(), 30)).await.unwrap());
+
+        // Dedicated on a busy engine: a reservation, not an error (REQ-19).
+        let dedicated = OpenRequest {
+            username: "me".into(),
+            mode: SessionMode::Dedicated,
+            ..request(dir.path(), 0)
+        };
+        assert!(matches!(
+            broker.open(dedicated.clone()).await.unwrap(),
+            OpenOutcome::Reserved(_)
+        ));
+        assert_eq!(broker.state(), EngineState::Draining("me".into()));
+
+        // No new shared sessions during the drain…
+        assert!(matches!(
+            broker.open(request(dir.path(), 10)).await,
+            Err(SessionError::Draining(_))
+        ));
+        // …and only one reservation per engine.
+        assert!(matches!(
+            broker.open(dedicated).await,
+            Err(SessionError::ReservationHeld(_))
+        ));
+
+        // The last shared session closing completes the drain.
+        broker.close(shared.id).await.unwrap();
+        let (view, ready) = broker.reservation_status().unwrap();
+        assert_eq!(view.username, "me");
+        let ready = ready.expect("dedicated session should have started");
+        assert!(matches!(broker.state(), EngineState::Dedicated(_)));
+
+        // Closing the dedicated session clears the record entirely.
+        broker.close(ready.id).await.unwrap();
+        assert!(broker.reservation_status().is_none());
+        assert_eq!(broker.state(), EngineState::Available);
+    }
+
+    #[tokio::test]
+    async fn pending_reservations_cancel_cleanly() {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = test_broker(dir.path());
+        let shared = session(broker.open(request(dir.path(), 30)).await.unwrap());
+        let dedicated = OpenRequest {
+            mode: SessionMode::Dedicated,
+            ..request(dir.path(), 0)
+        };
+        assert!(matches!(
+            broker.open(dedicated).await.unwrap(),
+            OpenOutcome::Reserved(_)
+        ));
+        assert!(broker.cancel_reservation());
+        assert!(broker.reservation_status().is_none());
+        // Shared sessions may start again once the drain is cancelled.
+        assert!(broker.open(request(dir.path(), 10)).await.is_ok());
+        broker.close(shared.id).await.unwrap();
     }
 }

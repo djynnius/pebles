@@ -120,6 +120,12 @@ class PebblesdClient:
     def grant_catalog(self, catalog: str, group: str) -> dict:
         return self._expect("POST", f"/catalogs/{catalog}/grants", {"group": group})
 
+    def cancel_reservation(self, engine: str | None = None) -> dict:
+        path = "/sessions/reservation"
+        if engine and engine != "main":
+            path += f"?engine={engine}"
+        return self._expect("DELETE", path)
+
     def create_catalog(self, name: str, owner: str) -> dict:
         return self._expect("POST", "/catalogs", {"name": name, "owner": owner})
 

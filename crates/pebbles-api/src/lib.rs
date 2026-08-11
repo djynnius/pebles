@@ -193,6 +193,36 @@ pub struct EngineAccessRequest {
     pub access: String,
 }
 
+/// A pending dedicated reservation (REQ-19): returned with 202 when a dedicated
+/// request starts a drain instead of a session.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ReservationDescriptor {
+    pub username: String,
+    pub waited_secs: u64,
+    /// True once the configured drain wait elapsed and the requester was alerted.
+    pub notified: bool,
+    #[serde(default)]
+    pub engine: Option<String>,
+}
+
+/// Reservation state: "none", "pending" (draining), or "ready" (session started).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ReservationStatus {
+    pub state: String,
+    #[serde(default)]
+    pub reservation: Option<ReservationDescriptor>,
+    #[serde(default)]
+    pub session: Option<SessionDescriptor>,
+}
+
+/// An engine's live status (REQ-23 state model).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct EngineStatus {
+    /// "available" | "in use" | "draining" | "dedicated to <user>" | "stopped".
+    pub state: String,
+    pub sessions: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct RegisterEngineResponse {
     pub engine_id: String,
@@ -212,6 +242,9 @@ pub struct EngineDescriptor {
     /// "everyone" or "group:<name>" (REQ-07).
     #[serde(default)]
     pub access: Option<String>,
+    /// Live session count.
+    #[serde(default)]
+    pub sessions: u64,
 }
 
 /// Create a DuckLake catalog owned by `owner` (REQ-24/25). The form and the SQL
@@ -259,6 +292,9 @@ pub struct CatalogDescriptor {
         AddMemberRequest,
         GrantCatalogRequest,
         EngineAccessRequest,
+        ReservationDescriptor,
+        ReservationStatus,
+        EngineStatus,
         ApiError
     ))
 )]

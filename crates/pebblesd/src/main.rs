@@ -154,6 +154,12 @@ fn session_state(cfg: &config::Config, clu: std::sync::Arc<cluster::Cluster>) ->
                     "PEBBLES_SESSION_IDLE_SECS",
                     1800,
                 )),
+                // Per-engine toggle (REQ-18) + the drain wait alert (REQ-19).
+                allow_dedicated: std::env::var("PEBBLES_ALLOW_DEDICATED").as_deref() != Ok("false"),
+                drain_notify: std::time::Duration::from_secs(env_u64(
+                    "PEBBLES_DRAIN_NOTIFY_SECS",
+                    900,
+                )),
             },
         ))
     };

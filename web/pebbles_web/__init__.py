@@ -227,6 +227,16 @@ def create_app(pebblesd: PebblesdClient | None = None) -> Flask:
             engines = []
         return render_template("engines.html", user=user, engines=engines)
 
+    @app.post("/engines/cancel-reservation")
+    def cancel_reservation():  # pyright: ignore[reportUnusedFunction]
+        if session.get("user") is None:
+            return redirect(url_for("login_form"))
+        try:
+            client.cancel_reservation(request.form.get("engine") or None)
+        except PebblesdError:
+            pass  # the reservation may have fulfilled meanwhile; the list shows truth
+        return redirect(url_for("engines_page"))
+
     @app.get("/catalogs")
     def catalogs_page():  # pyright: ignore[reportUnusedFunction]
         user = session.get("user")

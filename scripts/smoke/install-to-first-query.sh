@@ -245,6 +245,47 @@ rm -f "$jar5"
 grep -q 'event: result' <<<"$sse" && grep -q '"c": 3' <<<"$sse" \
   || { echo "FAIL: SSE stream missing the result event: $sse" >&2; exit 1; }
 
+echo "==> M1.3: a dedicated request drains, never refuses (REQ-18/19)"
+resv_out="$(ctr_exec curl -s -w '\n%{http_code}' --unix-socket /run/pebbles/pebblesd.sock \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"tomas","mode":"dedicated"}' http://pebblesd/sessions)"
+resv_code="$(tail -1 <<<"$resv_out")"
+[ "$resv_code" = "202" ] \
+  || { echo "FAIL: dedicated on a busy engine expected 202 reservation, got: $resv_out" >&2; exit 1; }
+expect '"state":"pending"' "reservation visible" \
+  "$(pd http://pebblesd/sessions/reservation)"
+pd http://pebblesd/engines | grep -q '"state":"draining (reserved for tomas)"' \
+  || { echo "FAIL: engine state should show draining" >&2; exit 1; }
+shared_code="$(pd_code -H 'Content-Type: application/json' \
+  -d '{"username":"maya"}' http://pebblesd/sessions)"
+[ "$shared_code" = "409" ] \
+  || { echo "FAIL: shared session during drain expected 409, got $shared_code" >&2; exit 1; }
+
+echo "==> the drain completes when the last shared session closes"
+for sid in $(pd http://pebblesd/sessions | grep -o '"id":[0-9]*' | cut -d: -f2); do
+  pd -X DELETE "http://pebblesd/sessions/$sid" >/dev/null
+done
+ready=""
+for _ in $(seq 1 30); do
+  ready="$(pd http://pebblesd/sessions/reservation)"
+  grep -q '"state":"ready"' <<<"$ready" && break
+  sleep 1
+done
+echo "    $ready"
+expect '"state":"ready"' "dedicated session started after the drain" "$ready"
+ded_id="$(json_num "$ready" id)"
+pd -H 'Content-Type: application/json' -d '{"id":20,"op":"ping"}' \
+  "http://pebblesd/sessions/$ded_id/exec" | grep -q '"uid":70001' \
+  || { echo "FAIL: dedicated session is not tomas" >&2; exit 1; }
+
+echo "==> a second reservation is cancellable (REQ-19)"
+ctr_exec curl -s -o /dev/null --unix-socket /run/pebbles/pebblesd.sock \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"maya","mode":"dedicated"}' http://pebblesd/sessions
+expect '"cancelled":true' "cancel clears the pending reservation" \
+  "$(pd -X DELETE http://pebblesd/sessions/reservation)"
+pd -X DELETE "http://pebblesd/sessions/$ded_id" >/dev/null
+
 echo "==> restart preserves the sticky role and the account (REQ-03/11)"
 ctr restart "$NAME" >/dev/null
 resolve_base

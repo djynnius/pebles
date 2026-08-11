@@ -51,15 +51,22 @@ class FakeDaemon:
                 "name": "main",
                 "address": "local",
                 "state": "available",
+                "sessions": 0,
+                "access": "everyone",
                 "resources": {"cpus": 4, "memory_bytes": 0},
             },
             {
                 "name": "worker-1",
                 "address": "http://10.0.0.7:7443",
-                "state": "available",
+                "state": "draining (reserved for tomas)",
+                "sessions": 2,
+                "access": "group:analysts",
                 "resources": {"cpus": 8, "memory_bytes": 0},
             },
         ]
+
+    def cancel_reservation(self, engine=None):
+        return {"cancelled": True}
 
     def create_catalog(self, name, owner):
         if any(c["name"] == name for c in self.catalogs):
@@ -163,12 +170,15 @@ def test_sql_stream_rejects_empty_query_and_anonymous_users():
     assert signed_in().get("/sql/stream?q=").status_code == 422
 
 
-def test_engines_page_lists_the_fleet():
+def test_engines_page_lists_the_fleet_with_states():
     assert client().get("/engines").status_code == 302
-    page = signed_in().get("/engines")
+    c = signed_in()
+    page = c.get("/engines")
     assert page.status_code == 200
     body = page.get_data(as_text=True)
-    assert "worker-1" in body and "available" in body
+    assert "worker-1" in body and "draining (reserved for tomas)" in body
+    assert "Cancel reservation" in body  # draining rows are cancellable (REQ-19)
+    assert c.post("/engines/cancel-reservation", data={"engine": "worker-1"}).status_code == 302
 
 
 def test_users_page_lists_and_creates():

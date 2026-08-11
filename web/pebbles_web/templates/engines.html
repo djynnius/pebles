@@ -10,21 +10,30 @@
     {% if engines %}
       <div class="card wide">
         <table>
-          <thead><tr><th>Engine</th><th>State</th><th>CPUs</th><th>Address</th></tr></thead>
+          <thead><tr><th>Engine</th><th>State</th><th>Sessions</th><th>Access</th><th>CPUs</th><th></th></tr></thead>
           <tbody>
           {% for e in engines %}
             <tr>
               <td>{{ e.name }}</td>
               <td>{{ e.state }}</td>
+              <td>{{ e.sessions }}</td>
+              <td><code>{{ e.access or 'everyone' }}</code></td>
               <td>{{ e.resources.cpus }}</td>
-              <td><code>{{ e.address }}</code></td>
+              <td>
+                {% if e.state.startswith('draining') %}
+                  <form method="post" action="{{ url_for('cancel_reservation') }}">
+                    <input type="hidden" name="engine" value="{{ e.name }}">
+                    <button type="submit">Cancel reservation</button>
+                  </form>
+                {% endif %}
+              </td>
             </tr>
           {% endfor %}
           </tbody>
         </table>
       </div>
-      <p class="status">Register an engine with a join token — see HOWTO.md. Attach
-        controls and the full state model arrive with milestone M1.3.</p>
+      <p class="status">Register an engine with a join token — see HOWTO.md. Dedicated
+        requests drain the engine: running work always finishes first (REQ-19).</p>
     {% else %}
       <p class="status">No engines yet. This container may not be serving sessions.</p>
     {% endif %}

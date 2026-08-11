@@ -7,6 +7,20 @@ All notable changes to Pebbles are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **M1.3 — dedicated sessions & draining**: the REQ-19 state machine. A dedicated
+  request on a busy engine returns **202 with a reservation** — never refusal,
+  never preemption; the engine enters *draining* (no new shared sessions;
+  running work finishes naturally) and the dedicated session starts the moment
+  the engine empties. Reservations are visible (`GET /sessions/reservation`,
+  engine states show `draining (reserved for <user>)`), cancellable by requester
+  or admin (also from the Engines page), limited to one per engine, and flag
+  `notified` once the configured wait elapses (`PEBBLES_DRAIN_NOTIFY_SECS`,
+  default 15 min). Dedicated sessions auto-release on idle like all sessions;
+  `PEBBLES_ALLOW_DEDICATED=false` disables dedicated per engine (REQ-18). The
+  engine list now carries the fuller REQ-23 state model (available / in use /
+  draining / dedicated-to / stopped) with live session counts, sourced from each
+  engine's own status endpoint. The main+engine CI cell now also runs under
+  rootful Podman.
 - **M1.2 — groups & access**: team groups are real UNIX groups with gids from the
   same reserved pool, persisted in the config volume and replicated to engines
   with users and memberships (REQ-13/14). Catalog grants are enforced by the

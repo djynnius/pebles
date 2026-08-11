@@ -13,13 +13,16 @@ use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use pebbles_api::{
     AddMemberRequest, ApiError, CatalogDescriptor, CreateCatalogRequest, CreateGroupRequest,
-    CreateUserRequest, EngineAccessRequest, EngineDescriptor, EngineResources, GrantCatalogRequest,
-    GroupInfo, Health, IdentitySnapshot, LoginRequest, LoginResponse, MintTokenResponse,
-    OpenSessionRequest, RegisterEngineRequest, RegisterEngineResponse, Role, SessionDescriptor,
-    TokenInfo, UserInfo, VersionInfo,
+    CreateUserRequest, EngineAccessRequest, EngineDescriptor, EngineResources, EngineStatus,
+    GrantCatalogRequest, GroupInfo, Health, IdentitySnapshot, LoginRequest, LoginResponse,
+    MintTokenResponse, OpenSessionRequest, RegisterEngineRequest, RegisterEngineResponse,
+    ReservationDescriptor, ReservationStatus, Role, SessionDescriptor, TokenInfo, UserInfo,
+    VersionInfo,
 };
 use pebbles_identity::IdentityError;
-use pebbles_session::broker::{Broker, OpenRequest, SessionError, SessionInfo};
+use pebbles_session::broker::{
+    Broker, EngineState, OpenOutcome, OpenRequest, SessionError, SessionInfo,
+};
 use pebbles_session::{AdmissionError, SessionMode};
 use serde_json::Value;
 use std::sync::Arc;
@@ -65,6 +68,10 @@ pub fn router(role: Role, state: AppState) -> Router {
             .route("/users", get(list_users).post(create_user))
             .route("/auth/login", post(login))
             .route("/sessions", get(list_sessions).post(open_session))
+            .route(
+                "/sessions/reservation",
+                get(reservation_status).delete(cancel_reservation),
+            )
             .route("/sessions/{id}", delete(close_session))
             .route("/sessions/{id}/exec", post(exec_session))
             .route("/catalogs", get(list_catalogs).post(create_catalog))
@@ -93,8 +100,13 @@ pub fn cluster_router(role: Role, state: AppState) -> Router {
         Role::Engine => {
             let guarded = Router::new()
                 .route("/engine/sessions", get(list_sessions).post(open_session))
+                .route(
+                    "/engine/sessions/reservation",
+                    get(reservation_status).delete(cancel_reservation),
+                )
                 .route("/engine/sessions/{id}", delete(close_session))
                 .route("/engine/sessions/{id}/exec", post(exec_session))
+                .route("/engine/state", get(engine_state))
                 .route("/engine/sync-accounts", post(sync_accounts))
                 .layer(middleware::from_fn_with_state(state.clone(), engine_auth));
             health_routes(role).merge(guarded).with_state(state)
@@ -242,16 +254,109 @@ fn describe(info: SessionInfo) -> SessionDescriptor {
 
 fn session_error(e: SessionError) -> (StatusCode, Json<ApiError>) {
     match &e {
-        // Admission refusals are the protocol working (REQ-19/20): a clean 409,
-        // never a crash, never a kill.
+        // Admission/drain refusals are the protocol working (REQ-19/20): a clean
+        // 409, never a crash, never a kill.
         SessionError::Admission(
             AdmissionError::MemoryExceeded { .. }
             | AdmissionError::MaxSessions(_)
             | AdmissionError::DedicatedNeedsEmptyEngine(_),
-        ) => error(StatusCode::CONFLICT, e),
+        )
+        | SessionError::Draining(_)
+        | SessionError::ReservationHeld(_) => error(StatusCode::CONFLICT, e),
+        SessionError::DedicatedDisabled => error(StatusCode::FORBIDDEN, e),
         SessionError::NotFound(_) => error(StatusCode::NOT_FOUND, e),
         SessionError::Handshake(_) | SessionError::Kernel(_) => error(StatusCode::BAD_GATEWAY, e),
     }
+}
+
+fn reservation_view(broker: &Broker) -> ReservationStatus {
+    match broker.reservation_status() {
+        None => ReservationStatus {
+            state: "none".into(),
+            reservation: None,
+            session: None,
+        },
+        Some((view, ready)) => ReservationStatus {
+            state: if ready.is_some() { "ready" } else { "pending" }.into(),
+            reservation: Some(ReservationDescriptor {
+                username: view.username,
+                waited_secs: view.waited_secs,
+                notified: view.notified,
+                engine: None,
+            }),
+            session: ready.map(describe),
+        },
+    }
+}
+
+async fn reservation_status(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> ApiResult<ReservationStatus> {
+    if let Some(name) = params.get("engine").filter(|n| n.as_str() != "main") {
+        let engine = state
+            .cluster
+            .engine_by_name(name)
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("no engine {name:?}")))?;
+        let resp = state
+            .cluster
+            .http
+            .get(format!("{}/engine/sessions/reservation", engine.address))
+            .bearer_auth(&engine.secret)
+            .send()
+            .await
+            .map_err(|e| error(StatusCode::BAD_GATEWAY, e))?;
+        let status: ReservationStatus = resp
+            .json()
+            .await
+            .map_err(|e| error(StatusCode::BAD_GATEWAY, e))?;
+        return Ok(Json(status));
+    }
+    let broker = broker_of(&state)?;
+    Ok(Json(reservation_view(&broker)))
+}
+
+async fn cancel_reservation(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> ApiResult<Value> {
+    if let Some(name) = params.get("engine").filter(|n| n.as_str() != "main") {
+        let engine = state
+            .cluster
+            .engine_by_name(name)
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("no engine {name:?}")))?;
+        let resp = state
+            .cluster
+            .http
+            .delete(format!("{}/engine/sessions/reservation", engine.address))
+            .bearer_auth(&engine.secret)
+            .send()
+            .await
+            .map_err(|e| error(StatusCode::BAD_GATEWAY, e))?;
+        let value: Value = resp.json().await.unwrap_or(Value::Null);
+        return Ok(Json(value));
+    }
+    let broker = broker_of(&state)?;
+    Ok(Json(
+        serde_json::json!({ "cancelled": broker.cancel_reservation() }),
+    ))
+}
+
+fn state_string(state: &EngineState) -> String {
+    match state {
+        EngineState::Available => "available".into(),
+        EngineState::InUse(_) => "in use".into(),
+        EngineState::Draining(user) => format!("draining (reserved for {user})"),
+        EngineState::Dedicated(user) => format!("dedicated to {user}"),
+    }
+}
+
+async fn engine_state(State(state): State<AppState>) -> ApiResult<EngineStatus> {
+    let broker = broker_of(&state)?;
+    Ok(Json(EngineStatus {
+        state: state_string(&broker.state()),
+        sessions: broker.list().len() as u64,
+    }))
 }
 
 fn broker_of(state: &AppState) -> Result<Arc<Broker>, (StatusCode, Json<ApiError>)> {
@@ -266,7 +371,7 @@ fn broker_of(state: &AppState) -> Result<Arc<Broker>, (StatusCode, Json<ApiError
 async fn open_session(
     State(state): State<AppState>,
     Json(req): Json<OpenSessionRequest>,
-) -> ApiResult<SessionDescriptor> {
+) -> Result<Response, (StatusCode, Json<ApiError>)> {
     // Explicit engine choice (REQ-17): a named engine routes the whole session to
     // that engine's pebblesd; the descriptor comes back with a proxy-local id.
     if let Some(name) = req.engine.clone().filter(|n| n != "main") {
@@ -300,6 +405,15 @@ async fn open_session(
             .map_err(|e| error(StatusCode::BAD_GATEWAY, e))?;
         let status =
             StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+        if status == StatusCode::ACCEPTED {
+            // A drain started on the engine (REQ-19); relay the reservation.
+            let mut reservation: ReservationDescriptor = resp
+                .json()
+                .await
+                .map_err(|e| error(StatusCode::BAD_GATEWAY, e))?;
+            reservation.engine = Some(name);
+            return Ok((StatusCode::ACCEPTED, Json(reservation)).into_response());
+        }
         if !status.is_success() {
             let err = resp.json::<ApiError>().await.unwrap_or(ApiError {
                 error: "engine refused the session".into(),
@@ -312,7 +426,7 @@ async fn open_session(
             .map_err(|e| error(StatusCode::BAD_GATEWAY, e))?;
         desc.id = state.cluster.map_remote(&engine, desc.id);
         desc.engine = Some(name);
-        return Ok(Json(desc));
+        return Ok(Json(desc).into_response());
     }
 
     let broker = broker_of(&state)?;
@@ -340,7 +454,7 @@ async fn open_session(
             )
         })?;
 
-    let info = broker
+    let outcome = broker
         .open(OpenRequest {
             username: user.username,
             uid: user.uid,
@@ -353,7 +467,20 @@ async fn open_session(
         })
         .await
         .map_err(session_error)?;
-    Ok(Json(describe(info)))
+    Ok(match outcome {
+        OpenOutcome::Session(info) => Json(describe(info)).into_response(),
+        // 202: the drain began; the caller polls /sessions/reservation (REQ-19).
+        OpenOutcome::Reserved(view) => (
+            StatusCode::ACCEPTED,
+            Json(ReservationDescriptor {
+                username: view.username,
+                waited_secs: view.waited_secs,
+                notified: view.notified,
+                engine: None,
+            }),
+        )
+            .into_response(),
+    })
 }
 
 async fn list_sessions(State(state): State<AppState>) -> ApiResult<Vec<SessionDescriptor>> {
@@ -696,11 +823,11 @@ fn replicate(state: &AppState) {
 
 async fn list_engines(State(state): State<AppState>) -> ApiResult<Vec<EngineDescriptor>> {
     let mut engines = Vec::new();
-    if state.broker.is_some() {
+    if let Some(broker) = &state.broker {
         engines.push(EngineDescriptor {
             name: "main".into(),
             address: "local".into(),
-            state: "available".into(),
+            state: state_string(&broker.state()),
             resources: EngineResources {
                 cpus: std::thread::available_parallelism()
                     .map(|n| n.get() as u32)
@@ -708,25 +835,42 @@ async fn list_engines(State(state): State<AppState>) -> ApiResult<Vec<EngineDesc
                 memory_bytes: 0,
             },
             access: Some(state.cluster.engine_access("main")),
+            sessions: broker.list().len() as u64,
         });
     }
     for record in state.cluster.list_engines() {
-        let alive = state
+        // The full REQ-23 state model comes from the engine itself; unreachable
+        // engines report as stopped.
+        let status = state
             .cluster
             .http
-            .get(format!("{}/healthz", record.address))
+            .get(format!("{}/engine/state", record.address))
+            .bearer_auth(&record.secret)
             .timeout(std::time::Duration::from_secs(2))
             .send()
-            .await
-            .map(|r| r.status().is_success())
-            .unwrap_or(false);
+            .await;
+        let status = match status {
+            Ok(resp) if resp.status().is_success() => resp
+                .json::<EngineStatus>()
+                .await
+                .ok()
+                .unwrap_or(EngineStatus {
+                    state: "stopped".into(),
+                    sessions: 0,
+                }),
+            _ => EngineStatus {
+                state: "stopped".into(),
+                sessions: 0,
+            },
+        };
         let access = Some(state.cluster.engine_access(&record.name));
         engines.push(EngineDescriptor {
             name: record.name,
             address: record.address,
-            state: if alive { "available" } else { "stopped" }.into(),
+            state: status.state,
             resources: record.resources,
             access,
+            sessions: status.sessions,
         });
     }
     Ok(Json(engines))
