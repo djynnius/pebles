@@ -21,6 +21,7 @@ from flask import (
     session,
     url_for,
 )
+from werkzeug.exceptions import NotFound
 
 from pebbles_web.pebblesd_client import PebblesdClient, PebblesdError
 
@@ -39,6 +40,60 @@ def create_app(pebblesd: PebblesdClient | None = None) -> Flask:
     app = Flask(__name__)
     app.secret_key = _secret_key()
     client = pebblesd or PebblesdClient()
+
+    # --- React workbench (served as a static bundle; JSON API under /api) ---
+    # The SPA owns client-side routing under /app; Flask returns its index for any
+    # /app/* path. Assets live under /static/app (built at image-build time).
+    @app.get("/app")
+    @app.get("/app/")
+    @app.get("/app/<path:_sub>")
+    def spa(_sub=""):  # pyright: ignore[reportUnusedFunction]
+        try:
+            return app.send_static_file("app/index.html")
+        except NotFound:
+            return (
+                "React bundle not built — run `npm --prefix web/frontend run build`.",
+                503,
+            )
+
+    @app.get("/api/me")
+    def api_me():  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return jsonify({"error": "unauthenticated"}), 401
+        return jsonify(user)
+
+    @app.post("/api/login")
+    def api_login():  # pyright: ignore[reportUnusedFunction]
+        body = request.get_json(silent=True) or {}
+        identity = client.login(body.get("username", ""), body.get("password", ""))
+        if identity is None:
+            return jsonify({"error": "Invalid username or password."}), 401
+        session["user"] = identity
+        return jsonify(identity)
+
+    @app.post("/api/logout")
+    def api_logout():  # pyright: ignore[reportUnusedFunction]
+        session.clear()
+        return jsonify({"ok": True})
+
+    @app.get("/api/usage")
+    def api_usage():  # pyright: ignore[reportUnusedFunction]
+        if session.get("user") is None:
+            return jsonify({"error": "unauthenticated"}), 401
+        try:
+            return jsonify(client.usage())
+        except (OSError, RuntimeError, ValueError) as exc:
+            return jsonify({"error": str(exc)}), 503
+
+    @app.get("/api/engines")
+    def api_engines():  # pyright: ignore[reportUnusedFunction]
+        if session.get("user") is None:
+            return jsonify({"error": "unauthenticated"}), 401
+        try:
+            return jsonify(client.list_engines())
+        except (OSError, RuntimeError, ValueError) as exc:
+            return jsonify({"error": str(exc)}), 503
 
     @app.get("/healthz")
     def healthz():  # pyright: ignore[reportUnusedFunction]

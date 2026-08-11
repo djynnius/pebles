@@ -8,3 +8,5 @@ target
 **/.ruff_cache
 ui_ux.html
 *.md
+**/node_modules
+web/pebbles_web/static/app

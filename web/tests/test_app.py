@@ -283,6 +283,36 @@ def test_login_and_signed_in_shell():
     assert c.get("/").status_code == 302
 
 
+def test_json_api_auth_and_data():
+    c = client()
+    # unauthenticated
+    assert c.get("/api/me").status_code == 401
+    assert c.get("/api/usage").status_code == 401
+
+    bad = c.post("/api/login", json={"username": "maya", "password": "nope"})
+    assert bad.status_code == 401
+
+    ok = c.post("/api/login", json={"username": "maya", "password": "pebbles-demo-1"})
+    assert ok.status_code == 200
+    assert ok.get_json()["username"] == "maya"
+
+    me = c.get("/api/me")
+    assert me.status_code == 200 and me.get_json()["uid"] == 70000
+
+    usage = c.get("/api/usage").get_json()
+    assert usage["cpus"] == 8
+    engines = c.get("/api/engines").get_json()
+    assert any(e["name"] == "worker-1" for e in engines)
+
+    assert c.post("/api/logout").status_code == 200
+    assert c.get("/api/me").status_code == 401
+
+
+def test_spa_route_serves_or_reports_missing_bundle():
+    # 200 when the React bundle is built, 503 with guidance otherwise — never 404.
+    assert client().get("/app").status_code in (200, 503)
+
+
 def test_login_page_serves_the_design_shell():
     resp = client().get("/login")
     assert resp.status_code == 200

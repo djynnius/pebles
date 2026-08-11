@@ -6,3 +6,8 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .DS_Store
+
+# React frontend build artifacts (built in CI / image)
+web/frontend/node_modules/
+web/frontend/dist/
+web/pebbles_web/static/app/

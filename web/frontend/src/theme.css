@@ -1,0 +1,185 @@
+/* Pebbles design tokens — Monokai dual theme, verbatim from the v15 prototype
+   (docs/prototype-design.md). Daylight is the :root default; Night overrides on
+   [data-pb-theme="dark"]. No hard-coded colours in components (NFR-06). */
+
+/* Vendored fonts — bundled into the build, never fetched at runtime (NFR-03). */
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+@import "@fontsource/ibm-plex-sans/700.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+@import "@fontsource/jetbrains-mono/700.css";
+
+:root,
+[data-pb-theme="light"] {
+  /* Daylight — Monokai on paper */
+  --bg: #f1f1ef;
+  --surface: #ffffff;
+  --surface-alt: #f8f8f6;
+  --hover: #f3f3f0;
+  --border: #e3e3df;
+  --border-soft: #ececE8;
+  --border-faint: #f4f4f1;
+  --border-strong: #d2d2cc;
+  --track: #e8e8e4;
+  --track-off: #d2d2cc;
+  --text: #272822;
+  --text-mid: #4b4c44;
+  --text-muted: #6b6858;
+  --text-faint: #767361;
+  --text-dim: #6e6b5b;
+  --accent: #f92672;
+  --accent-hover: #ff4c8d;
+  --accent-ink: #e01463;
+  --accent-deep: #b80c4e;
+  --on-accent: #ffffff;
+  --accent-tint: #fde4ee;
+  --accent-tint-ink: #c60e56;
+  --accent-tint-2: #fff3f8;
+  --accent-2: #7c4dff;
+  --deep: #272822;
+  --deep-soft: #1e1f1c;
+  --deep-hover: #33342c;
+  --deep-border: #3e3d32;
+  --nav-active-bg: #3e3d32;
+  --nav-hover-bg: #33342c;
+  --deep-text: #f8f8f2;
+  --deep-text-2: #d7d7cc;
+  --deep-muted: #a6a392;
+  --deep-faint: #9a9682;
+  --ok: #4c8300;
+  --ok-tint: #edf7da;
+  --ok-ink: #3f6d00;
+  --warn: #a85e00;
+  --warn-tint: #fdf0dc;
+  --err: #e01463;
+  --grey: #b4b2a6;
+  --code-str: #4c8300;
+  --code-num: #7c4dff;
+  --viz-1: #f92672;
+  --viz-2: #7c4dff;
+  --viz-3: #4c8300;
+  --viz-4: #a85e00;
+  --viz-5: #0a7e9c;
+  --tile-1: #fbe3ec;
+  --tile-2: #fbb6ce;
+  --tile-3: #f97ba8;
+  --tile-4: #f92672;
+  --tile-5: #b8104e;
+}
+
+[data-pb-theme="dark"] {
+  /* Night — Monokai, unmodified */
+  --bg: #1e1f1c;
+  --surface: #272822;
+  --surface-alt: #2e2f28;
+  --hover: #33342c;
+  --border: #3e3d32;
+  --border-soft: #36372f;
+  --border-faint: #2f302a;
+  --border-strong: #4e4f42;
+  --track: #3e3d32;
+  --track-off: #4e4f42;
+  --text: #f8f8f2;
+  --text-mid: #d7d7cc;
+  --text-muted: #a6a392;
+  --text-faint: #8b8878;
+  --text-dim: #75715e;
+  --accent: #f92672;
+  --accent-hover: #ff5c99;
+  --accent-ink: #ff6faa;
+  --accent-deep: #f92672;
+  --on-accent: #272822;
+  --accent-tint: #3d2430;
+  --accent-tint-ink: #ff8fbd;
+  --accent-tint-2: #33222b;
+  --accent-2: #ae81ff;
+  --deep: #15160f;
+  --deep-soft: #101109;
+  --deep-hover: #1c1d16;
+  --deep-border: #3e3d32;
+  --nav-active-bg: #3e3d32;
+  --nav-hover-bg: #2c2d26;
+  --deep-text: #f8f8f2;
+  --deep-text-2: #d7d7cc;
+  --deep-muted: #a6a392;
+  --deep-faint: #9a9682;
+  --ok: #a6e22e;
+  --ok-tint: #31401d;
+  --ok-ink: #a6e22e;
+  --warn: #fd971f;
+  --warn-tint: #3e2f17;
+  --err: #f92672;
+  --grey: #75715e;
+  --code-str: #a6e22e;
+  --code-num: #ae81ff;
+  --viz-1: #f92672;
+  --viz-2: #ae81ff;
+  --viz-3: #a6e22e;
+  --viz-4: #e6db74;
+  --viz-5: #66d9ef;
+  --tile-1: #3a2630;
+  --tile-2: #6b2244;
+  --tile-3: #a61a57;
+  --tile-4: #f92672;
+  --tile-5: #ff77ac;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+html,
+body,
+#root {
+  height: 100%;
+}
+html[data-pb-theme="light"] body {
+  background: #f1f1ef;
+}
+html[data-pb-theme="dark"] body {
+  background: #1e1f1c;
+}
+body {
+  color: var(--text);
+  font-family: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+.mono,
+code {
+  font-family: "IBM Plex Mono", "JetBrains Mono", ui-monospace, monospace;
+}
+a {
+  color: var(--accent-ink);
+  text-decoration: none;
+}
+a:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
