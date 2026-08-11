@@ -16,7 +16,9 @@ RUN cargo build --release -p pebblesd -p sql-runner
 FROM node:22-bookworm-slim AS frontend-builder
 WORKDIR /build/frontend
 COPY web/frontend/package.json web/frontend/package-lock.json ./
-RUN npm ci --no-audit --no-fund
+# Retry the registry install — CI network fetches flake on a build this large.
+RUN n=0; until npm ci --no-audit --no-fund --fetch-retries 5; do \
+      n=$((n+1)); [ $n -ge 3 ] && exit 1; echo "npm ci retry $n"; sleep 5; done
 COPY web/frontend/ ./
 RUN npm run build
 # vite outDir is ../pebbles_web/static/app → /build/pebbles_web/static/app
@@ -38,9 +40,10 @@ WORKDIR /opt/pebbles/airflow
 ARG AIRFLOW_VERSION=2.10.4
 ENV UV_PYTHON_DOWNLOADS=never
 RUN uv venv .venv \
-    && uv pip install --python .venv/bin/python \
+    && n=0; until uv pip install --python .venv/bin/python \
        "apache-airflow[postgres]==${AIRFLOW_VERSION}" \
-       --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-3.12.txt"
+       --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-3.12.txt"; do \
+       n=$((n+1)); [ $n -ge 3 ] && exit 1; echo "airflow install retry $n"; sleep 5; done
 
 ########## Runtime ##########
 FROM python:3.12-slim-bookworm
@@ -61,16 +64,17 @@ RUN apt-get update \
 # and personal conda envs in their homes need no admin.
 # A dedicated `pebbles` env (never base — base pins its own python): python is
 # pinned to 3.12 because pmdarima has no 3.13 builds yet.
-RUN curl -fsSL -o /tmp/miniforge.sh \
+RUN curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/miniforge.sh \
        "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-$(uname -m).sh" \
     && bash /tmp/miniforge.sh -b -p /opt/conda \
     && rm /tmp/miniforge.sh \
     && arch_extras="$([ "$(uname -m)" = "x86_64" ] && echo r-duckdb || true)" \
-    && /opt/conda/bin/mamba create -y -n pebbles python=3.12 \
+    && n=0; until /opt/conda/bin/mamba create -y -n pebbles python=3.12 \
        jupyterlab ipykernel \
        numpy pandas scipy statsmodels scikit-learn matplotlib seaborn plotnine \
        geopandas duckdb polars networkx pmdarima xgboost openpyxl \
-       r-essentials r-gtsummary r-arrow r-tidymodels r-survey ${arch_extras} \
+       r-essentials r-gtsummary r-arrow r-tidymodels r-survey ${arch_extras}; do \
+       n=$((n+1)); [ $n -ge 3 ] && exit 1; echo "mamba retry $n"; sleep 5; done \
     && /opt/conda/bin/conda clean -afy \
     && find /opt/conda -name '*.a' -delete \
     && rm -rf /opt/conda/envs/pebbles/share/doc /opt/conda/envs/pebbles/share/man \
@@ -80,13 +84,14 @@ ENV PATH="/opt/conda/envs/pebbles/bin:/opt/conda/bin:${PATH}"
 # DuckDB CLI + DuckLake/postgres extensions, vendored at BUILD time for this exact
 # version and platform. Runtime never fetches anything (NFR-03): sessions LOAD from
 # this shared, read-only extension directory.
-RUN curl -fsSL -o /tmp/duckdb.zip \
+RUN curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/duckdb.zip \
        "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb_cli-linux-${TARGETARCH}.zip" \
     && python3 -m zipfile -e /tmp/duckdb.zip /usr/local/bin/ \
     && chmod 755 /usr/local/bin/duckdb \
     && rm /tmp/duckdb.zip \
     && mkdir -p /opt/pebbles/duckdb/extensions \
-    && HOME=/tmp duckdb -c "SET extension_directory='/opt/pebbles/duckdb/extensions'; INSTALL ducklake; INSTALL postgres;" \
+    && n=0; until HOME=/tmp duckdb -c "SET extension_directory='/opt/pebbles/duckdb/extensions'; INSTALL ducklake; INSTALL postgres;"; do \
+       n=$((n+1)); [ $n -ge 3 ] && exit 1; echo "duckdb extension retry $n"; sleep 5; done \
     && chmod -R a+rX /opt/pebbles/duckdb
 
 COPY --from=rust-builder /src/target/release/pebblesd /usr/local/bin/pebblesd

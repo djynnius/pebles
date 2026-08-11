@@ -6,6 +6,8 @@ import { MobileGate } from "./components/MobileGate";
 import { AppShell } from "./AppShell";
 import { Login } from "./routes/Login";
 import { Home } from "./routes/Home";
+import { Engines } from "./routes/Engines";
+import { Usage } from "./routes/Usage";
 import { Placeholder } from "./routes/Placeholder";
 
 type Auth = "loading" | "anon" | User;
@@ -43,11 +45,11 @@ export function App() {
         <Route path="/jobs" element={<Placeholder title="Jobs" eyebrow="Data engineering" />} />
         <Route path="/ingest" element={<Placeholder title="Ingestion" eyebrow="Data engineering" />} />
         <Route path="/autoetl" element={<Placeholder title="Auto ETL" eyebrow="Data engineering" />} />
-        <Route path="/engines" element={<Placeholder title="Engines" eyebrow="Infrastructure" />} />
+        <Route path="/engines" element={<Engines />} />
         <Route path="/hosts" element={<Placeholder title="Hosts" eyebrow="Infrastructure" />} />
         <Route path="/users" element={<Placeholder title="Users &amp; access" eyebrow="Admin" />} />
         <Route path="/groups" element={<Placeholder title="Groups" eyebrow="Admin" />} />
-        <Route path="/usage" element={<Placeholder title="Resource usage" eyebrow="Admin" />} />
+        <Route path="/usage" element={<Usage />} />
         <Route path="/settings" element={<Placeholder title="Account &amp; Settings" />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
