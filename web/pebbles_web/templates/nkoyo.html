@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block content %}
+  <div class="page">
+    <p class="nav">
+      <a href="{{ url_for('index') }}">home</a> · <strong>nkoyo</strong>
+      · <a href="{{ url_for('nkoyo_settings') }}">nkoyo settings</a>
+      · signed in as {{ user.username }} · <a href="{{ url_for('logout') }}">sign out</a>
+    </p>
+    <h2>
+      <span style="display:inline-grid;place-items:center;width:2rem;height:2rem;border-radius:50%;
+        border:2px solid var(--pb-accent);font-size:0.9rem;vertical-align:middle;">N</span>
+      Nkoyo
+    </h2>
+    <p class="status">Runs on your own Ollama models — nothing leaves your hosts.
+      Ask about your data; tool use (queries, files, git) arrives next.</p>
+
+    <div class="card wide" id="chat" style="max-height:50vh;overflow-y:auto;">
+      {% for m in chat %}
+        <p><strong style="color:{{ 'var(--pb-accent)' if m.role == 'assistant' else 'var(--pb-comment)' }}">
+          {{ 'nkoyo' if m.role == 'assistant' else user.username }}</strong><br>
+          <span style="white-space:pre-wrap">{{ m.content }}</span></p>
+      {% else %}
+        <p class="status">No conversation yet — ask something below.</p>
+      {% endfor %}
+    </div>
+
+    <form class="card wide" id="ask">
+      <label for="prompt">Ask Nkoyo</label>
+      <textarea id="prompt" rows="2" spellcheck="false"></textarea>
+      <button type="submit">Send</button>
+      <p id="state" class="status" aria-live="polite"></p>
+    </form>
+    <form method="post" action="{{ url_for('nkoyo_clear') }}">
+      <button type="submit" class="status" style="background:none;border:0;cursor:pointer;">clear conversation</button>
+    </form>
+  </div>
+  <script>
+    const chat = document.getElementById("chat");
+    const state = document.getElementById("state");
+    function bubble(who, text, accent) {
+      const p = document.createElement("p");
+      const b = document.createElement("strong");
+      b.style.color = accent ? "var(--pb-accent)" : "var(--pb-comment)";
+      b.textContent = who;
+      const span = document.createElement("span");
+      span.style.whiteSpace = "pre-wrap";
+      span.textContent = text;
+      p.append(b, document.createElement("br"), span);
+      chat.appendChild(p);
+      chat.scrollTop = chat.scrollHeight;
+    }
+    document.getElementById("ask").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const prompt = document.getElementById("prompt").value.trim();
+      if (!prompt) return;
+      bubble("{{ user.username }}", prompt, false);
+      document.getElementById("prompt").value = "";
+      state.textContent = "thinking…";
+      const resp = await fetch("{{ url_for('nkoyo_send') }}", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ prompt }),
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        bubble("nkoyo", data.content, true);
+        state.textContent = data.model + " @ " + data.endpoint;
+      } else {
+        state.textContent = data.error || ("error " + resp.status);
+      }
+    });
+  </script>
+{% endblock %}

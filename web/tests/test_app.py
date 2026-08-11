@@ -125,6 +125,30 @@ class FakeDaemon:
     def cancel_reservation(self, engine=None):
         return {"cancelled": True}
 
+    def nkoyo_config(self):
+        return {
+            "endpoints": ["http://127.0.0.1:11434"],
+            "planner_model": "llama3.2",
+            "coder_model": "llama3.2",
+            "embed_model": "nomic-embed-text",
+            "max_steps": 16,
+        }
+
+    def nkoyo_config_save(self, cfg):
+        return cfg
+
+    def nkoyo_rescan(self):
+        return [{"endpoint": "http://127.0.0.1:11434", "models": ["llama3.2:latest"]}]
+
+    def nkoyo_chat(self, username, messages, which="planner"):
+        if not self.nkoyo_config()["endpoints"]:
+            raise PebblesdError(503, "no Ollama endpoints configured")
+        return {
+            "content": f"hello {username}, you said: {messages[-1]['content']}",
+            "model": "llama3.2",
+            "endpoint": "http://127.0.0.1:11434",
+        }
+
     def usage(self):
         return {
             "hostname": "pebbles-main",
@@ -512,6 +536,39 @@ def test_files_browse_upload_download_and_traversal_guard():
     assert c.get("/files/..%2f..%2fetc").status_code in (200, 302, 404)
     dl_bad = c.get("/files/download/..%2f..%2fetc%2fpasswd")
     assert dl_bad.status_code in (404, 422)
+
+
+def test_nkoyo_chat_and_settings():
+    c = signed_in()
+    assert client().get("/nkoyo").status_code == 302
+    assert c.get("/nkoyo").status_code == 200
+
+    reply = c.post("/nkoyo/send", json={"prompt": "profile the claims table"})
+    assert reply.status_code == 200
+    assert "you said: profile the claims table" in reply.get_json()["content"]
+
+    page = c.get("/nkoyo").get_data(as_text=True)
+    assert "profile the claims table" in page  # conversation persists in session
+
+    assert c.post("/nkoyo/send", json={"prompt": ""}).status_code == 422
+    assert c.post("/nkoyo/clear").status_code == 302
+
+    settings = c.get("/settings/nkoyo")
+    assert settings.status_code == 200
+    assert "11434" in settings.get_data(as_text=True)
+    rescan = c.post("/settings/nkoyo", data={"action": "rescan"})
+    assert "llama3.2:latest" in rescan.get_data(as_text=True)
+    assert c.post(
+        "/settings/nkoyo",
+        data={
+            "action": "save",
+            "endpoints": "http://127.0.0.1:11434",
+            "planner_model": "qwen3",
+            "coder_model": "qwen3-coder",
+            "embed_model": "nomic-embed-text",
+            "max_steps": "12",
+        },
+    ).status_code == 302
 
 
 def test_notebook_names_are_validated():

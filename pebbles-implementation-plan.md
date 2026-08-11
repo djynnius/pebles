@@ -288,6 +288,19 @@ raise; M1.7 is independent after M1.4's shell; M1.8 closes the phase.
 ## 9c. Phase 2 milestones (v1.0)
 
 Several PRD Phase 2 items landed early: the R kernel (miniforge, REQ-51/52),
+pending-approval registration (M1.8), and the upgrade path (M0.6 nightly).
+
+| # | Milestone | Scope |
+|---|---|---|
+| M2.1 ✅ | **SFTP & Files parity** | sshd under pebblesd supervision (PAM/shadow — same password as the UI, REQ-15), host keys in the config volume; Files screen (browse/upload/download/mkdir/delete through the user's session, traversal-guarded); kernel file ops. |
+| M2.2 | **Nkoyo foundation** (this pass) | Ollama endpoint config + fleet auto-detection (REQ-43), per-function models (planner/coder/embed), max-steps; chat page + settings; graceful air-gapped behavior (clean 503 with guidance when no endpoint is configured). |
+| M2.3 | **Nkoyo agency + Auto ETL** | The tool loop: tools execute through the invoking user's session (REQ-45 is structural — Nkoyo can never exceed their grants), graded always-on/ask-first/blocked with UI approval; folder-based skills (`~/.pebbles/skills`, `/opt/pebbles/skills`, REQ-44); Auto ETL profile→propose→approve→load, saveable as a workflow and committable to a repo (REQ-46). |
+| M2.4 | **Ops hardening** | Repo-ref workflow tasks (REQ-37); engine health loop with main-managed restart (REQ-22); scheduled backups (REQ-50, generalizing the migration-backup machinery); NFR-08 degraded-but-alive smoke (kill the main, engine sessions survive). |
+| M2.5 | **Release engineering → v1.0.0** | TLS on the cluster API; Postgres-over-TCP so remote-engine sessions can attach catalogs; REQ-49 empty/error audit + prototype-fidelity styling pass; `release.yml` (tag → promote digest, Incus artifacts, third-party license manifest, changelog) — **versioning starts here**. |
+
+## 9c. Phase 2 milestones (v1.0)
+
+Several PRD Phase 2 items landed early: the R kernel (miniforge, REQ-51/52),
 pending-approval registration (M1.8), and the upgrade path (M0.6 nightly). What
 remains, ordered:
 

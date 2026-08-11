@@ -41,8 +41,10 @@ under git settings — Pebbles never holds a shared credential), and the
 queries against the lake as your own UNIX user, streaming results over SSE — try
 `SELECT 42 AS answer;` or load a CSV from your home with
 `read_csv_auto('/home/maya/file.csv')`. Time travel works:
-`SELECT * FROM t AT (VERSION => 1);`. `/healthz` shows the daemon's role proxied
-over the privileged socket. Omit `-e PEBBLES_ROLE=…` and run with `-it` to get the
+`SELECT * FROM t AT (VERSION => 1);`. **Nkoyo**, the assistant, chats via your
+own Ollama models (point it at an endpoint under Settings → Nkoyo; rescan
+auto-detects Ollama across the fleet — nothing leaves your hosts). `/healthz`
+shows the daemon's role proxied over the privileged socket. Omit `-e PEBBLES_ROLE=…` and run with `-it` to get the
 setup wizard instead. Podman (rootful) works with the same flags.
 
 ### Add an engine

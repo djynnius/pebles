@@ -94,7 +94,10 @@ pub fn router(role: Role, state: AppState) -> Router {
             .route("/workflows", get(list_workflows).post(save_workflow))
             .route("/workflows/{name}/run", post(trigger_workflow))
             .route("/workflows/{name}/runs", get(workflow_runs))
-            .route("/workflows/{name}/runs/{run_id}", get(workflow_run_detail)),
+            .route("/workflows/{name}/runs/{run_id}", get(workflow_run_detail))
+            .route("/nkoyo/config", get(nkoyo_config).post(nkoyo_config_save))
+            .route("/nkoyo/rescan", post(nkoyo_rescan))
+            .route("/nkoyo/chat", post(nkoyo_chat)),
         Role::Engine => health_routes(role),
     }
     .with_state(state)
@@ -951,6 +954,69 @@ async fn usage(State(state): State<AppState>) -> ApiResult<pebbles_api::UsageInf
         mem_available_bytes: mem("MemAvailable"),
         disks,
     }))
+}
+
+// ---- Nkoyo: local-model assistant (Phase 2, REQ-43) ----
+
+async fn nkoyo_config(State(state): State<AppState>) -> ApiResult<crate::nkoyo::NkoyoConfig> {
+    Ok(Json(crate::nkoyo::load(&state.config_dir)))
+}
+
+async fn nkoyo_config_save(
+    State(state): State<AppState>,
+    Json(cfg): Json<crate::nkoyo::NkoyoConfig>,
+) -> ApiResult<crate::nkoyo::NkoyoConfig> {
+    crate::nkoyo::save(&state.config_dir, &cfg)
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    tracing::info!(endpoints = cfg.endpoints.len(), "nkoyo config saved");
+    Ok(Json(cfg))
+}
+
+/// Probe the fleet for Ollama endpoints (REQ-43 auto-detect + manual rescan).
+async fn nkoyo_rescan(
+    State(state): State<AppState>,
+) -> ApiResult<Vec<crate::nkoyo::DetectedEndpoint>> {
+    let engine_addresses: Vec<String> = state
+        .cluster
+        .list_engines()
+        .into_iter()
+        .map(|e| e.address)
+        .collect();
+    let mut found = Vec::new();
+    for candidate in crate::nkoyo::candidates(&engine_addresses) {
+        if let Some(detected) = crate::nkoyo::probe(&state.cluster.http, &candidate).await {
+            found.push(detected);
+        }
+    }
+    Ok(Json(found))
+}
+
+#[derive(serde::Deserialize)]
+struct NkoyoChatBody {
+    #[allow(dead_code)] // becomes the session identity when the tool loop lands
+    username: String,
+    messages: Vec<crate::nkoyo::ChatMessage>,
+    #[serde(default)]
+    which: Option<String>,
+}
+
+async fn nkoyo_chat(
+    State(state): State<AppState>,
+    Json(body): Json<NkoyoChatBody>,
+) -> ApiResult<Value> {
+    let cfg = crate::nkoyo::load(&state.config_dir);
+    let which = body.which.as_deref().unwrap_or("planner");
+    match crate::nkoyo::chat(&state.cluster.http, &cfg, which, &body.messages).await {
+        Ok((content, model, endpoint)) => Ok(Json(serde_json::json!({
+            "content": content,
+            "model": model,
+            "endpoint": endpoint,
+        }))),
+        Err(msg) if msg.starts_with("no Ollama endpoints") => {
+            Err(error(StatusCode::SERVICE_UNAVAILABLE, msg))
+        }
+        Err(msg) => Err(error(StatusCode::BAD_GATEWAY, msg)),
+    }
 }
 
 // ---- jobs on hidden Airflow (M1.6, REQ-38..42) ----

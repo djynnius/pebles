@@ -7,6 +7,16 @@ All notable changes to Pebbles are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **M2.2 — Nkoyo foundation (REQ-43)**: the assistant arrives, strictly on local
+  models. Ollama endpoints are configured under Settings → Nkoyo and
+  auto-detected across the fleet (the main's host plus every registered
+  engine's host on :11434), with separate model choices for planning, code/SQL,
+  and embeddings and a max-steps cap. New Nkoyo chat page (conversation kept in
+  the session) with the accent-ring avatar; a clean, guidance-bearing 503 when
+  no endpoint is configured — air-gapped installs degrade gracefully. Endpoints
+  `GET/POST /nkoyo/config`, `POST /nkoyo/rescan`, `POST /nkoyo/chat`. The
+  agentic tool loop (tools through the user's own session, graded permissions,
+  REQ-44/45) and Auto ETL (REQ-46) build on this next.
 - **MIT license**: `LICENSE` at the repo root, declared in every Rust crate and
   the Python package. Bundled third-party components (DuckDB, Airflow, Postgres,
   the miniforge Python/R stack, …) are invoked as separate processes and keep

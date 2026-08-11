@@ -176,6 +176,23 @@ class PebblesdClient:
     def deregister_engine(self, name: str) -> dict:
         return self._expect("DELETE", f"/engines/{name}")
 
+    def nkoyo_config(self) -> dict:
+        return self._get("/nkoyo/config")
+
+    def nkoyo_config_save(self, cfg: dict) -> dict:
+        return self._expect("POST", "/nkoyo/config", cfg)
+
+    def nkoyo_rescan(self) -> list:
+        status, data = self._request("POST", "/nkoyo/rescan")
+        if status != 200:
+            raise PebblesdError(status, str(data))
+        return data
+
+    def nkoyo_chat(self, username: str, messages: list, which: str = "planner") -> dict:
+        return self._expect(
+            "POST", "/nkoyo/chat", {"username": username, "messages": messages, "which": which}
+        )
+
     def cancel_reservation(self, engine: str | None = None) -> dict:
         path = "/sessions/reservation"
         if engine and engine != "main":

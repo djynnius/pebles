@@ -750,6 +750,83 @@ def create_app(pebblesd: PebblesdClient | None = None) -> Flask:
                 _git(username, ["config", "--global", "credential.helper", "store"])
         return redirect(url_for("git_settings"))
 
+    @app.get("/nkoyo")
+    def nkoyo_page():  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return redirect(url_for("login_form"))
+        return render_template(
+            "nkoyo.html", user=user, chat=session.get("nkoyo_chat", [])
+        )
+
+    @app.post("/nkoyo/send")
+    def nkoyo_send():  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return jsonify({"error": "not signed in"}), 401
+        prompt = (request.get_json(silent=True) or {}).get("prompt", "").strip()
+        if not prompt:
+            return jsonify({"error": "empty prompt"}), 422
+        chat = session.get("nkoyo_chat", [])
+        chat.append({"role": "user", "content": prompt})
+        try:
+            reply = client.nkoyo_chat(user["username"], chat[-20:])
+        except PebblesdError as exc:
+            chat.pop()
+            session["nkoyo_chat"] = chat
+            return jsonify({"error": exc.message}), exc.status
+        chat.append({"role": "assistant", "content": reply.get("content", "")})
+        session["nkoyo_chat"] = chat[-20:]
+        return jsonify(reply)
+
+    @app.post("/nkoyo/clear")
+    def nkoyo_clear():  # pyright: ignore[reportUnusedFunction]
+        session.pop("nkoyo_chat", None)
+        return redirect(url_for("nkoyo_page"))
+
+    @app.get("/settings/nkoyo")
+    def nkoyo_settings():  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return redirect(url_for("login_form"))
+        cfg, detected, err = None, [], None
+        try:
+            cfg = client.nkoyo_config()
+        except (OSError, RuntimeError, ValueError) as exc:
+            err = str(exc)
+        return render_template(
+            "settings_nkoyo.html", user=user, cfg=cfg, detected=detected, error=err
+        )
+
+    @app.post("/settings/nkoyo")
+    def nkoyo_settings_save():  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return redirect(url_for("login_form"))
+        action = request.form.get("action", "save")
+        try:
+            if action == "rescan":
+                detected = client.nkoyo_rescan()
+                cfg = client.nkoyo_config()
+                return render_template(
+                    "settings_nkoyo.html", user=user, cfg=cfg, detected=detected, error=None
+                )
+            cfg = {
+                "endpoints": [
+                    e.strip()
+                    for e in request.form.get("endpoints", "").splitlines()
+                    if e.strip()
+                ],
+                "planner_model": request.form.get("planner_model", "llama3.2"),
+                "coder_model": request.form.get("coder_model", "llama3.2"),
+                "embed_model": request.form.get("embed_model", "nomic-embed-text"),
+                "max_steps": int(request.form.get("max_steps", "16") or 16),
+            }
+            client.nkoyo_config_save(cfg)
+        except (PebblesdError, ValueError):
+            pass
+        return redirect(url_for("nkoyo_settings"))
+
     @app.get("/usage")
     def usage_page():  # pyright: ignore[reportUnusedFunction]
         user = session.get("user")

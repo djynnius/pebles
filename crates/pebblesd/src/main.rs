@@ -11,6 +11,7 @@ mod cluster;
 mod config;
 mod jobs;
 mod migrations;
+mod nkoyo;
 mod services;
 mod supervisor;
 mod wizard;
