@@ -3,14 +3,14 @@
 # podman, incus) and locally. It grows with the milestones until it encodes the full
 # Phase 0 exit: "Ade installs one container and Maya runs a query, each as themselves."
 #
-#   v0.4 (M0.4, current): everything below plus SESSIONS AS THE USER — two users
-#     hold concurrent kernel sessions with distinct uids (verified via /proc), user
-#     A cannot read user B's files through their session, and an over-budget third
-#     session is refused with a clean 409 (REQ-12/16/20).
-#   v0.3: Ade creates maya through the privileged API (real UNIX account, uid ∈
-#     70000+, 0700 home); Maya signs into the web UI with her UNIX password; role
-#     and account survive a restart (REQ-03/11).
-#   M0.5 adds: CREATE CATALOG + query DuckLake as maya; SSE round-trip.
+#   v0.5 (M0.5, current): everything below plus THE FIRST REAL QUERY — Maya creates
+#     a DuckLake catalog (Postgres metadata + Parquet data), loads a CSV, queries
+#     it, time-travels to an earlier snapshot, and streams a result over SSE
+#     through the web tier (REQ-24/25/31).
+#   v0.4: sessions as the user — two users' kernels under distinct uids (/proc),
+#     cross-user reads refused by the filesystem, over-budget sessions get 409.
+#   v0.3: Ade creates maya through the privileged API; Maya signs into the web UI
+#     with her UNIX password; role and account survive a restart (REQ-03/11).
 #   M0.6 adds: zero-egress assertion (NFR-03) and the main+engine topology.
 #
 # usage: RUNTIME=docker|podman scripts/smoke/install-to-first-query.sh <image-ref>
@@ -116,6 +116,50 @@ refuse_code="$("$RUNTIME" exec "$NAME" curl -s -o /dev/null -w '%{http_code}' \
   || { echo "FAIL: over-budget session expected 409, got $refuse_code" >&2; exit 1; }
 pd "http://pebblesd/sessions" | grep -o '"id":' | wc -l | grep -qx '[[:space:]]*2' \
   || { echo "FAIL: expected exactly 2 live sessions" >&2; exit 1; }
+
+echo "==> M0.5: Maya creates the claims catalog (REQ-24/25)"
+created_cat=""
+for _ in $(seq 1 30); do # postgres may still be running initdb on first boot
+  created_cat="$("$RUNTIME" exec "$NAME" curl -s --unix-socket /run/pebbles/pebblesd.sock \
+    -H 'Content-Type: application/json' \
+    -d '{"name":"claims","owner":"maya"}' http://pebblesd/catalogs)"
+  echo "$created_cat" | grep -q '"database":"ducklake_claims"' && break
+  sleep 2
+done
+echo "    $created_cat"
+echo "$created_cat" | grep -q '"database":"ducklake_claims"' \
+  || { echo "FAIL: catalog creation never succeeded" >&2; exit 1; }
+
+echo "==> Maya loads a CSV and runs her first query"
+pd -H 'Content-Type: application/json' \
+  -d '{"id":10,"op":"write","path":"/home/maya/claims.csv","content":"claim_id,amount\nC-1,120.50\nC-2,80.00\n"}' \
+  "http://pebblesd/sessions/$id_maya/exec" | grep -q '"ok":true' \
+  || { echo "FAIL: could not write maya's CSV" >&2; exit 1; }
+sql() { pd -H 'Content-Type: application/json' \
+  -d "{\"id\":11,\"op\":\"sql\",\"catalog\":\"claims\",\"sql\":\"$1\"}" \
+  "http://pebblesd/sessions/$id_maya/exec"; }
+sql "CREATE TABLE claims_t AS SELECT * FROM read_csv_auto('/home/maya/claims.csv');" \
+  | grep -q '"ok":true' || { echo "FAIL: CREATE TABLE from CSV failed" >&2; exit 1; }
+sql "INSERT INTO claims_t VALUES ('C-3', 42.00);" | grep -q '"ok":true' \
+  || { echo "FAIL: INSERT failed" >&2; exit 1; }
+sql "SELECT count(*) AS c FROM claims_t;" | grep -q '"c":3' \
+  || { echo "FAIL: expected 3 rows after insert" >&2; exit 1; }
+
+echo "==> time travel: the pre-insert snapshot still answers (REQ-24)"
+snaps="$(sql "SELECT snapshot_id FROM ducklake_snapshots('claims') ORDER BY snapshot_id;")"
+prev_ver="$(grep -o '"snapshot_id":[0-9]*' <<<"$snaps" | tail -2 | head -1 | cut -d: -f2)"
+[ -n "$prev_ver" ] || { echo "FAIL: no snapshots listed: $snaps" >&2; exit 1; }
+sql "SELECT count(*) AS c FROM claims_t AT (VERSION => $prev_ver);" | grep -q '"c":2' \
+  || { echo "FAIL: time-travel to snapshot $prev_ver did not return 2 rows" >&2; exit 1; }
+
+echo "==> results stream over SSE through the web tier (REQ-31)"
+jar5="$(mktemp)"
+curl -s -o /dev/null -c "$jar5" -d 'username=maya&password=pebbles-demo-1' "$BASE/login"
+sse="$(curl -sN --max-time 60 -b "$jar5" \
+  "$BASE/sql/stream?catalog=claims&q=SELECT%20count(*)%20AS%20c%20FROM%20claims_t")"
+rm -f "$jar5"
+grep -q 'event: result' <<<"$sse" && grep -q '"c": 3' <<<"$sse" \
+  || { echo "FAIL: SSE stream missing the result event: $sse" >&2; exit 1; }
 
 echo "==> restart preserves the sticky role and the account (REQ-03/11)"
 "$RUNTIME" restart "$NAME" >/dev/null

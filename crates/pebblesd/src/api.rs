@@ -3,13 +3,14 @@
 //! (the web tier) can connect. Per-caller authorization (admin vs user actions)
 //! arrives with the session tokens in Phase 1.
 
+use crate::catalog::{self, CatalogError, CatalogInfo};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use pebbles_api::{
-    ApiError, CreateUserRequest, Health, LoginRequest, LoginResponse, OpenSessionRequest, Role,
-    SessionDescriptor, UserInfo, VersionInfo,
+    ApiError, CatalogDescriptor, CreateCatalogRequest, CreateUserRequest, Health, LoginRequest,
+    LoginResponse, OpenSessionRequest, Role, SessionDescriptor, UserInfo, VersionInfo,
 };
 use pebbles_identity::IdentityError;
 use pebbles_session::broker::{Broker, OpenRequest, SessionError, SessionInfo};
@@ -53,7 +54,8 @@ pub fn router(role: Role, state: AppState) -> Router {
             .route("/auth/login", post(login))
             .route("/sessions", get(list_sessions).post(open_session))
             .route("/sessions/{id}", delete(close_session))
-            .route("/sessions/{id}/exec", post(exec_session)),
+            .route("/sessions/{id}/exec", post(exec_session))
+            .route("/catalogs", get(list_catalogs).post(create_catalog)),
         Role::Engine => base,
     }
     .with_state(state)
@@ -241,4 +243,52 @@ async fn close_session(State(state): State<AppState>, Path(id): Path<u64>) -> Ap
     let broker = broker_of(&state)?;
     broker.close(id).await.map_err(session_error)?;
     Ok(Json(serde_json::json!({ "closed": id })))
+}
+
+fn describe_catalog(info: CatalogInfo) -> CatalogDescriptor {
+    let sql = catalog::equivalent_sql(&info.name);
+    CatalogDescriptor {
+        name: info.name,
+        owner: info.owner,
+        database: info.database,
+        data_path: info.data_path,
+        sql,
+    }
+}
+
+fn catalog_error(e: CatalogError) -> (StatusCode, Json<ApiError>) {
+    match &e {
+        CatalogError::InvalidName(_) => error(StatusCode::UNPROCESSABLE_ENTITY, e),
+        CatalogError::Exists(_) => error(StatusCode::CONFLICT, e),
+        CatalogError::NoPostgres => error(StatusCode::SERVICE_UNAVAILABLE, e),
+        _ => error(StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+async fn create_catalog(Json(req): Json<CreateCatalogRequest>) -> ApiResult<CatalogDescriptor> {
+    let owner_name = req.owner.clone();
+    let owner = tokio::task::spawn_blocking(move || pebbles_identity::host::find_user(&owner_name))
+        .await
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?
+        .ok_or_else(|| {
+            error(
+                StatusCode::NOT_FOUND,
+                format!("no Pebbles user {:?}", req.owner),
+            )
+        })?;
+    let info = tokio::task::spawn_blocking(move || catalog::create_catalog(&req.name, &owner))
+        .await
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?
+        .map_err(catalog_error)?;
+    tracing::info!(catalog = %info.name, owner = %info.owner, "catalog created");
+    Ok(Json(describe_catalog(info)))
+}
+
+async fn list_catalogs() -> ApiResult<Vec<CatalogDescriptor>> {
+    let catalogs = tokio::task::spawn_blocking(catalog::list_catalogs)
+        .await
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?
+        .map_err(catalog_error)?;
+    Ok(Json(catalogs.into_iter().map(describe_catalog).collect()))
 }

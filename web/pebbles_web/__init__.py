@@ -6,11 +6,21 @@ privileged action is an API call to pebblesd over its unix socket, via
 `pebblesd_client` — which will be generated from pebblesd's OpenAPI schema.
 """
 
+import json
 import os
 
-from flask import Flask, jsonify, redirect, render_template, request, session, url_for
+from flask import (
+    Flask,
+    Response,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
 
-from pebbles_web.pebblesd_client import PebblesdClient
+from pebbles_web.pebblesd_client import PebblesdClient, PebblesdError
 
 
 def _secret_key() -> bytes:
@@ -67,5 +77,106 @@ def create_app(pebblesd: PebblesdClient | None = None) -> Flask:
         if user is None:
             return redirect(url_for("login_form"))
         return render_template("index.html", user=user)
+
+    def _engine_session_id(username: str) -> int:
+        """The signed-in user's engine session, opened lazily. The id lives in the
+        cookie session; a reaped/lost engine session is reopened transparently."""
+        sid = session.get("engine_session")
+        if sid is None:
+            sid = client.open_session(username)["id"]
+            session["engine_session"] = sid
+        return sid
+
+    def _run_sql(username: str, sql: str, catalog: str | None) -> dict:
+        payload: dict = {"op": "sql", "sql": sql}
+        if catalog:
+            payload["catalog"] = catalog
+        sid = _engine_session_id(username)
+        try:
+            return client.exec_in_session(sid, payload)
+        except PebblesdError as exc:
+            if exc.status != 404:
+                raise
+            # Session idled out or the daemon restarted: open a fresh one, retry once.
+            session.pop("engine_session", None)
+            return client.exec_in_session(_engine_session_id(username), payload)
+
+    @app.get("/sql")
+    def sql_editor():  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return redirect(url_for("login_form"))
+        try:
+            catalogs = client.list_catalogs()
+        except (OSError, RuntimeError, ValueError):
+            catalogs = []
+        return render_template("sql.html", user=user, catalogs=catalogs)
+
+    @app.get("/sql/stream")
+    def sql_stream():  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return jsonify({"error": "not signed in"}), 401
+        sql = request.args.get("q", "").strip()
+        catalog = request.args.get("catalog") or None
+        if not sql:
+            return jsonify({"error": "empty query"}), 422
+
+        def sse(event: str, data: dict) -> str:
+            return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+        # The engine session must be resolved here — the generator below runs after
+        # the request context (and its cookie session) is gone.
+        try:
+            result = None
+            error = None
+            result = _run_sql(user["username"], sql, catalog)
+        except (OSError, RuntimeError, ValueError) as exc:
+            error = str(exc)
+
+        def stream():
+            yield sse("status", {"state": "running"})
+            if error is not None:
+                yield sse("error", {"error": error})
+            elif result and result.get("ok"):
+                yield sse("result", result)
+            else:
+                yield sse("error", {"error": (result or {}).get("error", "query failed")})
+            yield sse("done", {})
+
+        return Response(
+            stream(),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @app.get("/catalogs")
+    def catalogs_page():  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return redirect(url_for("login_form"))
+        try:
+            catalogs = client.list_catalogs()
+        except (OSError, RuntimeError, ValueError):
+            catalogs = []
+        return render_template("catalogs.html", user=user, catalogs=catalogs)
+
+    @app.post("/catalogs")
+    def create_catalog():  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return redirect(url_for("login_form"))
+        name = request.form.get("name", "").strip()
+        try:
+            client.create_catalog(name, user["username"])
+        except PebblesdError as exc:
+            catalogs = client.list_catalogs()
+            return (
+                render_template(
+                    "catalogs.html", user=user, catalogs=catalogs, error=exc.message
+                ),
+                exc.status if exc.status in (409, 422) else 500,
+            )
+        return redirect(url_for("catalogs_page"))
 
     return app

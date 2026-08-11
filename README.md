@@ -25,12 +25,13 @@ team has a complete platform in under an hour — on **Docker, Podman, or LXC (I
 
 ## Status
 
-**Phase 0 (Foundation) in progress — M0.4 landed.** A single container boots the
-control plane (pebblesd as PID 1 supervising Postgres and the web tier), provisions
-real UNIX accounts in the reserved uid range, signs users into the web UI with their
-UNIX password, and brokers per-user engine sessions — one setuid process per attached
-user, with memory admission control. The lake and SQL editor arrive with M0.5 — see
-`HOWTO.md` to run what exists.
+**Phase 0 (Foundation) in progress — M0.5 landed.** A single container is now a
+working mini data platform: pebblesd (PID 1) supervises Postgres and the web tier,
+users are real UNIX accounts signing in with their UNIX password, sessions run as
+the user with memory admission control, and the lake is live — DuckLake catalogs
+(Postgres metadata + Parquet data) with snapshot time travel, a SQL editor, and
+results streaming over SSE. The three-runtime CI matrix (M0.6) closes out Phase 0 —
+see `HOWTO.md` to run what exists.
 
 ## Documents
 

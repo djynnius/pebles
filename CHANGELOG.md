@@ -7,6 +7,20 @@ All notable changes to Pebbles are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **M0.5 — DuckLake + SQL editor + SSE**: the lake is real. The image vendors the
+  DuckDB CLI (pinned) with the `ducklake` and `postgres` extensions installed at
+  build time — sessions load them from a shared read-only directory, never from
+  the network (NFR-03). `POST /catalogs` provisions a DuckLake catalog: a
+  `ducklake_<name>` Postgres database owned by the catalog owner (peer-auth role
+  created on demand) plus a Parquet data root under the lake directory. The
+  kernel's new `sql` op attaches the catalog as the session user and executes
+  through the CLI in JSON mode with the session's memory limit applied. The web
+  tier gains a Lake catalogs page (form + live `CREATE CATALOG` SQL, REQ-25) and
+  a SQL editor whose results stream over Server-Sent Events (REQ-31); gunicorn
+  moved to threaded workers so SSE connections don't starve the pool. The smoke
+  test now runs the actual install-to-first-query moment: Maya creates a catalog,
+  loads a CSV, queries it, time-travels to the pre-insert snapshot, and receives
+  results over SSE.
 - **M0.4 — sessions as the user**: the session broker forks one kernel process per
   attached user with setuid/setgid to that user, cwd their home, and a handshake
   tripwire — the kernel reports the uid it actually runs as and the broker kills

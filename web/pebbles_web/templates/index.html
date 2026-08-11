@@ -5,5 +5,8 @@
     Signed in as <strong>{{ user.username }}</strong> (uid {{ user.uid }})
     · <a href="{{ url_for('logout') }}">Sign out</a>
   </p>
-  <p class="status">Phase 0 scaffold — the workbench arrives with milestone M0.5.</p>
+  <p class="status">
+    <a href="{{ url_for('sql_editor') }}">SQL editor</a> ·
+    <a href="{{ url_for('catalogs_page') }}">Lake catalogs</a>
+  </p>
 {% endblock %}

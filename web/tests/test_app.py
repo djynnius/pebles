@@ -1,7 +1,12 @@
 from pebbles_web import create_app
+from pebbles_web.pebblesd_client import PebblesdError
 
 
 class FakeDaemon:
+    def __init__(self):
+        self.catalogs = []
+        self.next_session = 1
+
     def health(self):
         return {"status": "ok", "role": "main"}
 
@@ -9,6 +14,31 @@ class FakeDaemon:
         if password == "pebbles-demo-1":
             return {"username": username, "uid": 70000}
         return None
+
+    def open_session(self, username):
+        sid = self.next_session
+        self.next_session += 1
+        return {"id": sid, "username": username, "uid": 70000, "pid": 4242}
+
+    def exec_in_session(self, session_id, payload):
+        assert payload["op"] == "sql"
+        return {"id": None, "ok": True, "rows": [{"answer": 42}]}
+
+    def list_catalogs(self):
+        return list(self.catalogs)
+
+    def create_catalog(self, name, owner):
+        if any(c["name"] == name for c in self.catalogs):
+            raise PebblesdError(409, f"catalog {name!r} already exists")
+        info = {
+            "name": name,
+            "owner": owner,
+            "database": f"ducklake_{name}",
+            "data_path": f"/var/lib/pebbles/lake/{name}",
+            "sql": f"CREATE CATALOG {name};",
+        }
+        self.catalogs.append(info)
+        return info
 
 
 class DownDaemon:
@@ -69,3 +99,43 @@ def test_login_page_serves_the_design_shell():
     resp = client().get("/login")
     assert resp.status_code == 200
     assert "data-pb-theme" in resp.get_data(as_text=True)
+
+
+def signed_in(daemon=None):
+    c = client(daemon)
+    c.post("/login", data={"username": "maya", "password": "pebbles-demo-1"})
+    return c
+
+
+def test_sql_editor_requires_login_and_serves_when_signed_in():
+    assert client().get("/sql").status_code == 302
+    resp = signed_in().get("/sql")
+    assert resp.status_code == 200
+    assert "Run" in resp.get_data(as_text=True)
+
+
+def test_sql_stream_streams_result_rows_over_sse():
+    resp = signed_in().get("/sql/stream?q=SELECT+42+AS+answer")
+    assert resp.status_code == 200
+    assert resp.mimetype == "text/event-stream"
+    body = resp.get_data(as_text=True)
+    assert "event: result" in body
+    assert '"answer": 42' in body
+    assert "event: done" in body
+
+
+def test_sql_stream_rejects_empty_query_and_anonymous_users():
+    assert client().get("/sql/stream?q=SELECT+1").status_code == 401
+    assert signed_in().get("/sql/stream?q=").status_code == 422
+
+
+def test_catalog_create_shows_up_in_the_list_and_conflicts_cleanly():
+    c = signed_in()
+    resp = c.post("/catalogs", data={"name": "claims"})
+    assert resp.status_code == 302
+    page = c.get("/catalogs").get_data(as_text=True)
+    assert "claims" in page and "/var/lib/pebbles/lake/claims" in page
+
+    dup = c.post("/catalogs", data={"name": "claims"})
+    assert dup.status_code == 409
+    assert "already exists" in dup.get_data(as_text=True)

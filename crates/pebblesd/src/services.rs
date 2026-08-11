@@ -116,8 +116,14 @@ fn gunicorn(cfg: &Config) -> Option<ServiceSpec> {
             args: vec![
                 "--bind".into(),
                 "0.0.0.0:8080".into(),
+                // Threaded workers: SSE responses hold a connection each (spec risk:
+                // "Flask streaming under load"); sync workers would starve at 2.
                 "--workers".into(),
                 "2".into(),
+                "--worker-class".into(),
+                "gthread".into(),
+                "--threads".into(),
+                "8".into(),
                 "--chdir".into(),
                 WEB_ROOT.into(),
                 "pebbles_web:create_app()".into(),

@@ -63,6 +63,25 @@
     }
     .error { color: var(--pb-accent); margin-top: 0.75rem; font-size: 0.9rem; }
     a { color: var(--pb-accent); }
+    .page { width: min(60rem, 92vw); padding: 2rem 0; }
+    .page h2 { margin: 0.5rem 0 1rem; }
+    .nav { color: var(--pb-comment); font-size: 0.9rem; }
+    .card.wide { min-width: 0; width: 100%; margin-top: 1rem; }
+    textarea, select {
+      width: 100%;
+      padding: 0.55rem 0.7rem;
+      border: 1px solid var(--pb-comment);
+      border-radius: 6px;
+      background: var(--pb-bg);
+      color: var(--pb-fg);
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-size: 0.9rem;
+    }
+    table { width: 100%; border-collapse: collapse; font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.85rem; }
+    th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--pb-comment); }
+    th { color: var(--pb-comment); font-weight: 600; }
+    code { color: var(--pb-fg); font-family: "IBM Plex Mono", ui-monospace, monospace; }
+    body:has(.page) { place-items: start center; }
   </style>
 </head>
 <body>

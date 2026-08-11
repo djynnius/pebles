@@ -21,6 +21,8 @@ RUN uv sync --no-dev
 
 ########## Runtime ##########
 FROM python:3.12-slim-bookworm
+ARG TARGETARCH
+ARG DUCKDB_VERSION=1.5.2
 # git: REQ-32..37 · openssh-server: SFTP parity (REQ-15) · postgresql: DuckLake catalog
 # The `pebbles` group gates the pebblesd socket; `pebbles-web` runs gunicorn (never root).
 RUN apt-get update \
@@ -28,6 +30,19 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system pebbles \
     && useradd --system --gid pebbles --home-dir /nonexistent --shell /usr/sbin/nologin pebbles-web
+
+# DuckDB CLI + DuckLake/postgres extensions, vendored at BUILD time for this exact
+# version and platform. Runtime never fetches anything (NFR-03): sessions LOAD from
+# this shared, read-only extension directory.
+RUN arch="$([ "$TARGETARCH" = "arm64" ] && echo aarch64 || echo amd64)" \
+    && curl -fsSL -o /tmp/duckdb.zip \
+       "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb_cli-linux-${arch}.zip" \
+    && python3 -m zipfile -e /tmp/duckdb.zip /usr/local/bin/ \
+    && chmod 755 /usr/local/bin/duckdb \
+    && rm /tmp/duckdb.zip \
+    && mkdir -p /opt/pebbles/duckdb/extensions \
+    && HOME=/tmp duckdb -c "SET extension_directory='/opt/pebbles/duckdb/extensions'; INSTALL ducklake; INSTALL postgres;" \
+    && chmod -R a+rX /opt/pebbles/duckdb
 
 COPY --from=rust-builder /src/target/release/pebblesd /usr/local/bin/pebblesd
 COPY --from=rust-builder /src/target/release/sql-runner /usr/local/bin/pebbles-sql-runner

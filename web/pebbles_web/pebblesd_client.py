@@ -71,3 +71,31 @@ class PebblesdClient:
         if status == 401:
             return None
         raise RuntimeError(f"pebblesd POST /auth/login -> {status}: {data}")
+
+    def _expect(self, method: str, path: str, body: dict | None = None) -> dict:
+        status, data = self._request(method, path, body)
+        if status // 100 == 2:
+            return data
+        raise PebblesdError(status, data.get("error", str(data)))
+
+    def open_session(self, username: str) -> dict:
+        return self._expect("POST", "/sessions", {"username": username})
+
+    def exec_in_session(self, session_id: int, payload: dict) -> dict:
+        return self._expect("POST", f"/sessions/{session_id}/exec", payload)
+
+    def list_catalogs(self) -> list:
+        status, data = self._request("GET", "/catalogs")
+        if status != 200:
+            raise PebblesdError(status, str(data))
+        return data
+
+    def create_catalog(self, name: str, owner: str) -> dict:
+        return self._expect("POST", "/catalogs", {"name": name, "owner": owner})
+
+
+class PebblesdError(RuntimeError):
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
+        self.message = message

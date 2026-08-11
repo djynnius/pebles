@@ -6,6 +6,7 @@
 //! (NFR-01): the socket is root-owned with group `pebbles`, mode 0660.
 
 mod api;
+mod catalog;
 mod config;
 mod services;
 mod supervisor;

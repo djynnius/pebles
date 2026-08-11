@@ -109,6 +109,24 @@ pub struct SessionDescriptor {
     pub memory_limit_bytes: u64,
 }
 
+/// Create a DuckLake catalog owned by `owner` (REQ-24/25). The form and the SQL
+/// (`CREATE CATALOG <name>;`) are the same operation.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CreateCatalogRequest {
+    pub name: String,
+    pub owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CatalogDescriptor {
+    pub name: String,
+    pub owner: String,
+    pub database: String,
+    pub data_path: String,
+    /// The equivalent SQL shown live in the UI (REQ-25).
+    pub sql: String,
+}
+
 #[derive(OpenApi)]
 #[openapi(
     info(title = "pebblesd", description = "Local privileged API for Pebbles"),
@@ -122,6 +140,8 @@ pub struct SessionDescriptor {
         LoginResponse,
         OpenSessionRequest,
         SessionDescriptor,
+        CreateCatalogRequest,
+        CatalogDescriptor,
         ApiError
     ))
 )]

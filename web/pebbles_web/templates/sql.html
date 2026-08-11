@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block content %}
+  <div class="page">
+    <p class="nav">
+      <a href="{{ url_for('index') }}">home</a> · <strong>sql</strong>
+      · <a href="{{ url_for('catalogs_page') }}">catalogs</a>
+      · signed in as {{ user.username }} · <a href="{{ url_for('logout') }}">sign out</a>
+    </p>
+    <h2>SQL</h2>
+    <form id="sqlform" class="card wide">
+      <label for="catalog">Catalog</label>
+      <select id="catalog" name="catalog">
+        <option value="">(none — in-memory)</option>
+        {% for c in catalogs %}<option value="{{ c.name }}">{{ c.name }}</option>{% endfor %}
+      </select>
+      <label for="q">Query</label>
+      <textarea id="q" name="q" rows="6" spellcheck="false"
+        placeholder="SELECT 42 AS answer;"></textarea>
+      <button type="submit">Run</button>
+      <p id="state" class="status" aria-live="polite"></p>
+    </form>
+    <div id="results" class="card wide" hidden><table id="grid"></table></div>
+  </div>
+  <script>
+    // Results stream over SSE (REQ-31); one EventSource per run.
+    const form = document.getElementById("sqlform");
+    const state = document.getElementById("state");
+    const results = document.getElementById("results");
+    const grid = document.getElementById("grid");
+    let source = null;
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      if (source) source.close();
+      const q = document.getElementById("q").value;
+      const catalog = document.getElementById("catalog").value;
+      const url = "/sql/stream?q=" + encodeURIComponent(q) +
+        (catalog ? "&catalog=" + encodeURIComponent(catalog) : "");
+      state.textContent = "running…";
+      results.hidden = true;
+      source = new EventSource(url);
+      source.addEventListener("result", (ev) => {
+        const rows = JSON.parse(ev.data).rows || [];
+        grid.replaceChildren();
+        if (rows.length) {
+          const cols = Object.keys(rows[0]);
+          const thead = grid.createTHead().insertRow();
+          cols.forEach(c => { const th = document.createElement("th"); th.textContent = c; thead.appendChild(th); });
+          const body = grid.createTBody();
+          rows.forEach(r => { const tr = body.insertRow(); cols.forEach(c => tr.insertCell().textContent = String(r[c])); });
+        }
+        results.hidden = false;
+        state.textContent = rows.length + " row(s)";
+      });
+      source.addEventListener("error", (ev) => {
+        if (ev.data) state.textContent = "error: " + JSON.parse(ev.data).error;
+      });
+      source.addEventListener("done", () => source.close());
+    });
+  </script>
+{% endblock %}
