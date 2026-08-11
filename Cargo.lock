@@ -515,8 +515,13 @@ dependencies = [
 name = "pebbles-session"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "serde",
+ "serde_json",
+ "tempfile",
  "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -528,6 +533,8 @@ dependencies = [
  "libc",
  "pebbles-api",
  "pebbles-identity",
+ "pebbles-session",
+ "serde_json",
  "tempfile",
  "tokio",
  "tracing",
@@ -795,6 +802,7 @@ dependencies = [
 name = "sql-runner"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "serde_json",
 ]
 

@@ -1,11 +1,14 @@
 //! Session brokering (REQ-16..20).
 //!
 //! An engine hosts multiple concurrent sessions — one *process* per attached user,
-//! forked with setuid/setgid to that user, home bind-mounted at `/workspace`. The
-//! container is shared; the processes are not. This module starts with the admission
-//! math (REQ-20); the fork/exec broker lands in M0.4.
+//! forked with setuid/setgid to that user, cwd in their home. The container is
+//! shared; the processes are not. [`AdmissionControl`] holds the REQ-20 math;
+//! [`broker`] owns the kernel processes.
+
+pub mod broker;
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -15,6 +18,15 @@ pub enum SessionMode {
     Shared,
     /// Opt-in exclusive use; may claim the engine's full memory allowance (REQ-18/20).
     Dedicated,
+}
+
+impl SessionMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SessionMode::Shared => "shared",
+            SessionMode::Dedicated => "dedicated",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,11 +58,12 @@ pub enum AdmissionError {
 
 /// REQ-20: refuse a new session when the sum of session memory limits would exceed the
 /// engine's memory. Dedicated sessions may claim the whole allowance — that's their point.
+/// Sessions are tracked by id so closing one releases its reservation.
 #[derive(Debug, Clone)]
 pub struct AdmissionControl {
     pub engine_memory_bytes: u64,
     pub max_sessions: usize,
-    active_limits: Vec<u64>,
+    active: BTreeMap<u64, u64>,
 }
 
 impl AdmissionControl {
@@ -58,43 +71,46 @@ impl AdmissionControl {
         Self {
             engine_memory_bytes,
             max_sessions,
-            active_limits: Vec::new(),
+            active: BTreeMap::new(),
         }
     }
 
-    pub fn admit(&mut self, spec: &SessionSpec) -> Result<(), AdmissionError> {
+    pub fn admit(&mut self, id: u64, spec: &SessionSpec) -> Result<(), AdmissionError> {
         match spec.mode {
             SessionMode::Dedicated => {
-                if !self.active_limits.is_empty() {
+                if !self.active.is_empty() {
                     // The caller resolves this by entering the Draining state (REQ-19);
                     // admission itself never kills or preempts.
-                    return Err(AdmissionError::DedicatedNeedsEmptyEngine(
-                        self.active_limits.len(),
-                    ));
+                    return Err(AdmissionError::DedicatedNeedsEmptyEngine(self.active.len()));
                 }
-                self.active_limits.push(self.engine_memory_bytes);
+                self.active.insert(id, self.engine_memory_bytes);
                 Ok(())
             }
             SessionMode::Shared => {
-                if self.active_limits.len() >= self.max_sessions {
+                if self.active.len() >= self.max_sessions {
                     return Err(AdmissionError::MaxSessions(self.max_sessions));
                 }
                 let requested_total: u64 =
-                    self.active_limits.iter().sum::<u64>() + spec.memory_limit_bytes;
+                    self.active.values().sum::<u64>() + spec.memory_limit_bytes;
                 if requested_total > self.engine_memory_bytes {
                     return Err(AdmissionError::MemoryExceeded {
                         requested_total,
                         engine_limit: self.engine_memory_bytes,
                     });
                 }
-                self.active_limits.push(spec.memory_limit_bytes);
+                self.active.insert(id, spec.memory_limit_bytes);
                 Ok(())
             }
         }
     }
 
+    /// Release a session's reservation; unknown ids are a no-op.
+    pub fn release(&mut self, id: u64) {
+        self.active.remove(&id);
+    }
+
     pub fn active_sessions(&self) -> usize {
-        self.active_limits.len()
+        self.active.len()
     }
 }
 
@@ -115,10 +131,10 @@ mod tests {
     #[test]
     fn admits_until_the_sum_of_limits_hits_the_engine_memory() {
         let mut ac = AdmissionControl::new(8, 10);
-        assert!(ac.admit(&shared(4)).is_ok());
-        assert!(ac.admit(&shared(4)).is_ok());
+        assert!(ac.admit(1, &shared(4)).is_ok());
+        assert!(ac.admit(2, &shared(4)).is_ok());
         assert_eq!(
-            ac.admit(&shared(1)),
+            ac.admit(3, &shared(1)),
             Err(AdmissionError::MemoryExceeded {
                 requested_total: 9,
                 engine_limit: 8
@@ -127,29 +143,39 @@ mod tests {
     }
 
     #[test]
+    fn releasing_a_session_frees_its_memory() {
+        let mut ac = AdmissionControl::new(8, 10);
+        assert!(ac.admit(1, &shared(8)).is_ok());
+        assert!(ac.admit(2, &shared(8)).is_err());
+        ac.release(1);
+        assert!(ac.admit(2, &shared(8)).is_ok());
+        assert_eq!(ac.active_sessions(), 1);
+    }
+
+    #[test]
     fn max_sessions_is_enforced_before_memory() {
         let mut ac = AdmissionControl::new(100, 1);
-        assert!(ac.admit(&shared(1)).is_ok());
-        assert_eq!(ac.admit(&shared(1)), Err(AdmissionError::MaxSessions(1)));
+        assert!(ac.admit(1, &shared(1)).is_ok());
+        assert_eq!(ac.admit(2, &shared(1)), Err(AdmissionError::MaxSessions(1)));
     }
 
     #[test]
     fn dedicated_claims_the_full_allowance_but_only_on_an_empty_engine() {
         let mut ac = AdmissionControl::new(8, 10);
-        assert!(ac.admit(&shared(2)).is_ok());
+        assert!(ac.admit(1, &shared(2)).is_ok());
         let dedicated = SessionSpec {
             mode: SessionMode::Dedicated,
             ..shared(0)
         };
         assert_eq!(
-            ac.admit(&dedicated),
+            ac.admit(2, &dedicated),
             Err(AdmissionError::DedicatedNeedsEmptyEngine(1))
         );
 
         let mut empty = AdmissionControl::new(8, 10);
-        assert!(empty.admit(&dedicated).is_ok());
+        assert!(empty.admit(1, &dedicated).is_ok());
         assert_eq!(
-            empty.admit(&shared(1)),
+            empty.admit(2, &shared(1)),
             Err(AdmissionError::MemoryExceeded {
                 requested_total: 9,
                 engine_limit: 8

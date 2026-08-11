@@ -5,5 +5,12 @@ edition.workspace = true
 description = "Session broker: per-user engine session processes, memory admission control (REQ-16/18/19/20)."
 
 [dependencies]
+libc = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

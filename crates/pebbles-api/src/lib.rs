@@ -86,6 +86,29 @@ pub struct ApiError {
     pub error: String,
 }
 
+/// Open an engine session as `username` (REQ-16/18/20).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct OpenSessionRequest {
+    pub username: String,
+    /// "shared" (default) or "dedicated".
+    #[serde(default)]
+    pub mode: Option<String>,
+    /// Per-session memory limit; the engine's default applies when omitted.
+    #[serde(default)]
+    pub memory_limit_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SessionDescriptor {
+    pub id: u64,
+    pub username: String,
+    pub uid: u32,
+    pub gid: u32,
+    pub pid: u32,
+    pub mode: String,
+    pub memory_limit_bytes: u64,
+}
+
 #[derive(OpenApi)]
 #[openapi(
     info(title = "pebblesd", description = "Local privileged API for Pebbles"),
@@ -97,6 +120,8 @@ pub struct ApiError {
         UserInfo,
         LoginRequest,
         LoginResponse,
+        OpenSessionRequest,
+        SessionDescriptor,
         ApiError
     ))
 )]

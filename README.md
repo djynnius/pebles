@@ -25,10 +25,12 @@ team has a complete platform in under an hour — on **Docker, Podman, or LXC (I
 
 ## Status
 
-**Phase 0 (Foundation) in progress — M0.2 landed.** A single container boots the
-control plane: pebblesd (PID 1) supervises Postgres and the web tier, the role is
-chosen at first boot and sticky, and CI builds/tests the image on every merge. Users,
-sessions, and the lake arrive with M0.3–M0.5 — see `HOWTO.md` to run what exists.
+**Phase 0 (Foundation) in progress — M0.4 landed.** A single container boots the
+control plane (pebblesd as PID 1 supervising Postgres and the web tier), provisions
+real UNIX accounts in the reserved uid range, signs users into the web UI with their
+UNIX password, and brokers per-user engine sessions — one setuid process per attached
+user, with memory admission control. The lake and SQL editor arrive with M0.5 — see
+`HOWTO.md` to run what exists.
 
 ## Documents
 

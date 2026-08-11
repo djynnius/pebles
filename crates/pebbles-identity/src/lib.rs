@@ -236,6 +236,14 @@ pub mod host {
         Ok(pebbles_users(&std::fs::read_to_string("/etc/passwd")?))
     }
 
+    /// One in-range account by name — `None` for absent OR out-of-range users, so
+    /// callers can never resolve root/system accounts into a Pebbles identity.
+    pub fn find_user(name: &str) -> Result<Option<ProvisionedUser>, IdentityError> {
+        Ok(pebbles_users(&std::fs::read_to_string("/etc/passwd")?)
+            .into_iter()
+            .find(|u| u.username == name))
+    }
+
     fn set_mode(path: &str, mode: u32) -> Result<(), IdentityError> {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;

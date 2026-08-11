@@ -7,6 +7,18 @@ All notable changes to Pebbles are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **M0.4 — sessions as the user**: the session broker forks one kernel process per
+  attached user with setuid/setgid to that user, cwd their home, and a handshake
+  tripwire — the kernel reports the uid it actually runs as and the broker kills
+  the session on mismatch. Memory admission (sum-of-limits, REQ-20) now gates real
+  processes and releases on close; idle sessions reap after a timeout. New
+  privileged endpoints: `POST/GET /sessions`, `POST /sessions/{id}/exec`,
+  `DELETE /sessions/{id}`; `PEBBLES_SERVE_SESSIONS=false` turns serving off
+  (REQ-04 toggle). `sql-runner` speaks a JSON-lines protocol (ping/read/write —
+  the seam DuckDB drops into at M0.5). The smoke test proves the load-bearing
+  claim: two users' sessions run under distinct uids (via `/proc`), user A cannot
+  read user B's files through her session, and an over-budget session gets a
+  clean 409.
 - **M0.3 — UNIX identity**: creating a Pebbles user now provisions a real host
   account — uid from the reserved range with a personal primary group (uid == gid),
   a private `0700` home, and an SHA-512-crypt password in `/etc/shadow` (the same

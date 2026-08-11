@@ -47,13 +47,56 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(socket = %socket_path.display(), "privileged API listening");
 
     let sup = supervisor::Supervisor::start(services::for_role(&cfg));
+    let state = session_state(&cfg);
 
     let mut sigterm = signal(SignalKind::terminate())?;
     tokio::select! {
-        r = axum::serve(listener, api::router(cfg.role)) => r?,
+        r = axum::serve(listener, api::router(cfg.role, state)) => r?,
         _ = sigterm.recv() => tracing::info!("SIGTERM"),
         _ = tokio::signal::ctrl_c() => tracing::info!("interrupt"),
     }
     sup.shutdown().await;
     Ok(())
+}
+
+/// Session serving on this container (REQ-04: the main doubles as an engine by
+/// default; `PEBBLES_SERVE_SESSIONS=false` turns it off).
+fn session_state(cfg: &config::Config) -> api::AppState {
+    fn env_u64(key: &str, default: u64) -> u64 {
+        std::env::var(key)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
+    }
+    let default_session_memory = env_u64("PEBBLES_SESSION_MEMORY_BYTES", 512 * 1024 * 1024);
+
+    let serves = cfg.role == pebbles_api::Role::Main
+        && std::env::var("PEBBLES_SERVE_SESSIONS").as_deref() != Ok("false");
+    let kernel = std::path::PathBuf::from(
+        std::env::var("PEBBLES_KERNEL")
+            .unwrap_or_else(|_| "/usr/local/bin/pebbles-sql-runner".to_string()),
+    );
+
+    let broker = if !serves {
+        None
+    } else if !kernel.exists() {
+        tracing::warn!(kernel = %kernel.display(), "kernel binary missing; sessions disabled (dev run?)");
+        None
+    } else {
+        Some(pebbles_session::broker::Broker::start(
+            pebbles_session::broker::BrokerConfig {
+                kernel,
+                engine_memory_bytes: env_u64("PEBBLES_ENGINE_MEMORY_BYTES", 2 * 1024 * 1024 * 1024),
+                max_sessions: env_u64("PEBBLES_MAX_SESSIONS", 10) as usize,
+                idle_timeout: std::time::Duration::from_secs(env_u64(
+                    "PEBBLES_SESSION_IDLE_SECS",
+                    1800,
+                )),
+            },
+        ))
+    };
+    api::AppState {
+        broker,
+        default_session_memory,
+    }
 }

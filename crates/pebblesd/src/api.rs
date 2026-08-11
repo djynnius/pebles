@@ -3,14 +3,29 @@
 //! (the web tier) can connect. Per-caller authorization (admin vs user actions)
 //! arrives with the session tokens in Phase 1.
 
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::{routing::get, routing::post, Json, Router};
+use axum::routing::{delete, get, post};
+use axum::{Json, Router};
 use pebbles_api::{
-    ApiError, CreateUserRequest, Health, LoginRequest, LoginResponse, Role, UserInfo, VersionInfo,
+    ApiError, CreateUserRequest, Health, LoginRequest, LoginResponse, OpenSessionRequest, Role,
+    SessionDescriptor, UserInfo, VersionInfo,
 };
 use pebbles_identity::IdentityError;
+use pebbles_session::broker::{Broker, OpenRequest, SessionError, SessionInfo};
+use pebbles_session::{AdmissionError, SessionMode};
+use serde_json::Value;
+use std::sync::Arc;
 
-pub fn router(role: Role) -> Router {
+#[derive(Clone)]
+pub struct AppState {
+    /// `None` when this container doesn't serve sessions (REQ-04 toggle off, or the
+    /// kernel binary is absent in a dev run).
+    pub broker: Option<Arc<Broker>>,
+    pub default_session_memory: u64,
+}
+
+pub fn router(role: Role, state: AppState) -> Router {
     let base = Router::new()
         .route(
             "/healthz",
@@ -31,12 +46,17 @@ pub fn router(role: Role) -> Router {
         );
     match role {
         // Identity lives on the main (REQ-11); engines receive replicated accounts
-        // at registration (Phase 1), they never create them.
+        // at registration (Phase 1), they never create them. Sessions are served by
+        // the main too while it doubles as the single-box engine (REQ-04).
         Role::Main => base
             .route("/users", get(list_users).post(create_user))
-            .route("/auth/login", post(login)),
+            .route("/auth/login", post(login))
+            .route("/sessions", get(list_sessions).post(open_session))
+            .route("/sessions/{id}", delete(close_session))
+            .route("/sessions/{id}/exec", post(exec_session)),
         Role::Engine => base,
     }
+    .with_state(state)
 }
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
@@ -121,4 +141,104 @@ async fn login(Json(req): Json<LoginRequest>) -> ApiResult<LoginResponse> {
         }
         Err(e) => Err(error(StatusCode::INTERNAL_SERVER_ERROR, e)),
     }
+}
+
+fn describe(info: SessionInfo) -> SessionDescriptor {
+    SessionDescriptor {
+        id: info.id,
+        username: info.username,
+        uid: info.uid,
+        gid: info.gid,
+        pid: info.pid,
+        mode: info.mode.as_str().to_string(),
+        memory_limit_bytes: info.memory_limit_bytes,
+    }
+}
+
+fn session_error(e: SessionError) -> (StatusCode, Json<ApiError>) {
+    match &e {
+        // Admission refusals are the protocol working (REQ-19/20): a clean 409,
+        // never a crash, never a kill.
+        SessionError::Admission(
+            AdmissionError::MemoryExceeded { .. }
+            | AdmissionError::MaxSessions(_)
+            | AdmissionError::DedicatedNeedsEmptyEngine(_),
+        ) => error(StatusCode::CONFLICT, e),
+        SessionError::NotFound(_) => error(StatusCode::NOT_FOUND, e),
+        SessionError::Handshake(_) | SessionError::Kernel(_) => error(StatusCode::BAD_GATEWAY, e),
+    }
+}
+
+fn broker_of(state: &AppState) -> Result<Arc<Broker>, (StatusCode, Json<ApiError>)> {
+    state.broker.clone().ok_or_else(|| {
+        error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "this container does not serve sessions",
+        )
+    })
+}
+
+async fn open_session(
+    State(state): State<AppState>,
+    Json(req): Json<OpenSessionRequest>,
+) -> ApiResult<SessionDescriptor> {
+    let broker = broker_of(&state)?;
+    let mode = match req.mode.as_deref() {
+        None | Some("shared") => SessionMode::Shared,
+        Some("dedicated") => SessionMode::Dedicated,
+        Some(other) => {
+            return Err(error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("unknown session mode {other:?}"),
+            ))
+        }
+    };
+    let username = req.username.clone();
+    let user = tokio::task::spawn_blocking(move || pebbles_identity::host::find_user(&username))
+        .await
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?
+        .ok_or_else(|| {
+            // Only accounts in the reserved range get sessions — root, postgres and
+            // friends are structurally excluded.
+            error(
+                StatusCode::NOT_FOUND,
+                format!("no Pebbles user {:?}", req.username),
+            )
+        })?;
+
+    let info = broker
+        .open(OpenRequest {
+            username: user.username,
+            uid: user.uid,
+            gid: user.gid,
+            home: user.home,
+            mode,
+            memory_limit_bytes: req
+                .memory_limit_bytes
+                .unwrap_or(state.default_session_memory),
+        })
+        .await
+        .map_err(session_error)?;
+    Ok(Json(describe(info)))
+}
+
+async fn list_sessions(State(state): State<AppState>) -> ApiResult<Vec<SessionDescriptor>> {
+    let broker = broker_of(&state)?;
+    Ok(Json(broker.list().into_iter().map(describe).collect()))
+}
+
+async fn exec_session(
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+    Json(payload): Json<Value>,
+) -> ApiResult<Value> {
+    let broker = broker_of(&state)?;
+    Ok(Json(broker.exec(id, payload).await.map_err(session_error)?))
+}
+
+async fn close_session(State(state): State<AppState>, Path(id): Path<u64>) -> ApiResult<Value> {
+    let broker = broker_of(&state)?;
+    broker.close(id).await.map_err(session_error)?;
+    Ok(Json(serde_json::json!({ "closed": id })))
 }
