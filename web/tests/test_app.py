@@ -303,6 +303,10 @@ def test_json_api_auth_and_data():
     assert usage["cpus"] == 8
     engines = c.get("/api/engines").get_json()
     assert any(e["name"] == "worker-1" for e in engines)
+    users = c.get("/api/users").get_json()
+    assert any(u["username"] == "maya" for u in users)
+    groups = c.get("/api/groups").get_json()
+    assert any(g["name"] == "analysts" for g in groups)
 
     assert c.post("/api/logout").status_code == 200
     assert c.get("/api/me").status_code == 401

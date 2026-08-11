@@ -86,12 +86,33 @@ def create_app(pebblesd: PebblesdClient | None = None) -> Flask:
         except (OSError, RuntimeError, ValueError) as exc:
             return jsonify({"error": str(exc)}), 503
 
+    def _api_auth():
+        return session.get("user") is not None
+
     @app.get("/api/engines")
     def api_engines():  # pyright: ignore[reportUnusedFunction]
-        if session.get("user") is None:
+        if not _api_auth():
             return jsonify({"error": "unauthenticated"}), 401
         try:
             return jsonify(client.list_engines())
+        except (OSError, RuntimeError, ValueError) as exc:
+            return jsonify({"error": str(exc)}), 503
+
+    @app.get("/api/users")
+    def api_users():  # pyright: ignore[reportUnusedFunction]
+        if not _api_auth():
+            return jsonify({"error": "unauthenticated"}), 401
+        try:
+            return jsonify(client.list_users())
+        except (OSError, RuntimeError, ValueError) as exc:
+            return jsonify({"error": str(exc)}), 503
+
+    @app.get("/api/groups")
+    def api_groups():  # pyright: ignore[reportUnusedFunction]
+        if not _api_auth():
+            return jsonify({"error": "unauthenticated"}), 401
+        try:
+            return jsonify(client.list_groups())
         except (OSError, RuntimeError, ValueError) as exc:
             return jsonify({"error": str(exc)}), 503
 
