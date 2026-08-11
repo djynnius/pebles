@@ -34,7 +34,9 @@ class PebblesdClient:
     def __init__(self, socket_path: str | None = None):
         self.socket_path = socket_path or os.environ.get("PEBBLES_SOCKET", DEFAULT_SOCKET)
 
-    def _request(self, method: str, path: str, body: dict | None = None) -> tuple[int, dict]:
+    def _request(  # body may be a dict or a list; both encode as JSON
+        self, method: str, path: str, body=None
+    ) -> tuple[int, dict]:
         conn = _UnixHTTPConnection(self.socket_path)
         try:
             headers = {}
@@ -119,6 +121,30 @@ class PebblesdClient:
 
     def grant_catalog(self, catalog: str, group: str) -> dict:
         return self._expect("POST", f"/catalogs/{catalog}/grants", {"group": group})
+
+    def list_workflows(self) -> list:
+        status, data = self._request("GET", "/workflows")
+        if status != 200:
+            raise PebblesdError(status, str(data))
+        return data
+
+    def save_workflow(self, workflow: dict) -> dict:
+        return self._expect("POST", "/workflows", workflow)
+
+    def trigger_workflow(self, name: str) -> dict:
+        return self._expect("POST", f"/workflows/{name}/run")
+
+    def workflow_runs(self, name: str) -> list:
+        status, data = self._request("GET", f"/workflows/{name}/runs")
+        if status != 200:
+            raise PebblesdError(status, str(data))
+        return data
+
+    def workflow_run_detail(self, name: str, run_id: str) -> list:
+        status, data = self._request("GET", f"/workflows/{name}/runs/{run_id}")
+        if status != 200:
+            raise PebblesdError(status, str(data))
+        return data
 
     def cancel_reservation(self, engine: str | None = None) -> dict:
         path = "/sessions/reservation"

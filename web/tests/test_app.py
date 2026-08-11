@@ -88,6 +88,31 @@ class FakeDaemon:
     def cancel_reservation(self, engine=None):
         return {"cancelled": True}
 
+    def list_workflows(self):
+        return list(getattr(self, "workflows", []))
+
+    def save_workflow(self, workflow):
+        self.workflows = getattr(self, "workflows", [])
+        self.workflows.append(workflow)
+        return workflow
+
+    def trigger_workflow(self, name):
+        return {"triggered": name}
+
+    def workflow_runs(self, name):
+        return [{"run_id": "manual__1", "state": "success", "start": "t0", "end": "t1"}]
+
+    def workflow_run_detail(self, name, run_id):
+        return [
+            {
+                "task_id": "load",
+                "state": "success",
+                "start": "t0",
+                "end": "t1",
+                "log": "pebbles: session 1 opened as maya (uid 70000)",
+            }
+        ]
+
     def create_catalog(self, name, owner):
         if any(c["name"] == name for c in self.catalogs):
             raise PebblesdError(409, f"catalog {name!r} already exists")
@@ -296,6 +321,29 @@ def test_dashboard_create_save_and_tile_stream():
 
     listing = c.get("/dashboards").get_data(as_text=True)
     assert "claims-kpis" in listing
+
+
+def test_jobs_page_save_trigger_and_run_detail():
+    c = signed_in()
+    assert client().get("/jobs").status_code == 302
+    assert c.get("/jobs").status_code == 200
+
+    saved = c.post(
+        "/jobs/save",
+        json={
+            "name": "nightly",
+            "schedule": "0 2 * * *",
+            "tasks": [{"id": "load", "task_type": "sql", "payload": "SELECT 1;"}],
+        },
+    )
+    assert saved.status_code == 200
+    assert saved.get_json()["username"] == "maya"  # owner forced to signed-in user
+
+    assert c.post("/jobs/nightly/run").status_code == 200
+    runs = c.get("/jobs/nightly/runs.json").get_json()
+    assert runs[0]["state"] == "success"
+    detail = c.get("/jobs/nightly/runs/manual__1.json").get_json()
+    assert "uid 70000" in detail[0]["log"]
 
 
 def test_notebook_names_are_validated():

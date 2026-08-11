@@ -129,7 +129,7 @@ pub fn grant_catalog(
         "GRANT CONNECT ON DATABASE \"{}\" TO \"{}\";",
         catalog.database, group.name
     ))?;
-    psql_db(
+    psql_in(
         &catalog.database,
         &format!(
             "GRANT USAGE, CREATE ON SCHEMA public TO \"{g}\"; \
@@ -155,7 +155,7 @@ pub fn sync_member(group: &str, username: &str) -> Result<(), CatalogError> {
     Ok(())
 }
 
-fn ensure_role(name: &str, login: bool) -> Result<(), CatalogError> {
+pub(crate) fn ensure_role(name: &str, login: bool) -> Result<(), CatalogError> {
     let kind = if login { "LOGIN" } else { "NOLOGIN" };
     psql(&format!(
         "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{name}') \
@@ -165,11 +165,11 @@ fn ensure_role(name: &str, login: bool) -> Result<(), CatalogError> {
 }
 
 /// Run one statement as the postgres superuser over the local socket.
-fn psql(sql: &str) -> Result<String, CatalogError> {
-    psql_db("postgres", sql)
+pub(crate) fn psql(sql: &str) -> Result<String, CatalogError> {
+    psql_in("postgres", sql)
 }
 
-fn psql_db(db: &str, sql: &str) -> Result<String, CatalogError> {
+pub(crate) fn psql_in(db: &str, sql: &str) -> Result<String, CatalogError> {
     let (uid, gid) = pebbles_identity::system_user("postgres").ok_or(CatalogError::NoPostgres)?;
     let mut cmd = std::process::Command::new("psql");
     cmd.args([

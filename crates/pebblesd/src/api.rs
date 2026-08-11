@@ -85,7 +85,11 @@ pub fn router(role: Role, state: AppState) -> Router {
             .route("/cluster/tokens", get(list_tokens).post(mint_token))
             .route("/cluster/tokens/{id}", delete(revoke_token))
             .route("/engines", get(list_engines))
-            .route("/engines/{name}/access", post(set_engine_access)),
+            .route("/engines/{name}/access", post(set_engine_access))
+            .route("/workflows", get(list_workflows).post(save_workflow))
+            .route("/workflows/{name}/run", post(trigger_workflow))
+            .route("/workflows/{name}/runs", get(workflow_runs))
+            .route("/workflows/{name}/runs/{run_id}", get(workflow_run_detail)),
         Role::Engine => health_routes(role),
     }
     .with_state(state)
@@ -819,6 +823,92 @@ fn replicate(state: &AppState) {
     let cluster = state.cluster.clone();
     let dir = state.config_dir.clone();
     tokio::spawn(async move { cluster.push_accounts(&dir).await });
+}
+
+// ---- jobs on hidden Airflow (M1.6, REQ-38..42) ----
+
+fn jobs_error(e: crate::jobs::JobsError) -> (StatusCode, Json<ApiError>) {
+    use crate::jobs::JobsError;
+    match &e {
+        JobsError::InvalidName(_) | JobsError::InvalidTask(_) => {
+            error(StatusCode::UNPROCESSABLE_ENTITY, e)
+        }
+        JobsError::NotFound(_) => error(StatusCode::NOT_FOUND, e),
+        JobsError::NoAirflow => error(StatusCode::SERVICE_UNAVAILABLE, e),
+        _ => error(StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+async fn save_workflow(
+    State(state): State<AppState>,
+    Json(wf): Json<crate::jobs::Workflow>,
+) -> ApiResult<crate::jobs::Workflow> {
+    // The workflow owner must be a real Pebbles user — tasks run as them (REQ-41).
+    let owner = wf.username.clone();
+    let exists = tokio::task::spawn_blocking(move || pebbles_identity::host::find_user(&owner))
+        .await
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    if exists.is_none() {
+        return Err(error(
+            StatusCode::NOT_FOUND,
+            format!("no Pebbles user {:?}", wf.username),
+        ));
+    }
+    let dir = state.config_dir.clone();
+    let saved = wf.clone();
+    tokio::task::spawn_blocking(move || crate::jobs::save(&dir, &saved))
+        .await
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?
+        .map_err(jobs_error)?;
+    tracing::info!(workflow = %wf.name, owner = %wf.username, "workflow saved and compiled");
+    Ok(Json(wf))
+}
+
+async fn list_workflows(State(state): State<AppState>) -> ApiResult<Vec<crate::jobs::Workflow>> {
+    let dir = state.config_dir.clone();
+    let flows = tokio::task::spawn_blocking(move || crate::jobs::list(&dir))
+        .await
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?
+        .map_err(jobs_error)?;
+    Ok(Json(flows))
+}
+
+async fn trigger_workflow(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> ApiResult<Value> {
+    let dir = state.config_dir.clone();
+    let flow_name = name.clone();
+    tokio::task::spawn_blocking(move || crate::jobs::trigger(&dir, &flow_name))
+        .await
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?
+        .map_err(jobs_error)?;
+    Ok(Json(serde_json::json!({ "triggered": name })))
+}
+
+async fn workflow_runs(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> ApiResult<Vec<crate::jobs::RunInfo>> {
+    let dir = state.config_dir.clone();
+    let runs = tokio::task::spawn_blocking(move || crate::jobs::runs(&dir, &name))
+        .await
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?
+        .map_err(jobs_error)?;
+    Ok(Json(runs))
+}
+
+async fn workflow_run_detail(
+    State(state): State<AppState>,
+    Path((name, run_id)): Path<(String, String)>,
+) -> ApiResult<Vec<crate::jobs::TaskRunInfo>> {
+    let dir = state.config_dir.clone();
+    let detail = tokio::task::spawn_blocking(move || crate::jobs::run_detail(&dir, &name, &run_id))
+        .await
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?
+        .map_err(jobs_error)?;
+    Ok(Json(detail))
 }
 
 async fn list_engines(State(state): State<AppState>) -> ApiResult<Vec<EngineDescriptor>> {

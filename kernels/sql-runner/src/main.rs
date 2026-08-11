@@ -261,8 +261,31 @@ fn handle(request: &Value, executors: &mut Executors) -> Value {
             Some(code) => run_cell(&id, "r", code, &mut executors.r, "Rscript", REXEC),
             None => fail("r needs a code string".into()),
         },
+        Some("shell") => match request.get("command").and_then(Value::as_str) {
+            // One-shot `sh -c` as the session user — the workflow shell task type.
+            Some(command) => match std::process::Command::new("sh")
+                .args(["-c", command])
+                .output()
+            {
+                Ok(out) => {
+                    let mut stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+                    stdout.truncate(MAX_RESULT_BYTES);
+                    let mut stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+                    stderr.truncate(MAX_READ_BYTES);
+                    json!({
+                        "id": id,
+                        "ok": out.status.success(),
+                        "stdout": stdout,
+                        "stderr": stderr,
+                        "exit_code": out.status.code(),
+                    })
+                }
+                Err(e) => fail(format!("cannot run shell: {e}")),
+            },
+            None => fail("shell needs a command string".into()),
+        },
         other => fail(format!(
-            "unknown op {other:?} (proto 1: ping/read/write/list/sql/python/r)"
+            "unknown op {other:?} (proto 1: ping/read/write/list/sql/python/r/shell)"
         )),
     }
 }

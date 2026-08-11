@@ -7,6 +7,22 @@ All notable changes to Pebbles are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **M1.6 — jobs on hidden Airflow**: workflows are real pipelines now. Airflow
+  3.x lives in its own venv, supervised by pebblesd on the main (api-server on
+  localhost, scheduler, dag-processor) — completely invisible; the Jobs UI is
+  the only face (REQ-38). Pebbles workflows (JSON: name, cron-or-manual
+  schedule, tasks of type sql/python/r/shell/notebook with engine, catalog,
+  session mode, retries, dependencies) **compile to generated DAG files**, and
+  every task executes through a pebblesd session **as the workflow owner** on
+  the chosen engine (REQ-41) via a shipped stdlib-only operator — the Airflow
+  worker never touches user files or code itself. Run history and per-task
+  logs come from Airflow's metadata DB and log files (REQ-42), surfaced in the
+  new Jobs page (build, save, run now, run list, task detail with logs). The
+  kernel gained a `shell` op. Smoke proves the whole path: a saved workflow
+  triggers, succeeds, and its artifact lands in the owner's home owned by
+  their uid. Deferred honestly: drag-and-drop canvas (list builder for now),
+  on-file triggers, overlap policy, catch-up toggle, and failure notifications
+  (REQ-39/40 remainder → M1.8/Phase 2).
 - **M1.5 — dashboards**: a gallery plus a rearrangeable single-dashboard view
   (REQ-28). Dashboards are JSON files in `~/dashboards` — same identity story
   as notebooks — holding tiles of saved SQL that run through the viewer's own

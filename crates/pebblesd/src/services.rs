@@ -30,11 +30,79 @@ pub fn for_role(cfg: &Config) -> Vec<ServiceSpec> {
                 Some(spec) => services.push(spec),
                 None => tracing::warn!("web tier not available; UI disabled"),
             }
+            services.extend(airflow(cfg));
         }
         // Engine-role services (session broker serving a remote main) land in Phase 1.
         Role::Engine => {}
     }
     services
+}
+
+/// Hidden Airflow (REQ-38): api-server (localhost only), scheduler, and
+/// dag-processor, all as the unprivileged airflow user in its own venv. Users
+/// never see it — the Jobs UI is the only face. Postgres provisioning happens in
+/// pre-steps that wait for the socket, because postgres itself is still booting
+/// when these specs are constructed.
+fn airflow(cfg: &Config) -> Vec<ServiceSpec> {
+    let Some((uid, gid)) = pebbles_identity::system_user(crate::jobs::AIRFLOW_USER) else {
+        return Vec::new();
+    };
+    let Some((pg_uid, pg_gid)) = pebbles_identity::system_user("postgres") else {
+        return Vec::new();
+    };
+    let envs = match crate::jobs::prepare_fs(&cfg.config_dir) {
+        Ok(envs) => envs,
+        Err(crate::jobs::JobsError::NoAirflow) => return Vec::new(),
+        Err(err) => {
+            tracing::error!(%err, "airflow provisioning failed; jobs disabled");
+            return Vec::new();
+        }
+    };
+    let sh = |script: &str, run_as: Option<(u32, u32)>| Exec {
+        program: "sh".into(),
+        args: vec!["-c".into(), script.to_string()],
+        envs: vec![("PATH".into(), "/usr/local/bin:/usr/bin:/bin".into())],
+        run_as,
+    };
+    let exec = |args: &[&str]| Exec {
+        program: crate::jobs::AIRFLOW_BIN.into(),
+        args: args.iter().map(|s| s.to_string()).collect(),
+        envs: envs.clone(),
+        run_as: Some((uid, gid)),
+    };
+    let bootstrap = || {
+        vec![
+            sh(crate::jobs::WAIT_PG_SH, None),
+            sh(crate::jobs::PROVISION_SH, Some((pg_uid, pg_gid))),
+        ]
+    };
+    let mut with_migrate = bootstrap();
+    with_migrate.push(exec(&["db", "migrate"]));
+    vec![
+        ServiceSpec {
+            name: "airflow-api".into(),
+            pre: with_migrate,
+            exec: exec(&[
+                "api-server",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                &crate::jobs::API_PORT.to_string(),
+            ]),
+        },
+        // Scheduler and dag-processor crash-restart with backoff until the
+        // migrated schema appears; the supervisor absorbs that window.
+        ServiceSpec {
+            name: "airflow-scheduler".into(),
+            pre: bootstrap(),
+            exec: exec(&["scheduler"]),
+        },
+        ServiceSpec {
+            name: "airflow-dag-processor".into(),
+            pre: bootstrap(),
+            exec: exec(&["dag-processor"]),
+        },
+    ]
 }
 
 /// Loopback + DHCP on eth0, via busybox, only when the runtime didn't already

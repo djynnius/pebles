@@ -12,12 +12,22 @@ COPY crates ./crates
 COPY kernels ./kernels
 RUN cargo build --release -p pebblesd -p sql-runner
 
-########## Python: web venv (isolated; Airflow gets its OWN venv in Phase 1) ##########
+########## Python: web venv (isolated from Airflow and the user stack) ##########
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS web-builder
 WORKDIR /opt/pebbles/web
 COPY web/ .
 ENV UV_PYTHON_DOWNLOADS=never
 RUN uv sync --no-dev
+
+########## Airflow: its OWN venv (REQ-38; nothing outside it imports from it) ##########
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS airflow-builder
+WORKDIR /opt/pebbles/airflow
+ARG AIRFLOW_VERSION=3.3.0
+ENV UV_PYTHON_DOWNLOADS=never
+RUN uv venv .venv \
+    && uv pip install --python .venv/bin/python \
+       "apache-airflow[postgres]==${AIRFLOW_VERSION}" \
+       --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-3.12.txt"
 
 ########## Runtime ##########
 FROM python:3.12-slim-bookworm
@@ -29,7 +39,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends git openssh-server ca-certificates curl postgresql busybox \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system pebbles \
-    && useradd --system --gid pebbles --home-dir /nonexistent --shell /usr/sbin/nologin pebbles-web
+    && useradd --system --gid pebbles --home-dir /nonexistent --shell /usr/sbin/nologin pebbles-web \
+    && useradd --system --gid pebbles --home-dir /var/lib/pebbles/airflow --shell /usr/sbin/nologin pebbles-airflow
 
 # Python, R and Jupyter via miniforge (conda-forge) with the bundled scientific
 # stack (PRD REQ-51/52). One early layer, ordered BEFORE any source COPY so it
@@ -68,6 +79,7 @@ RUN curl -fsSL -o /tmp/duckdb.zip \
 COPY --from=rust-builder /src/target/release/pebblesd /usr/local/bin/pebblesd
 COPY --from=rust-builder /src/target/release/sql-runner /usr/local/bin/pebbles-sql-runner
 COPY --from=web-builder /opt/pebbles/web /opt/pebbles/web
+COPY --from=airflow-builder /opt/pebbles/airflow /opt/pebbles/airflow
 COPY image/rootfs/ /
 RUN chmod 755 /opt/pebbles/scripts/udhcpc.sh
 

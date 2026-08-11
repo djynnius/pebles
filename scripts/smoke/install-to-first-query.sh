@@ -102,6 +102,7 @@ expect() { # expect <pattern> <label> <payload>
 pd() { ctr_exec curl -fsS --unix-socket /run/pebbles/pebblesd.sock "$@"; }
 pd_code() { ctr_exec curl -s -o /dev/null -w '%{http_code}' --unix-socket /run/pebbles/pebblesd.sock "$@"; }
 json_num() { sed -n "s/.*\"$2\":\([0-9]*\).*/\1/p" <<<"$1" | head -1; }
+json_str() { sed -n "s/.*\"$2\":\"\([^\"]*\)\".*/\1/p" <<<"$1" | head -1; }
 
 echo "==> [$RUNTIME] booting $IMAGE as main"
 boot_main
@@ -257,6 +258,9 @@ id_tomas2="$(json_num "$s_tomas2" id)"
 after="$(sql_as "$id_tomas2" "SELECT count(*) AS c FROM claims_t;")"
 echo "    $after"
 expect '"c":3' "tomas queries the catalog through the analysts grant" "$after"
+# Free session memory for the workflow's own session below.
+pd -X DELETE "http://pebblesd/sessions/$id_tomas" >/dev/null
+pd -X DELETE "http://pebblesd/sessions/$id_tomas2" >/dev/null
 
 echo "==> results stream over SSE through the web tier (REQ-31)"
 jar5="$(mktemp)"
@@ -266,6 +270,38 @@ sse="$(curl -sN --max-time 60 -b "$jar5" \
 rm -f "$jar5"
 grep -q 'event: result' <<<"$sse" && grep -q '"c": 3' <<<"$sse" \
   || { echo "FAIL: SSE stream missing the result event: $sse" >&2; exit 1; }
+
+echo "==> M1.6: workflows run through hidden Airflow as the owner (REQ-38/41/42)"
+pd -H 'Content-Type: application/json' \
+  -d '{"name":"smoke-flow","username":"maya","schedule":null,"tasks":[{"id":"mark","task_type":"shell","payload":"id -un > ~/from-job.txt"}]}' \
+  http://pebblesd/workflows >/dev/null
+echo "    workflow saved; waiting for airflow to accept the trigger"
+triggered=""
+for _ in $(seq 1 40); do # migrations + dag parse take a while on first boot
+  code="$(pd_code -X POST http://pebblesd/workflows/smoke-flow/run)"
+  [ "$code" = "200" ] && { triggered=yes; break; }
+  sleep 5
+done
+[ "$triggered" = "yes" ] || { echo "FAIL: workflow trigger never accepted" >&2; show_logs >&2 | tail -40 || true; exit 1; }
+echo "    triggered; waiting for the run to succeed"
+run_state=""
+for _ in $(seq 1 40); do
+  runs="$(pd http://pebblesd/workflows/smoke-flow/runs 2>/dev/null || true)"
+  grep -q '"state":"success"' <<<"$runs" && { run_state=success; break; }
+  grep -q '"state":"failed"' <<<"$runs" && break
+  sleep 5
+done
+if [ "$run_state" != "success" ]; then
+  echo "FAIL: workflow run did not succeed: $runs" >&2
+  run_id="$(json_str "$runs" run_id)"
+  pd "http://pebblesd/workflows/smoke-flow/runs/$run_id" >&2 || true
+  exit 1
+fi
+[ "$(ctr_exec stat -c '%u' /home/maya/from-job.txt)" = "70000" ] \
+  || { echo "FAIL: job artifact not owned by maya — REQ-41 broken" >&2; exit 1; }
+run_id="$(json_str "$runs" run_id)"
+detail="$(pd "http://pebblesd/workflows/smoke-flow/runs/$run_id")"
+expect 'opened as maya' "task log shows the pebbles session identity" "$detail"
 
 echo "==> M1.3: a dedicated request drains, never refuses (REQ-18/19)"
 resv_out="$(ctr_exec curl -s -w '\n%{http_code}' --unix-socket /run/pebbles/pebblesd.sock \

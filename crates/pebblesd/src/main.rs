@@ -9,6 +9,7 @@ mod api;
 mod catalog;
 mod cluster;
 mod config;
+mod jobs;
 mod migrations;
 mod services;
 mod supervisor;

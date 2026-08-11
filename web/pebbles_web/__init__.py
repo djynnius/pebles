@@ -501,6 +501,66 @@ def create_app(pebblesd: PebblesdClient | None = None) -> Flask:
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    @app.get("/jobs")
+    def jobs_page():  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return redirect(url_for("login_form"))
+        try:
+            workflows = client.list_workflows()
+        except (OSError, RuntimeError, ValueError):
+            workflows = []
+        try:
+            engines = client.list_engines()
+        except (OSError, RuntimeError, ValueError):
+            engines = []
+        try:
+            catalogs = client.list_catalogs()
+        except (OSError, RuntimeError, ValueError):
+            catalogs = []
+        return render_template(
+            "jobs.html", user=user, workflows=workflows, engines=engines, catalogs=catalogs
+        )
+
+    @app.post("/jobs/save")
+    def jobs_save():  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return jsonify({"error": "not signed in"}), 401
+        wf = request.get_json(silent=True) or {}
+        wf["username"] = user["username"]  # tasks run as the signed-in owner (REQ-41)
+        try:
+            return jsonify(client.save_workflow(wf))
+        except PebblesdError as exc:
+            return jsonify({"error": exc.message}), exc.status
+
+    @app.post("/jobs/<name>/run")
+    def jobs_run(name):  # pyright: ignore[reportUnusedFunction]
+        if session.get("user") is None:
+            return jsonify({"error": "not signed in"}), 401
+        try:
+            return jsonify(client.trigger_workflow(name))
+        except PebblesdError as exc:
+            return jsonify({"error": exc.message}), exc.status
+
+    @app.get("/jobs/<name>/runs.json")
+    def jobs_runs(name):  # pyright: ignore[reportUnusedFunction]
+        if session.get("user") is None:
+            return jsonify({"error": "not signed in"}), 401
+        try:
+            return jsonify(client.workflow_runs(name))
+        except PebblesdError as exc:
+            return jsonify({"error": exc.message}), exc.status
+
+    @app.get("/jobs/<name>/runs/<run_id>.json")
+    def jobs_run_detail(name, run_id):  # pyright: ignore[reportUnusedFunction]
+        if session.get("user") is None:
+            return jsonify({"error": "not signed in"}), 401
+        try:
+            return jsonify(client.workflow_run_detail(name, run_id))
+        except PebblesdError as exc:
+            return jsonify({"error": exc.message}), exc.status
+
     @app.post("/engines/cancel-reservation")
     def cancel_reservation():  # pyright: ignore[reportUnusedFunction]
         if session.get("user") is None:

@@ -30,8 +30,9 @@ catalogs** creates a DuckLake catalog (the form shows the equivalent
 persists across cells; files live in `~/notebooks`; numpy/pandas/scikit-learn/
 polars/tidymodels and friends are preinstalled via miniforge, and
 `pip install --user` or personal conda envs add more), **Dashboards** turns saved
-SQL into rearrangeable tiles (tables, big-number stats, bar charts), and the
-**SQL editor** runs
+SQL into rearrangeable tiles (tables, big-number stats, bar charts), **Jobs**
+builds scheduled or manual pipelines whose every task runs as you on the engine
+you pick (Airflow works underneath, invisibly), and the **SQL editor** runs
 queries against the lake as your own UNIX user, streaming results over SSE — try
 `SELECT 42 AS answer;` or load a CSV from your home with
 `read_csv_auto('/home/maya/file.csv')`. Time travel works:
