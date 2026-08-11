@@ -44,6 +44,17 @@ pub struct EngineSelf {
     pub name: String,
 }
 
+/// Access + grant records (REQ-07/13), sticky in the config volume.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Grants {
+    /// catalog name → granted group names.
+    #[serde(default)]
+    pub catalogs: std::collections::HashMap<String, Vec<String>>,
+    /// engine name → "everyone" | "group:<name>".
+    #[serde(default)]
+    pub engine_access: std::collections::HashMap<String, String>,
+}
+
 /// A remote session brokered through the main: local id → where it really lives.
 #[derive(Debug, Clone)]
 pub struct RemoteRef {
@@ -61,6 +72,7 @@ pub struct Cluster {
     dir: PathBuf,
     pub tokens: Mutex<Vec<TokenRecord>>,
     pub engines: Mutex<Vec<EngineRecord>>,
+    pub grants: Mutex<Grants>,
     /// Set on the engine role once registered; authenticates inbound main calls.
     pub engine_self: RwLock<Option<EngineSelf>>,
     remote: Mutex<std::collections::HashMap<u64, RemoteRef>>,
@@ -93,16 +105,78 @@ impl Cluster {
         let _ = std::fs::create_dir_all(&dir);
         let tokens = read_json(&dir.join("tokens.json")).unwrap_or_default();
         let engines = read_json(&dir.join("engines.json")).unwrap_or_default();
+        let grants = read_json(&dir.join("grants.json")).unwrap_or_default();
         let engine_self = read_json(&dir.join("engine.json"));
         std::sync::Arc::new(Self {
             dir,
             tokens: Mutex::new(tokens),
             engines: Mutex::new(engines),
+            grants: Mutex::new(grants),
             engine_self: RwLock::new(engine_self),
             remote: Mutex::new(std::collections::HashMap::new()),
             next_remote: AtomicU64::new(REMOTE_ID_BASE),
             http: reqwest::Client::new(),
         })
+    }
+
+    pub fn record_catalog_grant(&self, catalog: &str, group: &str) {
+        let mut grants = self.grants.lock().unwrap();
+        let entry = grants.catalogs.entry(catalog.to_string()).or_default();
+        if !entry.iter().any(|g| g == group) {
+            entry.push(group.to_string());
+        }
+        write_json(&self.dir.join("grants.json"), &*grants);
+    }
+
+    pub fn catalog_grants(&self, catalog: &str) -> Vec<String> {
+        self.grants
+            .lock()
+            .unwrap()
+            .catalogs
+            .get(catalog)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Does this group hold a grant on any catalog? (Membership adds re-wire
+    /// Postgres roles only when needed.)
+    pub fn catalog_grants_exist_for(&self, group: &str) -> bool {
+        self.grants
+            .lock()
+            .unwrap()
+            .catalogs
+            .values()
+            .flatten()
+            .any(|g| g == group)
+    }
+
+    pub fn set_engine_access(&self, engine: &str, access: &str) {
+        let mut grants = self.grants.lock().unwrap();
+        grants
+            .engine_access
+            .insert(engine.to_string(), access.to_string());
+        write_json(&self.dir.join("grants.json"), &*grants);
+    }
+
+    pub fn engine_access(&self, engine: &str) -> String {
+        self.grants
+            .lock()
+            .unwrap()
+            .engine_access
+            .get(engine)
+            .cloned()
+            .unwrap_or_else(|| "everyone".to_string())
+    }
+
+    /// REQ-07: may `username` see/attach this engine?
+    pub fn engine_allows(&self, engine: &str, username: &str) -> bool {
+        match self.engine_access(engine).as_str() {
+            "everyone" => true,
+            spec => match spec.strip_prefix("group:") {
+                Some(group) => pebbles_identity::host::in_group(username, group),
+                None => false,
+            },
+        }
     }
 
     pub fn mint_token(&self) -> TokenRecord {
@@ -234,10 +308,15 @@ impl Cluster {
     /// Push the current identity snapshot to every engine (REQ-14); best-effort,
     /// loudly logged — engines reconcile again at their next registration.
     pub async fn push_accounts(&self, config_dir: &Path) {
-        let Some((passwd, shadow)) = pebbles_identity::host::read_snapshot(config_dir) else {
+        let Some((passwd, shadow, group)) = pebbles_identity::host::read_snapshot(config_dir)
+        else {
             return;
         };
-        let snapshot = IdentitySnapshot { passwd, shadow };
+        let snapshot = IdentitySnapshot {
+            passwd,
+            shadow,
+            group,
+        };
         for engine in self.list_engines() {
             let url = format!("{}/engine/sync-accounts", engine.address);
             match self
@@ -344,6 +423,7 @@ pub async fn engine_boot(config_dir: PathBuf, cluster: std::sync::Arc<Cluster>) 
                             &config_dir,
                             &granted.identity.passwd,
                             &granted.identity.shadow,
+                            &granted.identity.group,
                         ) {
                             Ok(n) => tracing::info!(accounts = n, "identity snapshot applied"),
                             Err(err) => tracing::error!(%err, "applying identity snapshot failed"),

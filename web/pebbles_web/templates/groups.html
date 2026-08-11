@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block content %}
+  <div class="page">
+    <p class="nav">
+      <a href="{{ url_for('index') }}">home</a> · <a href="{{ url_for('users_page') }}">users</a>
+      · <strong>groups</strong> · <a href="{{ url_for('engines_page') }}">engines</a>
+      · signed in as {{ user.username }} · <a href="{{ url_for('logout') }}">sign out</a>
+    </p>
+    <h2>Groups</h2>
+    <p class="status">All grants target groups (a "user only" grant uses their personal
+      primary group behind the scenes).</p>
+    {% if groups %}
+      <div class="card wide">
+        <table>
+          <thead><tr><th>Group</th><th>gid</th><th>Members</th></tr></thead>
+          <tbody>
+          {% for g in groups %}
+            <tr><td>{{ g.name }}</td><td>{{ g.gid }}</td>
+              <td>{{ g.members | join(', ') if g.members else '—' }}</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="status">No team groups yet.</p>
+    {% endif %}
+
+    <form class="card wide" method="post" action="{{ url_for('groups_create') }}">
+      <input type="hidden" name="action" value="create">
+      <label for="name">New group</label>
+      <input id="name" name="name" pattern="[a-z][a-z0-9_-]*" required>
+      <button type="submit">Create group</button>
+    </form>
+
+    <form class="card wide" method="post" action="{{ url_for('groups_create') }}">
+      <input type="hidden" name="action" value="add-member">
+      <label for="group">Add member</label>
+      <select id="group" name="group" required>
+        {% for g in groups %}<option>{{ g.name }}</option>{% endfor %}
+      </select>
+      <label for="username">User</label>
+      <select id="username" name="username" required>
+        {% for u in users %}<option>{{ u.username }}</option>{% endfor %}
+      </select>
+      <button type="submit">Add to group</button>
+    </form>
+
+    <form class="card wide" method="post" action="{{ url_for('groups_create') }}">
+      <input type="hidden" name="action" value="grant-catalog">
+      <label for="catalog">Grant catalog</label>
+      <select id="catalog" name="catalog" required>
+        {% for c in catalogs %}<option>{{ c.name }}</option>{% endfor %}
+      </select>
+      <label for="grantgroup">to group</label>
+      <select id="grantgroup" name="group" required>
+        {% for g in groups %}<option>{{ g.name }}</option>{% endfor %}
+      </select>
+      <button type="submit">Grant access</button>
+      {% if error %}<p class="error">{{ error }}</p>{% endif %}
+    </form>
+  </div>
+{% endblock %}

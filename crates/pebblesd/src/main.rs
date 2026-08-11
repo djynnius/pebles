@@ -52,7 +52,10 @@ async fn main() -> anyhow::Result<()> {
     // environment at all — establish the PATH every PATH-relative spawn
     // (groupadd, psql, …) depends on. Docker/Podman inject one; Incus doesn't.
     if std::env::var_os("PATH").is_none() {
-        std::env::set_var("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
+        std::env::set_var(
+            "PATH",
+            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        );
     }
     tracing_subscriber::fmt().with_target(false).init();
 
@@ -97,10 +100,24 @@ async fn main() -> anyhow::Result<()> {
     tokio::select! {
         r = axum::serve(listener, api::router(cfg.role, state)) => r?,
         _ = sigterm.recv() => tracing::info!("SIGTERM"),
+        _ = halt_signal() => tracing::info!("SIGPWR (init halt)"),
         _ = tokio::signal::ctrl_c() => tracing::info!("interrupt"),
     }
     sup.shutdown().await;
     Ok(())
+}
+
+/// LXC/Incus ask a system container's init to shut down with SIGPWR (the
+/// convention systemd honors). An init that ignores it hangs `incus restart`.
+async fn halt_signal() {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(mut sigpwr) = signal(SignalKind::from_raw(libc::SIGPWR)) {
+            sigpwr.recv().await;
+            return;
+        }
+    }
+    std::future::pending::<()>().await
 }
 
 /// Session serving on this container: the main doubles as an engine by default

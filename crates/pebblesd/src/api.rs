@@ -12,8 +12,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use pebbles_api::{
-    ApiError, CatalogDescriptor, CreateCatalogRequest, CreateUserRequest, EngineDescriptor,
-    EngineResources, Health, IdentitySnapshot, LoginRequest, LoginResponse, MintTokenResponse,
+    AddMemberRequest, ApiError, CatalogDescriptor, CreateCatalogRequest, CreateGroupRequest,
+    CreateUserRequest, EngineAccessRequest, EngineDescriptor, EngineResources, GrantCatalogRequest,
+    GroupInfo, Health, IdentitySnapshot, LoginRequest, LoginResponse, MintTokenResponse,
     OpenSessionRequest, RegisterEngineRequest, RegisterEngineResponse, Role, SessionDescriptor,
     TokenInfo, UserInfo, VersionInfo,
 };
@@ -67,9 +68,17 @@ pub fn router(role: Role, state: AppState) -> Router {
             .route("/sessions/{id}", delete(close_session))
             .route("/sessions/{id}/exec", post(exec_session))
             .route("/catalogs", get(list_catalogs).post(create_catalog))
+            .route(
+                "/catalogs/{name}/grants",
+                get(list_catalog_grants).post(grant_catalog),
+            )
+            .route("/groups", get(list_groups).post(create_group))
+            .route("/groups/{name}/members", post(add_member))
+            .route("/groups/{name}/members/{user}", delete(remove_member))
             .route("/cluster/tokens", get(list_tokens).post(mint_token))
             .route("/cluster/tokens/{id}", delete(revoke_token))
-            .route("/engines", get(list_engines)),
+            .route("/engines", get(list_engines))
+            .route("/engines/{name}/access", post(set_engine_access)),
         Role::Engine => health_routes(role),
     }
     .with_state(state)
@@ -265,6 +274,17 @@ async fn open_session(
             .cluster
             .engine_by_name(&name)
             .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("no engine {name:?}")))?;
+        // REQ-07: only grantees can see or attach the engine.
+        let (cluster, user, ename) = (state.cluster.clone(), req.username.clone(), name.clone());
+        let allowed = tokio::task::spawn_blocking(move || cluster.engine_allows(&ename, &user))
+            .await
+            .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        if !allowed {
+            return Err(error(
+                StatusCode::FORBIDDEN,
+                format!("user {:?} has no access to engine {name:?}", req.username),
+            ));
+        }
         let forward = OpenSessionRequest {
             engine: None,
             ..req.clone()
@@ -472,10 +492,15 @@ async fn register_engine(
     })
     .await
     .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?
-    .map(|(passwd, shadow)| IdentitySnapshot { passwd, shadow })
+    .map(|(passwd, shadow, group)| IdentitySnapshot {
+        passwd,
+        shadow,
+        group,
+    })
     .unwrap_or(IdentitySnapshot {
         passwd: String::new(),
         shadow: String::new(),
+        group: String::new(),
     });
 
     let record = state.cluster.register_engine(&req);
@@ -493,12 +518,180 @@ async fn sync_accounts(
 ) -> ApiResult<Value> {
     let config_dir = state.config_dir.clone();
     let applied = tokio::task::spawn_blocking(move || {
-        pebbles_identity::host::apply_snapshot(&config_dir, &snapshot.passwd, &snapshot.shadow)
+        pebbles_identity::host::apply_snapshot(
+            &config_dir,
+            &snapshot.passwd,
+            &snapshot.shadow,
+            &snapshot.group,
+        )
     })
     .await
     .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?
     .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(Json(serde_json::json!({ "applied": applied })))
+}
+
+// ---- groups & access (M1.2) ----
+
+fn group_info(g: pebbles_identity::PebblesGroup) -> GroupInfo {
+    GroupInfo {
+        name: g.name,
+        gid: g.gid,
+        members: g.members,
+    }
+}
+
+async fn list_groups() -> ApiResult<Vec<GroupInfo>> {
+    let groups = tokio::task::spawn_blocking(pebbles_identity::host::list_groups)
+        .await
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(groups.into_iter().map(group_info).collect()))
+}
+
+async fn create_group(
+    State(state): State<AppState>,
+    Json(req): Json<CreateGroupRequest>,
+) -> ApiResult<GroupInfo> {
+    let config_dir = state.config_dir.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let group = pebbles_identity::host::create_group(&req.name)?;
+        let _ = pebbles_identity::host::persist_users(&config_dir);
+        Ok::<_, IdentityError>(group)
+    })
+    .await
+    .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    match result {
+        Ok(group) => {
+            tracing::info!(group = %group.name, gid = group.gid, "team group created");
+            replicate(&state);
+            Ok(Json(group_info(group)))
+        }
+        Err(e @ IdentityError::InvalidUsername(_)) => {
+            Err(error(StatusCode::UNPROCESSABLE_ENTITY, e))
+        }
+        Err(e @ IdentityError::UserExists(_)) => Err(error(StatusCode::CONFLICT, e)),
+        Err(e) => Err(error(StatusCode::INTERNAL_SERVER_ERROR, e)),
+    }
+}
+
+async fn add_member(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(req): Json<AddMemberRequest>,
+) -> ApiResult<GroupInfo> {
+    let config_dir = state.config_dir.clone();
+    let cluster = state.cluster.clone();
+    let (group_name, username) = (name.clone(), req.username.clone());
+    let result = tokio::task::spawn_blocking(move || {
+        pebbles_identity::host::add_member(&group_name, &username)?;
+        let _ = pebbles_identity::host::persist_users(&config_dir);
+        // If this group already holds catalog grants, wire the new member's
+        // Postgres role membership too (sessions pick groups up at next spawn).
+        if cluster.catalog_grants_exist_for(&group_name) {
+            if let Err(err) = crate::catalog::sync_member(&group_name, &username) {
+                tracing::error!(%err, "syncing member into granted catalogs failed");
+            }
+        }
+        let groups = pebbles_identity::host::list_groups()?;
+        Ok::<_, IdentityError>(groups.into_iter().find(|g| g.name == group_name))
+    })
+    .await
+    .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    match result {
+        Ok(Some(group)) => {
+            replicate(&state);
+            Ok(Json(group_info(group)))
+        }
+        Ok(None) => Err(error(StatusCode::NOT_FOUND, format!("no group {name:?}"))),
+        Err(e @ IdentityError::NoSuchUser(_)) => Err(error(StatusCode::NOT_FOUND, e)),
+        Err(e) => Err(error(StatusCode::INTERNAL_SERVER_ERROR, e)),
+    }
+}
+
+async fn remove_member(
+    State(state): State<AppState>,
+    Path((name, user)): Path<(String, String)>,
+) -> ApiResult<Value> {
+    let config_dir = state.config_dir.clone();
+    let (group_name, username) = (name.clone(), user.clone());
+    tokio::task::spawn_blocking(move || {
+        pebbles_identity::host::remove_member(&group_name, &username)?;
+        let _ = pebbles_identity::host::persist_users(&config_dir);
+        Ok::<_, IdentityError>(())
+    })
+    .await
+    .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?
+    .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    replicate(&state);
+    Ok(Json(serde_json::json!({ "removed": user, "group": name })))
+}
+
+async fn grant_catalog(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(req): Json<GrantCatalogRequest>,
+) -> ApiResult<Value> {
+    let group_name = req.group.clone();
+    let catalog_name = name.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let catalog = crate::catalog::list_catalogs()?
+            .into_iter()
+            .find(|c| c.name == catalog_name)
+            .ok_or(CatalogError::InvalidName(catalog_name.clone()))?;
+        let group = pebbles_identity::host::list_groups()
+            .map_err(CatalogError::Identity)?
+            .into_iter()
+            .find(|g| g.name == group_name)
+            .ok_or(CatalogError::InvalidName(group_name.clone()))?;
+        crate::catalog::grant_catalog(&catalog, &group)
+    })
+    .await
+    .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    match result {
+        Ok(()) => {
+            state.cluster.record_catalog_grant(&name, &req.group);
+            tracing::info!(catalog = %name, group = %req.group, "catalog granted");
+            Ok(Json(
+                serde_json::json!({ "catalog": name, "group": req.group }),
+            ))
+        }
+        Err(e @ CatalogError::InvalidName(_)) => Err(error(StatusCode::NOT_FOUND, e)),
+        Err(e) => Err(error(StatusCode::INTERNAL_SERVER_ERROR, e)),
+    }
+}
+
+async fn list_catalog_grants(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> ApiResult<Vec<String>> {
+    Ok(Json(state.cluster.catalog_grants(&name)))
+}
+
+async fn set_engine_access(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(req): Json<EngineAccessRequest>,
+) -> ApiResult<Value> {
+    let valid = req.access == "everyone" || req.access.starts_with("group:");
+    if !valid {
+        return Err(error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "access must be \"everyone\" or \"group:<name>\"",
+        ));
+    }
+    state.cluster.set_engine_access(&name, &req.access);
+    tracing::info!(engine = %name, access = %req.access, "engine access set");
+    Ok(Json(
+        serde_json::json!({ "engine": name, "access": req.access }),
+    ))
+}
+
+/// Fire-and-forget identity replication after any identity mutation (REQ-14).
+fn replicate(state: &AppState) {
+    let cluster = state.cluster.clone();
+    let dir = state.config_dir.clone();
+    tokio::spawn(async move { cluster.push_accounts(&dir).await });
 }
 
 async fn list_engines(State(state): State<AppState>) -> ApiResult<Vec<EngineDescriptor>> {
@@ -514,6 +707,7 @@ async fn list_engines(State(state): State<AppState>) -> ApiResult<Vec<EngineDesc
                     .unwrap_or(1),
                 memory_bytes: 0,
             },
+            access: Some(state.cluster.engine_access("main")),
         });
     }
     for record in state.cluster.list_engines() {
@@ -526,11 +720,13 @@ async fn list_engines(State(state): State<AppState>) -> ApiResult<Vec<EngineDesc
             .await
             .map(|r| r.status().is_success())
             .unwrap_or(false);
+        let access = Some(state.cluster.engine_access(&record.name));
         engines.push(EngineDescriptor {
             name: record.name,
             address: record.address,
             state: if alive { "available" } else { "stopped" }.into(),
             resources: record.resources,
+            access,
         });
     }
     Ok(Json(engines))

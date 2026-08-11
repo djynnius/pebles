@@ -157,6 +157,40 @@ pub struct RegisterEngineRequest {
 pub struct IdentitySnapshot {
     pub passwd: String,
     pub shadow: String,
+    /// In-range group lines (team groups + memberships, REQ-13/14).
+    #[serde(default)]
+    pub group: String,
+}
+
+/// A team group (REQ-13: all grants target groups).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct GroupInfo {
+    pub name: String,
+    pub gid: u32,
+    pub members: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CreateGroupRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AddMemberRequest {
+    pub username: String,
+}
+
+/// Grant a group access to a catalog (REQ-13): Postgres role grants + setgid
+/// group permissions on the data root, applied together.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct GrantCatalogRequest {
+    pub group: String,
+}
+
+/// Engine visibility/attachability (REQ-07): "everyone" or "group:<name>".
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct EngineAccessRequest {
+    pub access: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -175,6 +209,9 @@ pub struct EngineDescriptor {
     /// "available" | "stopped" — the fuller REQ-23 state model lands with M1.3.
     pub state: String,
     pub resources: EngineResources,
+    /// "everyone" or "group:<name>" (REQ-07).
+    #[serde(default)]
+    pub access: Option<String>,
 }
 
 /// Create a DuckLake catalog owned by `owner` (REQ-24/25). The form and the SQL
@@ -217,6 +254,11 @@ pub struct CatalogDescriptor {
         IdentitySnapshot,
         RegisterEngineResponse,
         EngineDescriptor,
+        GroupInfo,
+        CreateGroupRequest,
+        AddMemberRequest,
+        GrantCatalogRequest,
+        EngineAccessRequest,
         ApiError
     ))
 )]

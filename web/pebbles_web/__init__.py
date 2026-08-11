@@ -150,6 +150,72 @@ def create_app(pebblesd: PebblesdClient | None = None) -> Flask:
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    def _admin_page(template: str, **fetches):
+        user = session.get("user")
+        if user is None:
+            return None, redirect(url_for("login_form"))
+        data = {}
+        for key, fetch in fetches.items():
+            try:
+                data[key] = fetch()
+            except (OSError, RuntimeError, ValueError):
+                data[key] = []
+        return (template, {"user": user, **data}), None
+
+    @app.get("/users")
+    def users_page():  # pyright: ignore[reportUnusedFunction]
+        page, redir = _admin_page("users.html", users=client.list_users)
+        return redir or render_template(page[0], **page[1])
+
+    @app.post("/users")
+    def users_create():  # pyright: ignore[reportUnusedFunction]
+        if session.get("user") is None:
+            return redirect(url_for("login_form"))
+        try:
+            client.create_user(
+                request.form.get("username", "").strip(), request.form.get("password", "")
+            )
+        except PebblesdError as exc:
+            page, _ = _admin_page("users.html", users=client.list_users)
+            return render_template(page[0], **page[1], error=exc.message), exc.status
+        return redirect(url_for("users_page"))
+
+    @app.get("/groups")
+    def groups_page():  # pyright: ignore[reportUnusedFunction]
+        page, redir = _admin_page(
+            "groups.html",
+            groups=client.list_groups,
+            users=client.list_users,
+            catalogs=client.list_catalogs,
+        )
+        return redir or render_template(page[0], **page[1])
+
+    @app.post("/groups")
+    def groups_create():  # pyright: ignore[reportUnusedFunction]
+        if session.get("user") is None:
+            return redirect(url_for("login_form"))
+        try:
+            action = request.form.get("action", "create")
+            if action == "create":
+                client.create_group(request.form.get("name", "").strip())
+            elif action == "add-member":
+                client.add_group_member(
+                    request.form.get("group", ""), request.form.get("username", "")
+                )
+            elif action == "grant-catalog":
+                client.grant_catalog(
+                    request.form.get("catalog", ""), request.form.get("group", "")
+                )
+        except PebblesdError as exc:
+            page, _ = _admin_page(
+                "groups.html",
+                groups=client.list_groups,
+                users=client.list_users,
+                catalogs=client.list_catalogs,
+            )
+            return render_template(page[0], **page[1], error=exc.message), exc.status
+        return redirect(url_for("groups_page"))
+
     @app.get("/engines")
     def engines_page():  # pyright: ignore[reportUnusedFunction]
         user = session.get("user")

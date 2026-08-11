@@ -96,6 +96,30 @@ class PebblesdClient:
             raise PebblesdError(status, str(data))
         return data
 
+    def list_users(self) -> list:
+        status, data = self._request("GET", "/users")
+        if status != 200:
+            raise PebblesdError(status, str(data))
+        return data
+
+    def create_user(self, username: str, password: str) -> dict:
+        return self._expect("POST", "/users", {"username": username, "password": password})
+
+    def list_groups(self) -> list:
+        status, data = self._request("GET", "/groups")
+        if status != 200:
+            raise PebblesdError(status, str(data))
+        return data
+
+    def create_group(self, name: str) -> dict:
+        return self._expect("POST", "/groups", {"name": name})
+
+    def add_group_member(self, group: str, username: str) -> dict:
+        return self._expect("POST", f"/groups/{group}/members", {"username": username})
+
+    def grant_catalog(self, catalog: str, group: str) -> dict:
+        return self._expect("POST", f"/catalogs/{catalog}/grants", {"group": group})
+
     def create_catalog(self, name: str, owner: str) -> dict:
         return self._expect("POST", "/catalogs", {"name": name, "owner": owner})
 

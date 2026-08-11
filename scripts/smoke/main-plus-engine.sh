@@ -108,4 +108,19 @@ echo "==> closing the proxied session"
 pd -X DELETE "http://pebblesd/sessions/$sid" | grep -q 'closed' \
   || { echo "FAIL: close failed" >&2; exit 1; }
 
+echo "==> M1.2: engine access is group-gated (REQ-07)"
+pd -H 'Content-Type: application/json' -d '{"name":"analysts"}' http://pebblesd/groups >/dev/null
+pd -H 'Content-Type: application/json' -d '{"access":"group:analysts"}' \
+  http://pebblesd/engines/worker-1/access >/dev/null
+denied_code="$(docker exec "$MAIN" curl -s -o /dev/null -w '%{http_code}' \
+  --unix-socket /run/pebbles/pebblesd.sock -H 'Content-Type: application/json' \
+  -d '{"username":"maya","engine":"worker-1"}' http://pebblesd/sessions)"
+[ "$denied_code" = "403" ] \
+  || { echo "FAIL: non-member session expected 403, got $denied_code" >&2; exit 1; }
+pd -H 'Content-Type: application/json' -d '{"username":"maya"}' \
+  http://pebblesd/groups/analysts/members >/dev/null
+allowed="$(pd -H 'Content-Type: application/json' \
+  -d '{"username":"maya","engine":"worker-1"}' http://pebblesd/sessions)"
+expect '"engine":"worker-1"' "member may attach after joining analysts" "$allowed"
+
 echo "==> main+engine smoke OK"

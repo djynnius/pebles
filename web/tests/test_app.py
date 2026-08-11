@@ -27,6 +27,24 @@ class FakeDaemon:
     def list_catalogs(self):
         return list(self.catalogs)
 
+    def list_users(self):
+        return [{"username": "maya", "uid": 70000, "gid": 70000, "home": "/home/maya"}]
+
+    def create_user(self, username, password):
+        return {"username": username, "uid": 70002, "gid": 70002, "home": f"/home/{username}"}
+
+    def list_groups(self):
+        return [{"name": "analysts", "gid": 70050, "members": ["tomas"]}]
+
+    def create_group(self, name):
+        return {"name": name, "gid": 70051, "members": []}
+
+    def add_group_member(self, group, username):
+        return {"name": group, "gid": 70050, "members": ["tomas", username]}
+
+    def grant_catalog(self, catalog, group):
+        return {"catalog": catalog, "group": group}
+
     def list_engines(self):
         return [
             {
@@ -151,6 +169,29 @@ def test_engines_page_lists_the_fleet():
     assert page.status_code == 200
     body = page.get_data(as_text=True)
     assert "worker-1" in body and "available" in body
+
+
+def test_users_page_lists_and_creates():
+    assert client().get("/users").status_code == 302
+    c = signed_in()
+    page = c.get("/users").get_data(as_text=True)
+    assert "maya" in page and "70000" in page
+    assert c.post(
+        "/users", data={"username": "ade", "password": "pebbles-demo-3"}
+    ).status_code == 302
+
+
+def test_groups_page_lists_members_and_handles_actions():
+    c = signed_in()
+    page = c.get("/groups").get_data(as_text=True)
+    assert "analysts" in page and "tomas" in page
+    assert c.post("/groups", data={"action": "create", "name": "science"}).status_code == 302
+    assert c.post(
+        "/groups", data={"action": "add-member", "group": "analysts", "username": "maya"}
+    ).status_code == 302
+    assert c.post(
+        "/groups", data={"action": "grant-catalog", "catalog": "claims", "group": "analysts"}
+    ).status_code == 302
 
 
 def test_catalog_create_shows_up_in_the_list_and_conflicts_cleanly():

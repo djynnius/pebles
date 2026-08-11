@@ -135,9 +135,28 @@ impl Broker {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .kill_on_drop(true);
-        // setuid to the session user; skipped when already that user (dev/test runs).
+        // Become the session user; skipped when already that user (dev/test runs).
+        // NOT Command::uid/gid: those drop supplementary groups, which would make
+        // every group grant (REQ-13) invisible to the session. Order matters:
+        // setgid → initgroups → setuid, while still root.
         if req.uid != unsafe { libc::geteuid() } as u32 {
-            cmd.uid(req.uid).gid(req.gid);
+            let user = std::ffi::CString::new(req.username.as_str())
+                .map_err(|_| SessionError::Kernel("username contains a NUL byte".to_string()))?;
+            let (uid, gid) = (req.uid, req.gid);
+            unsafe {
+                cmd.pre_exec(move || {
+                    if libc::setgid(gid) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    if libc::initgroups(user.as_ptr(), gid as _) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    if libc::setuid(uid) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
         }
         let mut child = cmd.spawn().map_err(|e| kernel(e.to_string()))?;
         let stdin = child.stdin.take().expect("piped stdin");

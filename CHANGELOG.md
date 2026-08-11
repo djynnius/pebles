@@ -7,6 +7,25 @@ All notable changes to Pebbles are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **M1.2 — groups & access**: team groups are real UNIX groups with gids from the
+  same reserved pool, persisted in the config volume and replicated to engines
+  with users and memberships (REQ-13/14). Catalog grants are enforced by the
+  platform's own primitives: setgid group permissions on the data root plus
+  Postgres role grants (schema/table privileges, default privileges for future
+  tables, and role membership for each member — new members are wired on join).
+  Engine access (REQ-07) is `everyone` or `group:<name>`, enforced at session
+  open. The session broker now runs `initgroups` before `setuid` — without it,
+  supplementary groups (and therefore every grant) would be invisible to session
+  processes. New endpoints: `/groups` CRUD + members, `/catalogs/{name}/grants`,
+  `/engines/{name}/access`; new Users and Groups admin pages in the web UI. The
+  smoke tests prove deny-before-grant / allow-after-grant on the lake and the
+  403-then-allowed flow for group-gated engines.
+
+### Fixed
+- pebblesd now establishes a default `PATH` when it boots as a system-container
+  init (Incus starts init with an empty environment; every PATH-relative spawn
+  failed with ENOENT — Docker/Podman inject a PATH, which is why only the Incus
+  cell broke).
 - **M1.1 — engine registration (Phase 1 begins)**: the fleet is real. The main
   mints **single-use join tokens** (24 h expiry, hashed at rest, revocable —
   REQ-05) over the privileged socket; a new cluster TCP API (bearer-authenticated;

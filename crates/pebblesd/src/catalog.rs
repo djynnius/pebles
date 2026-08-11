@@ -111,15 +111,72 @@ pub fn list_catalogs() -> Result<Vec<CatalogInfo>, CatalogError> {
         .collect())
 }
 
+/// Grant a team group access to a catalog (REQ-13). Three coordinated moves:
+/// filesystem (setgid group dir), database-level (CONNECT), and in-database
+/// (schema/table privileges + default privileges for future tables), plus role
+/// membership for each current member — new members get wired by `sync_member`.
+pub fn grant_catalog(
+    catalog: &CatalogInfo,
+    group: &pebbles_identity::PebblesGroup,
+) -> Result<(), CatalogError> {
+    use std::os::unix::fs::PermissionsExt;
+    let data_dir = PathBuf::from(&catalog.data_path);
+    std::os::unix::fs::chown(&data_dir, None, Some(group.gid))?;
+    std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o2770))?;
+
+    ensure_role(&group.name, false)?;
+    psql(&format!(
+        "GRANT CONNECT ON DATABASE \"{}\" TO \"{}\";",
+        catalog.database, group.name
+    ))?;
+    psql_db(
+        &catalog.database,
+        &format!(
+            "GRANT USAGE, CREATE ON SCHEMA public TO \"{g}\"; \
+             GRANT ALL ON ALL TABLES IN SCHEMA public TO \"{g}\"; \
+             GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO \"{g}\"; \
+             ALTER DEFAULT PRIVILEGES FOR ROLE \"{o}\" IN SCHEMA public GRANT ALL ON TABLES TO \"{g}\"; \
+             ALTER DEFAULT PRIVILEGES FOR ROLE \"{o}\" IN SCHEMA public GRANT ALL ON SEQUENCES TO \"{g}\";",
+            g = group.name,
+            o = catalog.owner
+        ),
+    )?;
+    for member in &group.members {
+        sync_member(&group.name, member)?;
+    }
+    Ok(())
+}
+
+/// Wire one user into a granted group's Postgres role (login role created on
+/// demand, then role membership). Called at grant time and on membership adds.
+pub fn sync_member(group: &str, username: &str) -> Result<(), CatalogError> {
+    ensure_role(username, true)?;
+    psql(&format!("GRANT \"{group}\" TO \"{username}\";"))?;
+    Ok(())
+}
+
+fn ensure_role(name: &str, login: bool) -> Result<(), CatalogError> {
+    let kind = if login { "LOGIN" } else { "NOLOGIN" };
+    psql(&format!(
+        "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{name}') \
+         THEN CREATE ROLE \"{name}\" {kind}; END IF; END $$;"
+    ))?;
+    Ok(())
+}
+
 /// Run one statement as the postgres superuser over the local socket.
 fn psql(sql: &str) -> Result<String, CatalogError> {
+    psql_db("postgres", sql)
+}
+
+fn psql_db(db: &str, sql: &str) -> Result<String, CatalogError> {
     let (uid, gid) = pebbles_identity::system_user("postgres").ok_or(CatalogError::NoPostgres)?;
     let mut cmd = std::process::Command::new("psql");
     cmd.args([
         "-h",
         "/run/postgresql",
         "-d",
-        "postgres",
+        db,
         "-v",
         "ON_ERROR_STOP=1",
         "-tA",

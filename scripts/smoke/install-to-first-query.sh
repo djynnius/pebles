@@ -215,6 +215,27 @@ tt="$(sql "SELECT count(*) AS c FROM claims_t AT (VERSION => $prev_ver);")"
 echo "    at version $prev_ver: $tt"
 expect '"c":2' "time-travel to snapshot $prev_ver" "$tt"
 
+echo "==> M1.2: catalog access is denied before a grant (REQ-13)"
+sql_as() { ctr_exec curl -s --unix-socket /run/pebbles/pebblesd.sock \
+  -H 'Content-Type: application/json' \
+  -d "{\"id\":12,\"op\":\"sql\",\"catalog\":\"claims\",\"sql\":\"$2\"}" \
+  "http://pebblesd/sessions/$1/exec"; }
+before="$(sql_as "$id_tomas" "SELECT count(*) AS c FROM claims_t;")"
+expect '"ok":false' "tomas must NOT reach maya's catalog before a grant" "$before"
+
+echo "==> grant via group: analysts gets the claims catalog"
+pd -H 'Content-Type: application/json' -d '{"name":"analysts"}' http://pebblesd/groups >/dev/null
+pd -H 'Content-Type: application/json' -d '{"username":"tomas"}' \
+  http://pebblesd/groups/analysts/members >/dev/null
+pd -H 'Content-Type: application/json' -d '{"group":"analysts"}' \
+  http://pebblesd/catalogs/claims/grants >/dev/null
+# Group membership is picked up at spawn (initgroups): a NEW session is the test.
+s_tomas2="$(pd -H 'Content-Type: application/json' -d '{"username":"tomas"}' http://pebblesd/sessions)"
+id_tomas2="$(json_num "$s_tomas2" id)"
+after="$(sql_as "$id_tomas2" "SELECT count(*) AS c FROM claims_t;")"
+echo "    $after"
+expect '"c":3' "tomas queries the catalog through the analysts grant" "$after"
+
 echo "==> results stream over SSE through the web tier (REQ-31)"
 jar5="$(mktemp)"
 curl -s -o /dev/null -c "$jar5" -d 'username=maya&password=pebbles-demo-1' "$BASE/login"

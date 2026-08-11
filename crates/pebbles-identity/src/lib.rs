@@ -108,6 +108,45 @@ pub fn pebbles_users(content: &str) -> Vec<ProvisionedUser> {
         .collect()
 }
 
+/// A team group in the reserved range (REQ-13: all grants target groups; personal
+/// primary groups are excluded here — they're implementation detail, not teams).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PebblesGroup {
+    pub name: String,
+    pub gid: u32,
+    pub members: Vec<String>,
+}
+
+/// Team groups from group-format content: in-range gids that are NOT someone's
+/// personal primary group (uid == gid with the same name in passwd).
+pub fn pebbles_groups(group_content: &str, passwd_content: &str) -> Vec<PebblesGroup> {
+    group_content
+        .lines()
+        .filter_map(|line| {
+            let fields: Vec<&str> = line.split(':').collect();
+            if fields.len() < 4 {
+                return None;
+            }
+            let gid: u32 = fields[2].parse().ok()?;
+            if !(PEBBLES_UID_MIN..=PEBBLES_UID_MAX).contains(&gid) {
+                return None;
+            }
+            if parse_passwd(passwd_content, fields[0]) == Some((gid, gid)) {
+                return None; // personal primary group
+            }
+            Some(PebblesGroup {
+                name: fields[0].to_string(),
+                gid,
+                members: fields[3]
+                    .split(',')
+                    .filter(|m| !m.is_empty())
+                    .map(str::to_string)
+                    .collect(),
+            })
+        })
+        .collect()
+}
+
 /// Shadow lines belonging to the named users (for persistence into the config
 /// volume — accounts must survive "pull new image, same volume" upgrades, REQ-09).
 pub fn filter_shadow_lines<'a>(shadow: &'a str, names: &[&str]) -> Vec<&'a str> {
@@ -258,12 +297,14 @@ pub mod host {
             .find(|u| u.username == name))
     }
 
-    /// Snapshot every Pebbles account (passwd + shadow lines) into the config
-    /// volume so identity survives image upgrades (REQ-09/11). Root-only files.
+    /// Snapshot every Pebbles account and team group (passwd + shadow + group
+    /// lines) into the config volume so identity survives image upgrades
+    /// (REQ-09/11) and replicates to engines (REQ-14). Root-only files.
     pub fn persist_users(state_dir: &Path) -> Result<(), IdentityError> {
         use std::os::unix::fs::PermissionsExt;
         let passwd = std::fs::read_to_string("/etc/passwd")?;
         let shadow = std::fs::read_to_string("/etc/shadow")?;
+        let group = std::fs::read_to_string("/etc/group")?;
         let users = pebbles_users(&passwd);
         let names: Vec<&str> = users.iter().map(|u| u.username.as_str()).collect();
 
@@ -274,9 +315,21 @@ pub mod host {
             .lines()
             .filter(|l| l.split(':').next().is_some_and(|n| names.contains(&n)))
             .collect();
+        // All in-range group lines: team groups AND personal ones (memberships
+        // ride on the group line; personal groups restore via useradd anyway).
+        let group_lines: Vec<&str> = group
+            .lines()
+            .filter(|l| {
+                l.split(':')
+                    .nth(2)
+                    .and_then(|g| g.parse::<u32>().ok())
+                    .is_some_and(|g| (PEBBLES_UID_MIN..=PEBBLES_UID_MAX).contains(&g))
+            })
+            .collect();
         for (file, content) in [
             ("passwd", passwd_lines.join("\n")),
             ("shadow", filter_shadow_lines(&shadow, &names).join("\n")),
+            ("group", group_lines.join("\n")),
         ] {
             let path = dir.join(file);
             std::fs::write(&path, format!("{content}\n"))?;
@@ -285,12 +338,66 @@ pub mod host {
         Ok(())
     }
 
+    /// Team groups on this host.
+    pub fn list_groups() -> Result<Vec<PebblesGroup>, IdentityError> {
+        Ok(pebbles_groups(
+            &std::fs::read_to_string("/etc/group")?,
+            &std::fs::read_to_string("/etc/passwd")?,
+        ))
+    }
+
+    /// Create a team group with a gid from the shared reserved pool (uids and
+    /// gids draw from one allocator so the fleet-wide audit stays simple).
+    pub fn create_group(name: &str) -> Result<PebblesGroup, IdentityError> {
+        validate_username(name)?;
+        let passwd = std::fs::read_to_string("/etc/passwd")?;
+        let group = std::fs::read_to_string("/etc/group")?;
+        if parse_group(&group, name).is_some() || parse_passwd(&passwd, name).is_some() {
+            return Err(IdentityError::UserExists(name.to_string()));
+        }
+        let used = pebbles_users(&passwd)
+            .iter()
+            .map(|u| u.uid)
+            .chain(pebbles_groups(&group, &passwd).iter().map(|g| g.gid))
+            .collect::<Vec<_>>();
+        let gid = UidAllocator::new(used).allocate()?;
+        run("groupadd", &["-g", &gid.to_string(), name], None)?;
+        Ok(PebblesGroup {
+            name: name.to_string(),
+            gid,
+            members: vec![],
+        })
+    }
+
+    /// Membership changes are `usermod -aG` on a real group (REQ-14); sessions
+    /// started afterwards inherit it (the broker initgroups at spawn).
+    pub fn add_member(group: &str, username: &str) -> Result<(), IdentityError> {
+        find_user(username)?.ok_or_else(|| IdentityError::NoSuchUser(username.to_string()))?;
+        if !list_groups()?.iter().any(|g| g.name == group) {
+            return Err(IdentityError::NoSuchUser(format!("group {group}")));
+        }
+        run("usermod", &["-aG", group, username], None)
+    }
+
+    pub fn remove_member(group: &str, username: &str) -> Result<(), IdentityError> {
+        run("gpasswd", &["-d", username, group], None)
+    }
+
+    /// Is `username` in `group` (member list or personal primary)?
+    pub fn in_group(username: &str, group: &str) -> bool {
+        list_groups()
+            .unwrap_or_default()
+            .iter()
+            .any(|g| g.name == group && g.members.iter().any(|m| m == username))
+    }
+
     /// The persisted identity snapshot, if any (for replication to engines, REQ-14).
-    pub fn read_snapshot(state_dir: &Path) -> Option<(String, String)> {
+    pub fn read_snapshot(state_dir: &Path) -> Option<(String, String, String)> {
         let dir = state_dir.join("identity");
         Some((
             std::fs::read_to_string(dir.join("passwd")).ok()?,
             std::fs::read_to_string(dir.join("shadow")).unwrap_or_default(),
+            std::fs::read_to_string(dir.join("group")).unwrap_or_default(),
         ))
     }
 
@@ -300,12 +407,13 @@ pub mod host {
         state_dir: &Path,
         passwd: &str,
         shadow: &str,
+        group: &str,
     ) -> Result<usize, IdentityError> {
         use std::os::unix::fs::PermissionsExt;
         let dir = state_dir.join("identity");
         std::fs::create_dir_all(&dir)?;
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
-        for (file, content) in [("passwd", passwd), ("shadow", shadow)] {
+        for (file, content) in [("passwd", passwd), ("shadow", shadow), ("group", group)] {
             let path = dir.join(file);
             std::fs::write(&path, content)?;
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
@@ -363,6 +471,22 @@ pub mod host {
                 }
             }
             restored += 1;
+        }
+
+        // Team groups + memberships (REQ-13/14) ride the same snapshot.
+        if let Ok(stored_group) = std::fs::read_to_string(dir.join("group")) {
+            let stored_passwd_now = std::fs::read_to_string(dir.join("passwd"))?;
+            let live_group = std::fs::read_to_string("/etc/group")?;
+            for grp in pebbles_groups(&stored_group, &stored_passwd_now) {
+                if parse_group(&live_group, &grp.name).is_none() {
+                    run("groupadd", &["-g", &grp.gid.to_string(), &grp.name], None)?;
+                }
+                for member in &grp.members {
+                    if !in_group(member, &grp.name) && find_user(member)?.is_some() {
+                        run("usermod", &["-aG", &grp.name, member], None)?;
+                    }
+                }
+            }
         }
         Ok(restored)
     }
