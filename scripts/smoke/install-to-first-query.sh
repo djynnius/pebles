@@ -339,7 +339,10 @@ pd -H 'Content-Type: application/json' \
   http://pebblesd/workflows >/dev/null
 echo "    workflow saved; waiting for airflow to accept the trigger"
 triggered=""
-for _ in $(seq 1 40); do # migrations + dag parse take a while on first boot
+# Airflow readiness = postgres boot + provision + db migrate + scheduler + DAG
+# parse. On the unprivileged incus system container the whole boot is slower, so
+# the window is generous (~7 min).
+for _ in $(seq 1 84); do
   code="$(pd_code -X POST http://pebblesd/workflows/smoke-flow/run)"
   [ "$code" = "200" ] && { triggered=yes; break; }
   sleep 5
@@ -347,7 +350,7 @@ done
 [ "$triggered" = "yes" ] || { echo "FAIL: workflow trigger never accepted" >&2; show_logs >&2 | tail -40 || true; exit 1; }
 echo "    triggered; waiting for the run to succeed"
 run_state=""
-for _ in $(seq 1 40); do
+for _ in $(seq 1 60); do
   runs="$(pd http://pebblesd/workflows/smoke-flow/runs 2>/dev/null || true)"
   grep -q '"state":"success"' <<<"$runs" && { run_state=success; break; }
   grep -q '"state":"failed"' <<<"$runs" && break
@@ -357,9 +360,7 @@ if [ "$run_state" != "success" ]; then
   echo "FAIL: workflow run did not succeed: $runs" >&2
   run_id="$(json_str "$runs" run_id)"
   pd "http://pebblesd/workflows/smoke-flow/runs/$run_id" >&2 || true
-  echo "--- execution API reachability ---" >&2
-  ctr_exec sh -c 'curl -s -o /dev/null -w "GET /execution/ -> %{http_code}\n" http://127.0.0.1:8793/execution/ 2>&1' >&2 || true
-  { show_logs | grep -iE "airflow|execution|jwt|token|error" | tail -50; } >&2 || true
+  { show_logs | grep -iE "airflow|scheduler|error" | tail -50; } >&2 || true
   exit 1
 fi
 [ "$(ctr_exec stat -c '%u' /home/maya/from-job.txt)" = "70000" ] \
