@@ -74,15 +74,7 @@ fn run_sql(id: &Value, sql: &str, catalog: Option<&str>) -> Value {
         Ok(out) if out.status.success() => {
             let mut stdout = String::from_utf8_lossy(&out.stdout).into_owned();
             stdout.truncate(MAX_RESULT_BYTES);
-            // -json prints one compact JSON array per result-bearing statement; the
-            // last one is the caller's final statement.
-            let rows: Value = stdout
-                .lines()
-                .rev()
-                .find(|l| l.starts_with('['))
-                .and_then(|l| serde_json::from_str(l).ok())
-                .unwrap_or(Value::Null);
-            json!({"id": id, "ok": true, "rows": rows})
+            json!({"id": id, "ok": true, "rows": last_json_array(&stdout)})
         }
         Ok(out) => {
             let mut stderr = String::from_utf8_lossy(&out.stderr).into_owned();
@@ -91,6 +83,19 @@ fn run_sql(id: &Value, sql: &str, catalog: Option<&str>) -> Value {
         }
         Err(e) => fail(format!("cannot run duckdb: {e}")),
     }
+}
+
+/// The last complete JSON array in the CLI's stdout — the caller's final statement.
+/// `-json` prints one array per result-bearing statement, and multi-row arrays span
+/// MULTIPLE lines (`[{…},` / `{…},` / `{…}]`), so this joins from the last line that
+/// opens an array to the end of the output.
+fn last_json_array(stdout: &str) -> Value {
+    let lines: Vec<&str> = stdout.lines().collect();
+    lines
+        .iter()
+        .rposition(|l| l.starts_with('['))
+        .and_then(|i| serde_json::from_str(&lines[i..].join("\n")).ok())
+        .unwrap_or(Value::Null)
 }
 
 fn getuid() -> u32 {
@@ -177,5 +182,24 @@ fn main() {
         {
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_single_line_and_multi_line_result_arrays() {
+        assert_eq!(last_json_array("[{\"c\":3}]"), json!([{"c": 3}]));
+        // Multi-row: the CLI spreads one array over several lines, and earlier
+        // statements may have printed arrays of their own.
+        let multi =
+            "[{\"a\":1}]\n[{\"snapshot_id\":0},\n{\"snapshot_id\":1},\n{\"snapshot_id\":2}]";
+        assert_eq!(
+            last_json_array(multi),
+            json!([{"snapshot_id": 0}, {"snapshot_id": 1}, {"snapshot_id": 2}])
+        );
+        assert_eq!(last_json_array("no arrays here"), Value::Null);
     }
 }
