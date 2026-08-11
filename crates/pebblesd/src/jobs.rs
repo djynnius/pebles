@@ -217,14 +217,27 @@ pub fn get(config_dir: &Path, name: &str) -> Result<Workflow, JobsError> {
     serde_json::from_str(&content).map_err(|_| JobsError::NotFound(name.to_string()))
 }
 
-fn airflow_env(config_dir: &Path) -> Vec<(String, String)> {
-    let home = airflow_home(config_dir);
-    let jwt = std::fs::read_to_string(home.join("jwt-secret"))
+fn read_secret(home: &Path, file: &str) -> String {
+    std::fs::read_to_string(home.join(file))
         .unwrap_or_default()
         .trim()
-        .to_string();
+        .to_string()
+}
+
+fn airflow_env(config_dir: &Path) -> Vec<(String, String)> {
+    let home = airflow_home(config_dir);
+    // ALL three services share these — otherwise each process mints its own
+    // random secret and the task supervisor's execution-API token is rejected
+    // (surfaces as 404 Not Found on /execution/task-instances/…/run).
+    let jwt = read_secret(&home, "jwt-secret");
+    let fernet = read_secret(&home, "fernet-key");
+    let secret_key = read_secret(&home, "secret-key");
     vec![
         ("HOME".into(), home.display().to_string()),
+        ("AIRFLOW__CORE__FERNET_KEY".into(), fernet),
+        ("AIRFLOW__API__SECRET_KEY".into(), secret_key.clone()),
+        ("AIRFLOW__WEBSERVER__SECRET_KEY".into(), secret_key),
+        ("AIRFLOW__API__PORT".into(), API_PORT.to_string()),
         ("AIRFLOW_HOME".into(), home.display().to_string()),
         (
             "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN".into(),
@@ -286,17 +299,58 @@ pub fn prepare_fs(config_dir: &Path) -> Result<Vec<(String, String)>, JobsError>
     std::fs::create_dir_all(&dags)?;
     // The operator ships in the image; the dags dir is on the import path.
     std::fs::copy(OPERATOR_SRC, dags.join("pebbles_operator.py"))?;
-    let jwt_path = home.join("jwt-secret");
-    if !jwt_path.exists() {
-        std::fs::write(&jwt_path, crate::cluster::random_hex(32))?;
-        std::fs::set_permissions(&jwt_path, std::fs::Permissions::from_mode(0o600))?;
+
+    // Stable, shared secrets (created once, reused across restarts/upgrades):
+    // jwt + web/api secret are opaque; the Fernet key must be url-safe base64 of
+    // exactly 32 bytes.
+    for (file, value) in [
+        ("jwt-secret", crate::cluster::random_hex(32)),
+        ("secret-key", crate::cluster::random_hex(32)),
+        ("fernet-key", fernet_key()),
+    ] {
+        let path = home.join(file);
+        if !path.exists() {
+            std::fs::write(&path, value)?;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        }
+        std::os::unix::fs::chown(&path, Some(uid), Some(gid))?;
     }
     for dir in [&home, &dags, &home.join("logs")] {
         std::fs::create_dir_all(dir)?;
         std::os::unix::fs::chown(dir, Some(uid), Some(gid))?;
     }
-    std::os::unix::fs::chown(&jwt_path, Some(uid), Some(gid))?;
     Ok(airflow_env(config_dir))
+}
+
+/// A valid Fernet key: url-safe base64 of 32 random bytes (44 chars, '='-padded).
+fn fernet_key() -> String {
+    use std::io::Read;
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut raw = [0u8; 32];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut raw))
+        .expect("/dev/urandom");
+    let mut out = String::new();
+    for chunk in raw.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        out.push(T[(b[0] >> 2) as usize] as char);
+        out.push(T[(((b[0] & 3) << 4) | (b[1] >> 4)) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            T[(((b[1] & 15) << 2) | (b[2] >> 6)) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            T[(b[2] & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
 }
 
 /// `sh -c` one-liner that waits for the Postgres socket (pre-step material).
@@ -495,6 +549,17 @@ mod tests {
         let mut wf = flow();
         wf.name = "Bad Name".into();
         assert!(matches!(validate(&wf), Err(JobsError::InvalidName(_))));
+    }
+
+    #[test]
+    fn fernet_key_is_44_char_urlsafe_base64() {
+        let k = fernet_key();
+        assert_eq!(k.len(), 44, "Fernet keys are 32 bytes → 44 base64 chars");
+        assert!(k.ends_with('='));
+        assert!(k
+            .trim_end_matches('=')
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_'));
     }
 
     #[test]

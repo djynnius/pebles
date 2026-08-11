@@ -369,7 +369,9 @@ if [ "$run_state" != "success" ]; then
   echo "FAIL: workflow run did not succeed: $runs" >&2
   run_id="$(json_str "$runs" run_id)"
   pd "http://pebblesd/workflows/smoke-flow/runs/$run_id" >&2 || true
-  { show_logs | tail -60; } >&2 || true
+  echo "--- execution API reachability ---" >&2
+  ctr_exec sh -c 'curl -s -o /dev/null -w "GET /execution/ -> %{http_code}\n" http://127.0.0.1:8793/execution/ 2>&1' >&2 || true
+  { show_logs | grep -iE "airflow|execution|jwt|token|error" | tail -50; } >&2 || true
   exit 1
 fi
 [ "$(ctr_exec stat -c '%u' /home/maya/from-job.txt)" = "70000" ] \
