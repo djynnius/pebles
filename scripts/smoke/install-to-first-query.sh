@@ -99,8 +99,8 @@ expect() { # expect <pattern> <label> <payload>
   grep -q "$1" <<<"$3" || { echo "FAIL: $2 — got: $3" >&2; exit 1; }
 }
 
-pd() { ctr_exec curl -fsS --unix-socket /run/pebbles/pebblesd.sock "$@"; }
-pd_code() { ctr_exec curl -s -o /dev/null -w '%{http_code}' --unix-socket /run/pebbles/pebblesd.sock "$@"; }
+pd() { ctr_exec curl -fsS --max-time 120 --unix-socket /run/pebbles/pebblesd.sock "$@"; }
+pd_code() { ctr_exec curl -s -o /dev/null -w '%{http_code}' --max-time 120 --unix-socket /run/pebbles/pebblesd.sock "$@"; }
 json_num() { sed -n "s/.*\"$2\":\([0-9]*\).*/\1/p" <<<"$1" | head -1; }
 json_str() { sed -n "s/.*\"$2\":\"\([^\"]*\)\".*/\1/p" <<<"$1" | head -1; }
 
@@ -123,7 +123,7 @@ curl -fsSL "$BASE/" | grep -q 'data-pb-theme' \
 
 echo "==> Ade path: create maya through the privileged API (M0.3)"
 # -s (not -f): a failing create must SHOW its error body, not swallow it.
-created="$(ctr_exec curl -s --unix-socket /run/pebbles/pebblesd.sock \
+created="$(ctr_exec curl -s --max-time 120 --unix-socket /run/pebbles/pebblesd.sock \
   -H 'Content-Type: application/json' \
   -d '{"username":"maya","password":"pebbles-demo-1"}' http://pebblesd/users)"
 echo "    $created"
@@ -206,7 +206,7 @@ refuse_code="$(pd_code -H 'Content-Type: application/json' \
 echo "==> M0.5: Maya creates the claims catalog (REQ-24/25)"
 created_cat=""
 for _ in $(seq 1 30); do # postgres may still be running initdb on first boot
-  created_cat="$(ctr_exec curl -s --unix-socket /run/pebbles/pebblesd.sock \
+  created_cat="$(ctr_exec curl -s --max-time 120 --unix-socket /run/pebbles/pebblesd.sock \
     -H 'Content-Type: application/json' \
     -d '{"name":"claims","owner":"maya"}' http://pebblesd/catalogs)"
   grep -q '"database":"ducklake_claims"' <<<"$created_cat" && break
@@ -220,7 +220,7 @@ pd -H 'Content-Type: application/json' \
   -d '{"id":10,"op":"write","path":"/home/maya/claims.csv","content":"claim_id,amount\nC-1,120.50\nC-2,80.00\n"}' \
   "http://pebblesd/sessions/$id_maya/exec" | grep -q '"ok":true' \
   || { echo "FAIL: could not write maya's CSV" >&2; exit 1; }
-sql() { ctr_exec curl -s --unix-socket /run/pebbles/pebblesd.sock \
+sql() { ctr_exec curl -s --max-time 120 --unix-socket /run/pebbles/pebblesd.sock \
   -H 'Content-Type: application/json' \
   -d "{\"id\":11,\"op\":\"sql\",\"catalog\":\"claims\",\"sql\":\"$1\"}" \
   "http://pebblesd/sessions/$id_maya/exec"; }
@@ -239,7 +239,7 @@ echo "    at version $prev_ver: $tt"
 expect '"c":2' "time-travel to snapshot $prev_ver" "$tt"
 
 echo "==> M1.2: catalog access is denied before a grant (REQ-13)"
-sql_as() { ctr_exec curl -s --unix-socket /run/pebbles/pebblesd.sock \
+sql_as() { ctr_exec curl -s --max-time 120 --unix-socket /run/pebbles/pebblesd.sock \
   -H 'Content-Type: application/json' \
   -d "{\"id\":12,\"op\":\"sql\",\"catalog\":\"claims\",\"sql\":\"$2\"}" \
   "http://pebblesd/sessions/$1/exec"; }
@@ -275,7 +275,7 @@ echo "==> M1.7: the git loop runs as the user, fully offline (REQ-32/33)"
 git_op() { # git_op <json-args> <cwd-or-empty>
   local cwd=""
   [ -n "$2" ] && cwd=",\"cwd\":\"$2\""
-  ctr_exec curl -s --unix-socket /run/pebbles/pebblesd.sock \
+  ctr_exec curl -s --max-time 120 --unix-socket /run/pebbles/pebblesd.sock \
     -H 'Content-Type: application/json' \
     -d "{\"id\":40,\"op\":\"git\",\"args\":$1$cwd}" \
     "http://pebblesd/sessions/$id_maya/exec"

@@ -25,7 +25,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-pd() { ctr exec "$MAIN" curl -fsS --unix-socket /run/pebbles/pebblesd.sock "$@"; }
+pd() { ctr exec "$MAIN" curl -fsS --max-time 120 --unix-socket /run/pebbles/pebblesd.sock "$@"; }
 expect() { grep -q "$1" <<<"$3" || { echo "FAIL: $2 — got: $3" >&2; exit 1; }; }
 json_str() { sed -n "s/.*\"$2\":\"\([^\"]*\)\".*/\1/p" <<<"$1" | head -1; }
 json_num() { sed -n "s/.*\"$2\":\([0-9]*\).*/\1/p" <<<"$1" | head -1; }

@@ -314,11 +314,12 @@ pub const PROVISION_SH: &str = r#"psql -h /run/postgresql -d postgres -c "CREATE
 pub const MIGRATE_SH: &str = "for i in $(seq 1 10); do \
     /opt/pebbles/airflow/.venv/bin/airflow db migrate && exit 0; sleep 5; done; exit 1";
 
-/// Run an airflow CLI command as the airflow user; returns stdout.
+/// Run an airflow CLI command as the airflow user; returns stdout. Hard 60 s
+/// wall-clock cap — a hung CLI must never wedge an API handler (or CI).
 pub fn airflow_cli(config_dir: &Path, args: &[&str]) -> Result<String, JobsError> {
     let (uid, gid) = pebbles_identity::system_user(AIRFLOW_USER).ok_or(JobsError::NoAirflow)?;
-    let mut cmd = std::process::Command::new(AIRFLOW_BIN);
-    cmd.args(args).env_clear();
+    let mut cmd = std::process::Command::new("timeout");
+    cmd.arg("60").arg(AIRFLOW_BIN).args(args).env_clear();
     for (k, v) in airflow_env(config_dir) {
         cmd.env(k, v);
     }
