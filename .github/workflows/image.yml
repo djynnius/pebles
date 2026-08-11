@@ -119,8 +119,12 @@ jobs:
           sudo apt-get update && sudo apt-get install -y skopeo umoci
           docker pull "$IMAGE:edge-amd64"
           image/lxc/oci-to-incus.sh "$IMAGE:edge-amd64" dist/incus-amd64 x86_64 edge
+      # Non-fatal: the conversion itself is the gate; artifacts are a convenience and
+      # the account's Actions storage quota can be full. Release tarballs ship as
+      # GitHub Release assets (release.yml, M0.6+), which don't use this quota.
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: pebbles-incus-amd64
           path: dist/incus-amd64/
-          retention-days: 14
+          retention-days: 3
