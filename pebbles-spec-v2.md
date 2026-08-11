@@ -40,8 +40,10 @@ Sample data domain throughout is healthcare claims. **[decided]**
 There is **one Pebbles image**. Main app and engines are the *same container image*; what a
 container *is* gets decided at setup, not at build. **[new]**
 
-- The image contains everything: the Rust daemon, the Flask web app, DuckDB, the Python and
-  R runtimes, Airflow, and git. First boot picks which services activate. **[proposed]**
+- The image contains everything: the Rust daemon, the Flask web app, DuckDB, the Python,
+  R and Jupyter runtimes — **via miniforge (conda-forge), with a curated scientific
+  package set bundled out of the box (PRD REQ-51/52); users install more themselves**
+  **[new]** — Airflow, and git. First boot picks which services activate. **[proposed]**
 - **Role selection** happens at first boot, via environment variable / cloud-init for
   scripted installs or a terminal setup wizard for interactive ones:
   - `PEBBLES_ROLE=main` — activates control plane: Postgres catalog, Airflow scheduler,
@@ -351,8 +353,8 @@ One new capability worth adding: Nkoyo tools for git ("commit this notebook with
    always-explicit engine choice; automatic placement deferred. **[decided]**
 3. ~~Auto ETL trust~~ — answered by committing approved pipelines to repos, pending your
    confirmation. **[proposed]**
-4. R support is first-class in the UI, but packaging R into the unified image needs
-   scoping (image size vs. an optional layer). **[open]**
+4. ~~R packaging~~ — resolved: Python, R and Jupyter ship in-image via miniforge with
+   the PRD REQ-52 package set; the size budget absorbs it. **[new — decided]**
 5. Backup, upgrade and multi-host failover — still undesigned. Upgrade is now more
    tractable: one image, so upgrading = pulling the new image and re-running with the same
    config volume; but catalog migrations need a story. **[open]**

@@ -85,24 +85,39 @@ fn run_sql(id: &Value, sql: &str, catalog: Option<&str>) -> Value {
     }
 }
 
-/// The lazily-spawned persistent Python executor: a `python3 pyexec.py` child of
-/// THIS process (so it runs as the session user), kept alive so cell state
-/// persists across executions — what a notebook expects.
-struct PyExec {
+/// A lazily-spawned persistent cell executor (Python or R): a child of THIS
+/// process (so it runs as the session user, with the miniforge runtimes on
+/// PATH — REQ-51), kept alive so cell state persists across executions.
+struct LineExec {
     stdin: std::process::ChildStdin,
     stdout: std::io::BufReader<std::process::ChildStdout>,
     child: std::process::Child,
 }
 
-const PYEXEC: &str = "/opt/pebbles/kernels/pyexec.py";
+/// Per-session executors, one per language.
+#[derive(Default)]
+struct Executors {
+    python: Option<LineExec>,
+    r: Option<LineExec>,
+}
 
-fn run_python(id: &Value, code: &str, python: &mut Option<PyExec>) -> Value {
+const PYEXEC: &str = "/opt/pebbles/kernels/pyexec.py";
+const REXEC: &str = "/opt/pebbles/kernels/rexec.R";
+
+fn run_cell(
+    id: &Value,
+    lang: &str,
+    code: &str,
+    slot: &mut Option<LineExec>,
+    program: &str,
+    script: &str,
+) -> Value {
     use std::io::{BufRead, Write};
     let fail = |err: String| json!({"id": id, "ok": false, "error": err});
 
-    if python.is_none() {
-        let spawned = std::process::Command::new("python3")
-            .arg(PYEXEC)
+    if slot.is_none() {
+        let spawned = std::process::Command::new(program)
+            .arg(script)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::inherit())
@@ -111,16 +126,16 @@ fn run_python(id: &Value, code: &str, python: &mut Option<PyExec>) -> Value {
             Ok(mut child) => {
                 let stdin = child.stdin.take().expect("piped stdin");
                 let stdout = std::io::BufReader::new(child.stdout.take().expect("piped stdout"));
-                *python = Some(PyExec {
+                *slot = Some(LineExec {
                     stdin,
                     stdout,
                     child,
                 });
             }
-            Err(e) => return fail(format!("cannot start python executor: {e}")),
+            Err(e) => return fail(format!("cannot start {lang} executor: {e}")),
         }
     }
-    let exec = python.as_mut().expect("just ensured");
+    let exec = slot.as_mut().expect("just ensured");
     let request = json!({ "code": code }).to_string();
     let round_trip = (|| -> std::io::Result<String> {
         exec.stdin.write_all(request.as_bytes())?;
@@ -136,16 +151,18 @@ fn run_python(id: &Value, code: &str, python: &mut Option<PyExec>) -> Value {
                 value["id"] = id.clone();
                 value
             }
-            Err(e) => fail(format!("bad python reply: {e}")),
+            Err(e) => fail(format!("bad {lang} reply: {e}")),
         },
         _ => {
             // The executor died (or never answered): reap it and let the next
             // cell start a fresh interpreter.
-            if let Some(mut dead) = python.take() {
+            if let Some(mut dead) = slot.take() {
                 let _ = dead.child.kill();
                 let _ = dead.child.wait();
             }
-            fail("python executor exited; state reset — run the cell again".into())
+            fail(format!(
+                "{lang} executor exited; state reset — run the cell again"
+            ))
         }
     }
 }
@@ -172,7 +189,7 @@ fn getgid() -> u32 {
     unsafe { libc::getgid() }
 }
 
-fn handle(request: &Value, python: &mut Option<PyExec>) -> Value {
+fn handle(request: &Value, executors: &mut Executors) -> Value {
     let id = request.get("id").cloned().unwrap_or(Value::Null);
     let fail = |err: String| json!({"id": id, "ok": false, "error": err});
 
@@ -230,11 +247,22 @@ fn handle(request: &Value, python: &mut Option<PyExec>) -> Value {
             None => fail("sql needs a sql string".into()),
         },
         Some("python") => match request.get("code").and_then(Value::as_str) {
-            Some(code) => run_python(&id, code, python),
+            Some(code) => run_cell(
+                &id,
+                "python",
+                code,
+                &mut executors.python,
+                "python3",
+                PYEXEC,
+            ),
             None => fail("python needs a code string".into()),
         },
+        Some("r") => match request.get("code").and_then(Value::as_str) {
+            Some(code) => run_cell(&id, "r", code, &mut executors.r, "Rscript", REXEC),
+            None => fail("r needs a code string".into()),
+        },
         other => fail(format!(
-            "unknown op {other:?} (proto 1: ping/read/write/list/sql/python)"
+            "unknown op {other:?} (proto 1: ping/read/write/list/sql/python/r)"
         )),
     }
 }
@@ -255,14 +283,14 @@ fn main() {
     }
 
     let stdin = std::io::stdin();
-    let mut python: Option<PyExec> = None;
+    let mut executors = Executors::default();
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
         if line.trim().is_empty() {
             continue;
         }
         let response = match serde_json::from_str::<Value>(&line) {
-            Ok(request) => handle(&request, &mut python),
+            Ok(request) => handle(&request, &mut executors),
             Err(e) => json!({"id": null, "ok": false, "error": format!("bad request: {e}")}),
         };
         let mut out = stdout.lock();

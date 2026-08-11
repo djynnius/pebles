@@ -25,7 +25,7 @@ class FakeDaemon:
         op = payload["op"]
         if op == "sql":
             return {"id": None, "ok": True, "rows": [{"answer": 42}]}
-        if op == "python":
+        if op in ("python", "r"):
             return {"id": None, "ok": True, "stdout": "42\n", "stderr": "", "error": None}
         if op == "write":
             self.files[payload["path"]] = payload["content"]
@@ -243,6 +243,7 @@ def test_notebook_create_edit_save_and_run_cells():
             "cells": [
                 {"type": "sql", "source": "SELECT 42 AS answer;"},
                 {"type": "python", "source": "x = 41\nx + 1"},
+                {"type": "r", "source": "x <- 41\nx + 1"},
             ],
         },
     )
@@ -253,6 +254,9 @@ def test_notebook_create_edit_save_and_run_cells():
 
     py_stream = c.get("/notebooks/claims-eda/cells/1/stream").get_data(as_text=True)
     assert "event: result" in py_stream and '"stdout": "42' in py_stream
+
+    r_stream = c.get("/notebooks/claims-eda/cells/2/stream").get_data(as_text=True)
+    assert "event: result" in r_stream and '"stdout": "42' in r_stream
 
     missing = c.get("/notebooks/claims-eda/cells/9/stream").get_data(as_text=True)
     assert "no such cell" in missing

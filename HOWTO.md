@@ -26,8 +26,10 @@ docker exec pebbles curl -s --unix-socket /run/pebbles/pebblesd.sock \
 That provisions a real UNIX account (uid in the reserved 70000+ range, private
 `/home/maya`) and the same password signs into the web UI. From there: **Lake
 catalogs** creates a DuckLake catalog (the form shows the equivalent
-`CREATE CATALOG` SQL), **Notebooks** gives you SQL + Python cells (state persists
-across Python cells; files live in `~/notebooks`), and the **SQL editor** runs
+`CREATE CATALOG` SQL), **Notebooks** gives you SQL, Python and R cells (state
+persists across cells; files live in `~/notebooks`; numpy/pandas/scikit-learn/
+polars/tidymodels and friends are preinstalled via miniforge, and
+`pip install --user` or personal conda envs add more), and the **SQL editor** runs
 queries against the lake as your own UNIX user, streaming results over SSE — try
 `SELECT 42 AS answer;` or load a CSV from your home with
 `read_csv_auto('/home/maya/file.csv')`. Time travel works:

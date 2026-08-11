@@ -184,6 +184,18 @@ py2="$(pd -H 'Content-Type: application/json' \
   "http://pebblesd/sessions/$id_maya/exec")"
 expect '"stdout":"42' "python state persists across cells" "$py2"
 
+echo "==> REQ-51/52: the miniforge scientific stack is bundled"
+sci="$(ctr_exec curl -s --max-time 120 --unix-socket /run/pebbles/pebblesd.sock \
+  -H 'Content-Type: application/json' \
+  -d '{"id":32,"op":"python","code":"import numpy, pandas, polars, sklearn, duckdb\nprint(\"stack-ok\")"}' \
+  "http://pebblesd/sessions/$id_maya/exec")"
+expect '"stdout":"stack-ok' "bundled python packages import" "$sci"
+r1="$(ctr_exec curl -s --max-time 120 --unix-socket /run/pebbles/pebblesd.sock \
+  -H 'Content-Type: application/json' \
+  -d '{"id":33,"op":"r","code":"x <- 41\ncat(x + 1)"}' \
+  "http://pebblesd/sessions/$id_maya/exec")"
+expect '42' "R cell answers via miniforge" "$r1"
+
 echo "==> memory admission refuses cleanly (REQ-20)"
 refuse_code="$(pd_code -H 'Content-Type: application/json' \
   -d '{"username":"maya","memory_limit_bytes":99999999999999}' http://pebblesd/sessions)"

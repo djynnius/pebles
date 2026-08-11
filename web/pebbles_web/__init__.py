@@ -318,7 +318,7 @@ def create_app(pebblesd: PebblesdClient | None = None) -> Flask:
             "cells": [
                 {"type": c.get("type", "sql"), "source": str(c.get("source", ""))}
                 for c in nb.get("cells", [])
-                if c.get("type", "sql") in ("sql", "python")
+                if c.get("type", "sql") in ("sql", "python", "r")
             ],
         }
         _session_op(
@@ -347,9 +347,9 @@ def create_app(pebblesd: PebblesdClient | None = None) -> Flask:
                 error = "no such cell"
             else:
                 cell = nb["cells"][index]
-                if cell["type"] == "python":
+                if cell["type"] in ("python", "r"):
                     result = _session_op(
-                        user["username"], {"op": "python", "code": cell["source"]}
+                        user["username"], {"op": cell["type"], "code": cell["source"]}
                     )
                 else:
                     result = _run_sql(user["username"], cell["source"], nb.get("catalog"))

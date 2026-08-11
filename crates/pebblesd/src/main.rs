@@ -54,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
     if std::env::var_os("PATH").is_none() {
         std::env::set_var(
             "PATH",
-            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "/opt/conda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         );
     }
     tracing_subscriber::fmt().with_target(false).init();

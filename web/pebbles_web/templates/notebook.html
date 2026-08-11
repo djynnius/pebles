@@ -107,6 +107,7 @@
     <div class="toolbar">
       <button id="add-sql">+ SQL cell</button>
       <button id="add-python">+ Python cell</button>
+      <button id="add-r">+ R cell</button>
       <select id="catalog">
         <option value="">catalog: (none)</option>
         {% for c in catalogs %}
@@ -185,6 +186,7 @@
 
     document.getElementById("add-sql").addEventListener("click", () => { nb.cells.push({type: "sql", source: ""}); render(); });
     document.getElementById("add-python").addEventListener("click", () => { nb.cells.push({type: "python", source: ""}); render(); });
+    document.getElementById("add-r").addEventListener("click", () => { nb.cells.push({type: "r", source: ""}); render(); });
     document.getElementById("save").addEventListener("click", save);
 
     // Panel fold + overlay rule (REQ-30): folded via the rail; scrim below 1280px.

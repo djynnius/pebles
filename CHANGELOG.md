@@ -7,6 +7,19 @@ All notable changes to Pebbles are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Miniforge runtimes + bundled scientific stack (REQ-51/52) and R cells**:
+  Python, R and Jupyter now ship in-image via miniforge (conda-forge) at
+  `/opt/conda`, with the owner-specified package set out of the box — Python:
+  numpy, pandas, scipy, statsmodels, scikit-learn, matplotlib, seaborn,
+  plotnine, geopandas, duckdb, polars, networkx, pmdarima, xgboost, openpyxl;
+  R: r-essentials, r-gtsummary, r-arrow, r-duckdb, r-tidymodels, r-survey.
+  The bundled set is a floor, not a wall: users install more with
+  `pip install --user` or personal conda envs, no admin needed. Session kernels
+  run on the conda runtimes, and notebooks gained **R cells** backed by a
+  persistent per-session R executor (state across cells, like Python). PRD
+  updated (REQ-10 resolved in-image; new REQ-51/52); image size budget raised
+  to the `science` tier deliberately in this change. Smoke now proves the
+  bundled packages import and R answers, as the session user.
 - **M1.4 — notebooks & workbench v1**: notebooks arrive. A persistent Python
   executor runs inside each session (spawned by the kernel, so it inherits the
   session user's uid and home) — cell state carries across executions like a

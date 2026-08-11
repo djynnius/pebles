@@ -92,7 +92,9 @@ Priorities: **P0** = MVP, cannot ship without · **P1** = v1.0 release · **P2**
 | REQ-07 | At registration (and editable later), an engine is assigned **access**: everyone, a group, or a single user. Only grantees can see or attach it. | P0 |
 | REQ-08 | Deregistering an engine (Remove on the Engines list) invalidates its credentials. | P1 |
 | REQ-09 | Upgrade = pull new image, restart with same config volume; catalog schema migrations run automatically with pre-migration backup. | P1 |
-| REQ-10 | R kernel available in the image or as an optional layer (scoping decision pending — see §9). | P1 |
+| REQ-10 | R kernel ships **in the image** via miniforge (REQ-51); the earlier in-image vs. optional-layer scoping is resolved. | P0 |
+| REQ-51 | **Python, R and Jupyter runtimes ship in-image via miniforge (conda-forge)** at `/opt/conda`; session kernels (SQL/Python/R cells) use these runtimes. Users can install additional packages without admin help (`pip install --user`, personal conda envs in their home) — the bundled set is a floor, not a wall. | P0 |
+| REQ-52 | **Bundled out of the box** — Python: numpy, pandas, scipy, statsmodels, scikit-learn, matplotlib, seaborn, plotnine, geopandas, duckdb, polars, networkx, pmdarima, xgboost, openpyxl. R: r-essentials, r-gtsummary, r-arrow, r-duckdb, r-tidymodels, r-survey. Versions pinned per release; the image size budget is sized for this stack. | P0 |
 
 ### 5.2 Identity, users & access
 
@@ -226,7 +228,7 @@ first-class design; HA investigation.
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| Fat unified image (Airflow + kernels + R) slows pulls and updates | Adoption friction | Layered image; R as optional layer; measure and budget image size per release |
+| Fat unified image (Airflow + kernels + miniforge scientific stack) slows pulls and updates | Adoption friction | Miniforge stack in one early, cached image layer; budgets sized for the bundled REQ-52 stack and hard-enforced per PR; split a `pebbles-base` image if pull times hurt |
 | Uid/gid drift across hosts corrupts the permission model | Data exposure | Main as sole source of truth; registration-time audit; refuse to register on conflict |
 | Shared-engine memory contention despite per-session limits | Bad interactive experience | Hard sum-of-limits admission control (REQ-20); dedicated mode as escape hatch |
 | Flask streaming under load (SSE/WS on gunicorn) | Sluggish notebooks | Prototype streaming in Phase 0, not Phase 1; isolate streaming workers |
@@ -238,8 +240,9 @@ first-class design; HA investigation.
 ## 9. Open questions
 
 Carried from spec v2 §10 (see there for detail): multi-host lake storage architecture
-(NFS vs. object storage); R packaging (in-image vs. layer); backup/upgrade specifics
-beyond REQ-09/50; main-failure UX polish; external dashboard sharing. None block Phase 0.
+(NFS vs. object storage); backup/upgrade specifics beyond REQ-09/50; main-failure UX
+polish; external dashboard sharing. R packaging is resolved (REQ-51/52: in-image via
+miniforge). None block Phase 0.
 
 ## 10. Appendix — screen inventory
 
