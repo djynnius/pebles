@@ -48,6 +48,8 @@ RUN curl -fsSL -o /tmp/miniforge.sh \
        geopandas duckdb polars networkx pmdarima xgboost openpyxl \
        r-essentials r-gtsummary r-arrow r-tidymodels r-survey ${arch_extras} \
     && /opt/conda/bin/conda clean -afy \
+    && find /opt/conda -name '*.a' -delete \
+    && rm -rf /opt/conda/envs/pebbles/share/doc /opt/conda/envs/pebbles/share/man \
     && chmod -R a+rX /opt/conda
 ENV PATH="/opt/conda/envs/pebbles/bin:/opt/conda/bin:${PATH}"
 

@@ -1,0 +1,13 @@
+name: Free runner disk space
+description: >
+  Remove preinstalled toolchains the Pebbles build never uses (~25-30 GB). The
+  image carries the miniforge scientific stack (REQ-51/52), and hosted runners
+  don't have room for the build + export + load cycle otherwise.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+          /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+        df -h / | tail -1
