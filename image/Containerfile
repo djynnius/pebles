@@ -41,11 +41,12 @@ RUN curl -fsSL -o /tmp/miniforge.sh \
        "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-$(uname -m).sh" \
     && bash /tmp/miniforge.sh -b -p /opt/conda \
     && rm /tmp/miniforge.sh \
+    && arch_extras="$([ "$(uname -m)" = "x86_64" ] && echo r-duckdb || true)" \
     && /opt/conda/bin/mamba create -y -n pebbles python=3.12 \
        jupyterlab ipykernel \
        numpy pandas scipy statsmodels scikit-learn matplotlib seaborn plotnine \
        geopandas duckdb polars networkx pmdarima xgboost openpyxl \
-       r-essentials r-gtsummary r-arrow r-duckdb r-tidymodels r-survey \
+       r-essentials r-gtsummary r-arrow r-tidymodels r-survey ${arch_extras} \
     && /opt/conda/bin/conda clean -afy \
     && chmod -R a+rX /opt/conda
 ENV PATH="/opt/conda/envs/pebbles/bin:/opt/conda/bin:${PATH}"

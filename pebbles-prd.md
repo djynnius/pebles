@@ -94,7 +94,7 @@ Priorities: **P0** = MVP, cannot ship without · **P1** = v1.0 release · **P2**
 | REQ-09 | Upgrade = pull new image, restart with same config volume; catalog schema migrations run automatically with pre-migration backup. | P1 |
 | REQ-10 | R kernel ships **in the image** via miniforge (REQ-51); the earlier in-image vs. optional-layer scoping is resolved. | P0 |
 | REQ-51 | **Python, R and Jupyter runtimes ship in-image via miniforge (conda-forge)** at `/opt/conda`; session kernels (SQL/Python/R cells) use these runtimes. Users can install additional packages without admin help (`pip install --user`, personal conda envs in their home) — the bundled set is a floor, not a wall. | P0 |
-| REQ-52 | **Bundled out of the box** — Python: numpy, pandas, scipy, statsmodels, scikit-learn, matplotlib, seaborn, plotnine, geopandas, duckdb, polars, networkx, pmdarima, xgboost, openpyxl. R: r-essentials, r-gtsummary, r-arrow, r-duckdb, r-tidymodels, r-survey. Versions pinned per release; the image size budget is sized for this stack. | P0 |
+| REQ-52 | **Bundled out of the box** — Python: numpy, pandas, scipy, statsmodels, scikit-learn, matplotlib, seaborn, plotnine, geopandas, duckdb, polars, networkx, pmdarima, xgboost, openpyxl. R: r-essentials, r-gtsummary, r-arrow, r-duckdb, r-tidymodels, r-survey. Versions pinned per release; the image size budget is sized for this stack. Python is 3.12 while pmdarima lacks 3.13 builds; r-duckdb is amd64-only until conda-forge ships aarch64 builds (arm users: `install.packages("duckdb")`). | P0 |
 
 ### 5.2 Identity, users & access
 
