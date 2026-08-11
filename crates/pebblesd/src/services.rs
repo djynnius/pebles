@@ -87,12 +87,16 @@ fn airflow(cfg: &Config) -> Vec<ServiceSpec> {
         ServiceSpec {
             name: "airflow-api".into(),
             pre: with_migrate,
+            // --apps all: the execution app must be served here too, or task
+            // supervisors get 404 from the execution API and every task fails.
             exec: exec(&[
                 "api-server",
                 "--host",
                 "127.0.0.1",
                 "--port",
                 &crate::jobs::API_PORT.to_string(),
+                "--apps",
+                "all",
             ]),
         },
         // Scheduler and dag-processor crash-restart with backoff until the

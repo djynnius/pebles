@@ -243,6 +243,10 @@ fn airflow_env(config_dir: &Path) -> Vec<(String, String)> {
             format!("http://127.0.0.1:{API_PORT}/execution/"),
         ),
         (
+            "AIRFLOW__API__BASE_URL".into(),
+            format!("http://127.0.0.1:{API_PORT}"),
+        ),
+        (
             "AIRFLOW__CORE__AUTH_MANAGER".into(),
             "airflow.api_fastapi.auth.managers.simple.simple_auth_manager.SimpleAuthManager".into(),
         ),
