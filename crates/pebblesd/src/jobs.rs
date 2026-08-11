@@ -224,6 +224,7 @@ fn airflow_env(config_dir: &Path) -> Vec<(String, String)> {
         .trim()
         .to_string();
     vec![
+        ("HOME".into(), home.display().to_string()),
         ("AIRFLOW_HOME".into(), home.display().to_string()),
         (
             "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN".into(),
@@ -293,8 +294,15 @@ pub const WAIT_PG_SH: &str = "for i in $(seq 1 120); do \
     [ -S /run/postgresql/.s.PGSQL.5432 ] && exit 0; sleep 1; done; \
     echo 'postgres never came up' >&2; exit 1";
 
-/// Idempotent role + database provisioning, run AS the postgres user.
-pub const PROVISION_SH: &str = r#"psql -h /run/postgresql -d postgres -v ON_ERROR_STOP=1 -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'pebbles-airflow') THEN CREATE ROLE \"pebbles-airflow\" LOGIN; END IF; END \$\$;" && { psql -h /run/postgresql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='airflow'" | grep -q 1 || psql -h /run/postgresql -d postgres -c "CREATE DATABASE airflow OWNER \"pebbles-airflow\""; }"#;
+/// Idempotent, RACE-PROOF role + database provisioning, run AS the postgres user.
+/// Three services run this concurrently at boot: attempt the create, ignore the
+/// duplicate error, then verify existence — never check-then-create.
+pub const PROVISION_SH: &str = r#"psql -h /run/postgresql -d postgres -c "CREATE ROLE \"pebbles-airflow\" LOGIN" 2>/dev/null; psql -h /run/postgresql -d postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='pebbles-airflow'" | grep -q 1 || exit 1; psql -h /run/postgresql -d postgres -c "CREATE DATABASE airflow OWNER \"pebbles-airflow\"" 2>/dev/null; psql -h /run/postgresql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='airflow'" | grep -q 1"#;
+
+/// `airflow db migrate` with retries (concurrent first-boot services and a
+/// just-created database make one-shot migration brittle).
+pub const MIGRATE_SH: &str = "for i in $(seq 1 10); do \
+    /opt/pebbles/airflow/.venv/bin/airflow db migrate && exit 0; sleep 5; done; exit 1";
 
 /// Run an airflow CLI command as the airflow user; returns stdout.
 pub fn airflow_cli(config_dir: &Path, args: &[&str]) -> Result<String, JobsError> {

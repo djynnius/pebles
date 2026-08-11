@@ -77,7 +77,12 @@ fn airflow(cfg: &Config) -> Vec<ServiceSpec> {
         ]
     };
     let mut with_migrate = bootstrap();
-    with_migrate.push(exec(&["db", "migrate"]));
+    with_migrate.push(Exec {
+        program: "sh".into(),
+        args: vec!["-c".into(), crate::jobs::MIGRATE_SH.to_string()],
+        envs: envs.clone(),
+        run_as: Some((uid, gid)),
+    });
     vec![
         ServiceSpec {
             name: "airflow-api".into(),
@@ -200,10 +205,14 @@ fn gunicorn(cfg: &Config) -> Option<ServiceSpec> {
         tracing::error!("user {WEB_USER} missing; refusing to run the web tier as root (NFR-01)");
         return None;
     };
-    let mut envs = vec![(
-        "PEBBLES_SOCKET".into(),
-        cfg.socket_path().display().to_string(),
-    )];
+    let mut envs = vec![
+        (
+            "PEBBLES_SOCKET".into(),
+            cfg.socket_path().display().to_string(),
+        ),
+        // gunicorn's control machinery wants a writable HOME.
+        ("HOME".into(), WEB_ROOT.into()),
+    ];
     match ensure_web_secret(cfg) {
         Ok(secret) => envs.push((
             "PEBBLES_WEB_SECRET_FILE".into(),

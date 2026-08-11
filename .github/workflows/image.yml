@@ -111,6 +111,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/free-disk
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
