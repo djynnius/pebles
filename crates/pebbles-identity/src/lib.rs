@@ -285,6 +285,34 @@ pub mod host {
         Ok(())
     }
 
+    /// The persisted identity snapshot, if any (for replication to engines, REQ-14).
+    pub fn read_snapshot(state_dir: &Path) -> Option<(String, String)> {
+        let dir = state_dir.join("identity");
+        Some((
+            std::fs::read_to_string(dir.join("passwd")).ok()?,
+            std::fs::read_to_string(dir.join("shadow")).unwrap_or_default(),
+        ))
+    }
+
+    /// Store a snapshot received from the main (engine side), then restore it into
+    /// the live account database. Returns how many accounts were created.
+    pub fn apply_snapshot(
+        state_dir: &Path,
+        passwd: &str,
+        shadow: &str,
+    ) -> Result<usize, IdentityError> {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = state_dir.join("identity");
+        std::fs::create_dir_all(&dir)?;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+        for (file, content) in [("passwd", passwd), ("shadow", shadow)] {
+            let path = dir.join(file);
+            std::fs::write(&path, content)?;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        }
+        restore_users(state_dir)
+    }
+
     /// Recreate any persisted account missing from this container (fresh image,
     /// same config volume). Returns how many were restored.
     pub fn restore_users(state_dir: &Path) -> Result<usize, IdentityError> {

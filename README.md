@@ -32,8 +32,10 @@ password, sessions run as the user with memory admission control, and the lake i
 live — DuckLake catalogs (Postgres metadata + Parquet data) with snapshot time
 travel, a SQL editor, and results streaming over SSE. CI proves the acceptance
 path on all three runtimes with zero network egress, and a nightly test proves
-upgrades keep accounts, homes, and catalogs intact. Phase 1 (engines, notebooks,
-dashboards, jobs, git) is next — see `HOWTO.md` to run what exists.
+upgrades keep accounts, homes, and catalogs intact. **Phase 1 is underway**: engines
+now register with single-use join tokens, receive replicated accounts, and serve
+sessions brokered through the main — a fleet, not just a box. See `HOWTO.md` to run
+what exists.
 
 ## Documents
 

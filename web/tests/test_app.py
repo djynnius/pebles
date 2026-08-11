@@ -27,6 +27,22 @@ class FakeDaemon:
     def list_catalogs(self):
         return list(self.catalogs)
 
+    def list_engines(self):
+        return [
+            {
+                "name": "main",
+                "address": "local",
+                "state": "available",
+                "resources": {"cpus": 4, "memory_bytes": 0},
+            },
+            {
+                "name": "worker-1",
+                "address": "http://10.0.0.7:7443",
+                "state": "available",
+                "resources": {"cpus": 8, "memory_bytes": 0},
+            },
+        ]
+
     def create_catalog(self, name, owner):
         if any(c["name"] == name for c in self.catalogs):
             raise PebblesdError(409, f"catalog {name!r} already exists")
@@ -127,6 +143,14 @@ def test_sql_stream_streams_result_rows_over_sse():
 def test_sql_stream_rejects_empty_query_and_anonymous_users():
     assert client().get("/sql/stream?q=SELECT+1").status_code == 401
     assert signed_in().get("/sql/stream?q=").status_code == 422
+
+
+def test_engines_page_lists_the_fleet():
+    assert client().get("/engines").status_code == 302
+    page = signed_in().get("/engines")
+    assert page.status_code == 200
+    body = page.get_data(as_text=True)
+    assert "worker-1" in body and "available" in body
 
 
 def test_catalog_create_shows_up_in_the_list_and_conflicts_cleanly():

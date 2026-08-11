@@ -76,3 +76,18 @@ jobs:
         run: |
           RUNTIME=${{ matrix.runtime }} CTR_CMD="${{ matrix.ctr }}" \
             scripts/smoke/install-to-first-query.sh "${{ matrix.image }}"
+
+  main-plus-engine:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: image/Containerfile
+          load: true
+          tags: pebbles:it
+          cache-from: type=gha
+      - name: main+engine topology (docker)
+        run: scripts/smoke/main-plus-engine.sh pebbles:it

@@ -90,6 +90,12 @@ class PebblesdClient:
             raise PebblesdError(status, str(data))
         return data
 
+    def list_engines(self) -> list:
+        status, data = self._request("GET", "/engines")
+        if status != 200:
+            raise PebblesdError(status, str(data))
+        return data
+
     def create_catalog(self, name: str, owner: str) -> dict:
         return self._expect("POST", "/catalogs", {"name": name, "owner": owner})
 

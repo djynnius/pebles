@@ -96,6 +96,10 @@ pub struct OpenSessionRequest {
     /// Per-session memory limit; the engine's default applies when omitted.
     #[serde(default)]
     pub memory_limit_bytes: Option<u64>,
+    /// Engine to run on; the local engine when omitted. Choice is always explicit
+    /// in the UI (REQ-17) — this default serves the single-box case.
+    #[serde(default)]
+    pub engine: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -107,6 +111,70 @@ pub struct SessionDescriptor {
     pub pid: u32,
     pub mode: String,
     pub memory_limit_bytes: u64,
+    /// Which engine hosts the session; `None` = the local one.
+    #[serde(default)]
+    pub engine: Option<String>,
+}
+
+/// A minted single-use engine join token (REQ-05). The plaintext appears exactly
+/// once, in this response; only its hash is stored.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct MintTokenResponse {
+    pub id: String,
+    pub token: String,
+    pub expires_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct TokenInfo {
+    pub id: String,
+    pub expires_at: u64,
+    pub used: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct EngineResources {
+    pub cpus: u32,
+    pub memory_bytes: u64,
+}
+
+/// An engine's registration handshake (REQ-05/26 + the uid-drift audit).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct RegisterEngineRequest {
+    pub token: String,
+    pub name: String,
+    /// Reachable base URL of the engine's cluster API, e.g. `http://10.0.0.7:7443`.
+    pub address: String,
+    pub resources: EngineResources,
+    /// (uid, username) pairs already present in the reserved range on the engine —
+    /// the main REFUSES registration on conflict (uid-drift mitigation).
+    pub existing_users: Vec<(u32, String)>,
+    /// Whether the lake root is reachable on the engine (REQ-26).
+    pub lake_ok: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct IdentitySnapshot {
+    pub passwd: String,
+    pub shadow: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct RegisterEngineResponse {
+    pub engine_id: String,
+    /// Bearer secret for main↔engine calls. Plain HTTP in M1.1 — TLS hardening is
+    /// scheduled before v1.0 (NFR-02).
+    pub secret: String,
+    pub identity: IdentitySnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct EngineDescriptor {
+    pub name: String,
+    pub address: String,
+    /// "available" | "stopped" — the fuller REQ-23 state model lands with M1.3.
+    pub state: String,
+    pub resources: EngineResources,
 }
 
 /// Create a DuckLake catalog owned by `owner` (REQ-24/25). The form and the SQL
@@ -142,6 +210,13 @@ pub struct CatalogDescriptor {
         SessionDescriptor,
         CreateCatalogRequest,
         CatalogDescriptor,
+        MintTokenResponse,
+        TokenInfo,
+        EngineResources,
+        RegisterEngineRequest,
+        IdentitySnapshot,
+        RegisterEngineResponse,
+        EngineDescriptor,
         ApiError
     ))
 )]

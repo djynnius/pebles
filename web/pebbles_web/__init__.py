@@ -150,6 +150,17 @@ def create_app(pebblesd: PebblesdClient | None = None) -> Flask:
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    @app.get("/engines")
+    def engines_page():  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return redirect(url_for("login_form"))
+        try:
+            engines = client.list_engines()
+        except (OSError, RuntimeError, ValueError):
+            engines = []
+        return render_template("engines.html", user=user, engines=engines)
+
     @app.get("/catalogs")
     def catalogs_page():  # pyright: ignore[reportUnusedFunction]
         user = session.get("user")

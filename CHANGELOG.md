@@ -7,6 +7,19 @@ All notable changes to Pebbles are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **M1.1 — engine registration (Phase 1 begins)**: the fleet is real. The main
+  mints **single-use join tokens** (24 h expiry, hashed at rest, revocable —
+  REQ-05) over the privileged socket; a new cluster TCP API (bearer-authenticated;
+  TLS scheduled before v1.0) accepts engine registrations. Registration audits
+  the engine's uids and **refuses on drift** (REQ-11), requires lake-path
+  reachability (REQ-26), and replies with a per-engine secret plus the identity
+  snapshot; account creation replicates to every engine (REQ-14). Engine-role
+  containers register at boot (sticky, with retry) and serve sessions over the
+  cluster API; the main proxies open/exec/close to named engines, so
+  `POST /sessions {"engine": "worker-1"}` runs the kernel on that engine under
+  the user's uid. New Engines page in the web UI, and a main+engine CI cell
+  proving token single-use, replication, and cross-container session identity
+  end to end.
 - **M0.6 — three runtimes + upgrade scaffold (Phase 0 exit)**: the CI integration
   matrix now runs the full install-to-first-query acceptance script on **Docker,
   rootful Podman, and Incus** — the Incus cell converts the OCI image to a

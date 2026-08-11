@@ -121,7 +121,9 @@ curl -fsSL "$BASE/" | grep -q 'data-pb-theme' \
   || { echo "FAIL: / did not serve the shell page" >&2; exit 1; }
 
 echo "==> Ade path: create maya through the privileged API (M0.3)"
-created="$(pd -H 'Content-Type: application/json' \
+# -s (not -f): a failing create must SHOW its error body, not swallow it.
+created="$(ctr_exec curl -s --unix-socket /run/pebbles/pebblesd.sock \
+  -H 'Content-Type: application/json' \
   -d '{"username":"maya","password":"pebbles-demo-1"}' http://pebblesd/users)"
 echo "    $created"
 expect '"uid":70000' "maya at uid 70000 (ADR-001 range)" "$created"

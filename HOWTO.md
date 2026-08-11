@@ -33,6 +33,30 @@ from your home with `read_csv_auto('/home/maya/file.csv')`. Time travel works:
 over the privileged socket. Omit `-e PEBBLES_ROLE=…` and run with `-it` to get the
 setup wizard instead. Podman (rootful) works with the same flags.
 
+### Add an engine
+
+On the main, mint a single-use join token (admin UI arrives in M1.8):
+
+```sh
+docker exec pebbles curl -s -X POST --unix-socket /run/pebbles/pebblesd.sock \
+  http://pebblesd/cluster/tokens
+```
+
+Then boot another container (any host that shares `/home` and the lake storage)
+with the token:
+
+```sh
+docker run -d --name pebbles-engine \
+  -e PEBBLES_ROLE=engine \
+  -e PEBBLES_MAIN=http://<main-host>:7443 \
+  -e PEBBLES_JOIN_TOKEN=<token> \
+  -v pebbles-home:/home -v pebbles-lake:/var/lib/pebbles/lake \
+  ghcr.io/djynnius/pebles:edge
+```
+
+It registers, receives the account snapshot, and appears on the Engines page.
+Sessions opened with `{"engine": "<name>"}` run on it as your own uid.
+
 ### Incus
 
 Grab `metadata.tar.xz` + `rootfs.tar.xz` from the Image workflow's

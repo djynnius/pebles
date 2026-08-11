@@ -7,11 +7,20 @@
 
 mod api;
 mod catalog;
+mod cluster;
 mod config;
 mod migrations;
 mod services;
 mod supervisor;
 mod wizard;
+
+/// The inter-host cluster API port (TCP; plain HTTP + bearer in M1.1, TLS pre-v1.0).
+pub fn cluster_port() -> u16 {
+    std::env::var("PEBBLES_CLUSTER_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(7443)
+}
 
 use tokio::net::UnixListener;
 use tokio::signal::unix::{signal, SignalKind};
@@ -60,7 +69,23 @@ async fn main() -> anyhow::Result<()> {
     if cfg.role == pebbles_api::Role::Main {
         tokio::spawn(migrations::run(cfg.config_dir.clone()));
     }
-    let state = session_state(&cfg);
+    let clu = cluster::Cluster::load(&cfg.config_dir);
+    let state = session_state(&cfg, clu.clone());
+
+    // Inter-host cluster API: registration inbound on the main, session serving
+    // inbound on engines (implementation plan §9b M1.1).
+    let cluster_addr = format!("0.0.0.0:{}", cluster_port());
+    let cluster_tcp = tokio::net::TcpListener::bind(&cluster_addr).await?;
+    tracing::info!(addr = %cluster_addr, "cluster API listening");
+    let cluster_router = api::cluster_router(cfg.role, state.clone());
+    tokio::spawn(async move {
+        if let Err(err) = axum::serve(cluster_tcp, cluster_router).await {
+            tracing::error!(%err, "cluster API server exited");
+        }
+    });
+    if cfg.role == pebbles_api::Role::Engine {
+        tokio::spawn(cluster::engine_boot(cfg.config_dir.clone(), clu));
+    }
 
     let mut sigterm = signal(SignalKind::terminate())?;
     tokio::select! {
@@ -72,9 +97,10 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Session serving on this container (REQ-04: the main doubles as an engine by
-/// default; `PEBBLES_SERVE_SESSIONS=false` turns it off).
-fn session_state(cfg: &config::Config) -> api::AppState {
+/// Session serving on this container: the main doubles as an engine by default
+/// (REQ-04, `PEBBLES_SERVE_SESSIONS=false` turns it off); engine-role containers
+/// serve sessions unconditionally — that is their job.
+fn session_state(cfg: &config::Config, clu: std::sync::Arc<cluster::Cluster>) -> api::AppState {
     fn env_u64(key: &str, default: u64) -> u64 {
         std::env::var(key)
             .ok()
@@ -83,8 +109,8 @@ fn session_state(cfg: &config::Config) -> api::AppState {
     }
     let default_session_memory = env_u64("PEBBLES_SESSION_MEMORY_BYTES", 512 * 1024 * 1024);
 
-    let serves = cfg.role == pebbles_api::Role::Main
-        && std::env::var("PEBBLES_SERVE_SESSIONS").as_deref() != Ok("false");
+    let serves = cfg.role == pebbles_api::Role::Engine
+        || std::env::var("PEBBLES_SERVE_SESSIONS").as_deref() != Ok("false");
     let kernel = std::path::PathBuf::from(
         std::env::var("PEBBLES_KERNEL")
             .unwrap_or_else(|_| "/usr/local/bin/pebbles-sql-runner".to_string()),
@@ -112,5 +138,6 @@ fn session_state(cfg: &config::Config) -> api::AppState {
         broker,
         default_session_memory,
         config_dir: cfg.config_dir.clone(),
+        cluster: clu,
     }
 }
