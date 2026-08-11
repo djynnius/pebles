@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block content %}
+  <div class="page">
+    <p class="nav">
+      <a href="{{ url_for('index') }}">home</a> · <strong>settings</strong>
+      · <a href="{{ url_for('git_settings') }}">git</a>
+      · <a href="{{ url_for('hosts_page') }}">hosts</a>
+      · <a href="{{ url_for('usage_page') }}">usage</a>
+      · signed in as {{ user.username }} · <a href="{{ url_for('logout') }}">sign out</a>
+    </p>
+    <h2>Workspace · Compute runtime</h2>
+    {% if error %}<p class="error">Could not load settings: {{ error }}</p>{% endif %}
+
+    <div class="card wide">
+      <strong>Join tokens</strong>
+      <p class="status">Single-use, 24 h expiry. Mint one per engine (REQ-05).</p>
+      {% if minted %}
+        <p class="status">New token (shown once — copy it now):</p>
+        <pre style="white-space:pre-wrap; font-family:'IBM Plex Mono',ui-monospace,monospace;">{{ minted.token }}</pre>
+      {% endif %}
+      {% if tokens %}
+        <table>
+          <thead><tr><th>id</th><th>expires</th><th>used</th><th></th></tr></thead>
+          <tbody>
+          {% for t in tokens %}
+            <tr>
+              <td><code>{{ t.id }}</code></td>
+              <td>{{ t.expires_at }}</td>
+              <td>{{ 'yes' if t.used else 'no' }}</td>
+              <td>
+                <form method="post" action="{{ url_for('settings_cluster') }}">
+                  <input type="hidden" name="action" value="revoke">
+                  <input type="hidden" name="id" value="{{ t.id }}">
+                  <button type="submit">Revoke</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="status">No tokens minted yet.</p>
+      {% endif %}
+      <form method="post" action="{{ url_for('settings_cluster') }}">
+        <input type="hidden" name="action" value="mint">
+        <button type="submit">Mint join token</button>
+      </form>
+    </div>
+
+    <div class="card wide">
+      <strong>Pending approval</strong>
+      <p class="status">Engines that contacted the main without a valid token (REQ-06).</p>
+      {% if pending %}
+        <table>
+          <thead><tr><th>Engine</th><th>Address</th><th>CPUs</th><th></th><th></th></tr></thead>
+          <tbody>
+          {% for p in pending %}
+            <tr>
+              <td><code>{{ p.name }}</code></td>
+              <td><code>{{ p.address }}</code></td>
+              <td>{{ p.cpus }}</td>
+              <td>
+                <form method="post" action="{{ url_for('settings_cluster') }}">
+                  <input type="hidden" name="action" value="approve">
+                  <input type="hidden" name="name" value="{{ p.name }}">
+                  <button type="submit">Approve</button>
+                </form>
+              </td>
+              <td>
+                <form method="post" action="{{ url_for('settings_cluster') }}">
+                  <input type="hidden" name="action" value="reject">
+                  <input type="hidden" name="name" value="{{ p.name }}">
+                  <button type="submit">Reject</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="status">Nothing pending.</p>
+      {% endif %}
+    </div>
+  </div>
+{% endblock %}

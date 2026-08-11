@@ -45,12 +45,16 @@ setup wizard instead. Podman (rootful) works with the same flags.
 
 ### Add an engine
 
-On the main, mint a single-use join token (admin UI arrives in M1.8):
+Mint a single-use join token under **Settings → Compute runtime** in the UI
+(shown exactly once), or via the API:
 
 ```sh
 docker exec pebbles curl -s -X POST --unix-socket /run/pebbles/pebblesd.sock \
   http://pebblesd/cluster/tokens
 ```
+
+An engine booted *without* a token appears under Settings as **pending
+approval** — approve or reject it there.
 
 Then boot another container (any host that shares `/home` and the lake storage)
 with the token:

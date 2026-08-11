@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+  <div class="page">
+    <p class="nav">
+      <a href="{{ url_for('index') }}">home</a> · <strong>hosts</strong>
+      · <a href="{{ url_for('usage_page') }}">usage</a>
+      · <a href="{{ url_for('engines_page') }}">engines</a>
+      · <a href="{{ url_for('settings_page') }}">settings</a>
+      · signed in as {{ user.username }} · <a href="{{ url_for('logout') }}">sign out</a>
+    </p>
+    <h2>Hosts</h2>
+    {% if error %}<p class="error">Could not load hosts: {{ error }}</p>{% endif %}
+    <div class="card wide">
+      <table>
+        <thead><tr><th>Container</th><th>Role</th><th>State</th><th>CPUs</th><th></th></tr></thead>
+        <tbody>
+          {% if usage %}
+            <tr>
+              <td><code>{{ usage.hostname }}</code></td>
+              <td><strong style="color: var(--pb-accent)">Main</strong></td>
+              <td>running</td>
+              <td>{{ usage.cpus }}</td>
+              <td></td>
+            </tr>
+          {% endif %}
+          {% for e in engines if e.name != 'main' %}
+            <tr>
+              <td><code>{{ e.name }}</code></td>
+              <td>Engine</td>
+              <td>{{ e.state }}</td>
+              <td>{{ e.resources.cpus }}</td>
+              <td>
+                <form method="post" action="{{ url_for('settings_cluster') }}">
+                  <input type="hidden" name="action" value="deregister">
+                  <input type="hidden" name="name" value="{{ e.name }}">
+                  <button type="submit">Remove</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="status">Removing an engine invalidates its credentials (REQ-08);
+      it can rejoin with a fresh join token.</p>
+  </div>
+{% endblock %}

@@ -146,6 +146,36 @@ class PebblesdClient:
             raise PebblesdError(status, str(data))
         return data
 
+    def usage(self) -> dict:
+        return self._get("/usage")
+
+    def list_tokens(self) -> list:
+        status, data = self._request("GET", "/cluster/tokens")
+        if status != 200:
+            raise PebblesdError(status, str(data))
+        return data
+
+    def mint_token(self) -> dict:
+        return self._expect("POST", "/cluster/tokens")
+
+    def revoke_token(self, token_id: str) -> dict:
+        return self._expect("DELETE", f"/cluster/tokens/{token_id}")
+
+    def list_pending_engines(self) -> list:
+        status, data = self._request("GET", "/engines/pending")
+        if status != 200:
+            raise PebblesdError(status, str(data))
+        return data
+
+    def approve_pending_engine(self, name: str) -> dict:
+        return self._expect("POST", f"/engines/pending/{name}/approve")
+
+    def reject_pending_engine(self, name: str) -> dict:
+        return self._expect("DELETE", f"/engines/pending/{name}")
+
+    def deregister_engine(self, name: str) -> dict:
+        return self._expect("DELETE", f"/engines/{name}")
+
     def cancel_reservation(self, engine: str | None = None) -> dict:
         path = "/sessions/reservation"
         if engine and engine != "main":

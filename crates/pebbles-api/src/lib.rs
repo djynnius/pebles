@@ -223,6 +223,36 @@ pub struct EngineStatus {
     pub sessions: u64,
 }
 
+/// An engine awaiting admin approve/reject (REQ-06).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct PendingEngineInfo {
+    pub name: String,
+    pub address: String,
+    pub cpus: u32,
+    pub first_seen: u64,
+    pub approved: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct DiskUsage {
+    pub mount: String,
+    pub total_bytes: u64,
+    pub free_bytes: u64,
+}
+
+/// Host resource usage (REQ-48): CPU/RAM/disk — explicitly never "credits".
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct UsageInfo {
+    pub hostname: String,
+    pub cpus: u32,
+    pub load_1: f64,
+    pub load_5: f64,
+    pub load_15: f64,
+    pub mem_total_bytes: u64,
+    pub mem_available_bytes: u64,
+    pub disks: Vec<DiskUsage>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct RegisterEngineResponse {
     pub engine_id: String,
@@ -295,6 +325,9 @@ pub struct CatalogDescriptor {
         ReservationDescriptor,
         ReservationStatus,
         EngineStatus,
+        PendingEngineInfo,
+        DiskUsage,
+        UsageInfo,
         ApiError
     ))
 )]

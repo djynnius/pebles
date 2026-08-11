@@ -44,6 +44,18 @@ pub struct EngineSelf {
     pub name: String,
 }
 
+/// An engine that contacted the main without a valid token (REQ-06): held for
+/// admin approve/reject; the engine keeps retrying until a verdict lands.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingEngine {
+    pub name: String,
+    pub address: String,
+    pub resources: EngineResources,
+    pub first_seen: u64,
+    #[serde(default)]
+    pub approved: bool,
+}
+
 /// Access + grant records (REQ-07/13), sticky in the config volume.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Grants {
@@ -72,6 +84,7 @@ pub struct Cluster {
     dir: PathBuf,
     pub tokens: Mutex<Vec<TokenRecord>>,
     pub engines: Mutex<Vec<EngineRecord>>,
+    pub pending: Mutex<Vec<PendingEngine>>,
     pub grants: Mutex<Grants>,
     /// Set on the engine role once registered; authenticates inbound main calls.
     pub engine_self: RwLock<Option<EngineSelf>>,
@@ -105,12 +118,14 @@ impl Cluster {
         let _ = std::fs::create_dir_all(&dir);
         let tokens = read_json(&dir.join("tokens.json")).unwrap_or_default();
         let engines = read_json(&dir.join("engines.json")).unwrap_or_default();
+        let pending = read_json(&dir.join("pending.json")).unwrap_or_default();
         let grants = read_json(&dir.join("grants.json")).unwrap_or_default();
         let engine_self = read_json(&dir.join("engine.json"));
         std::sync::Arc::new(Self {
             dir,
             tokens: Mutex::new(tokens),
             engines: Mutex::new(engines),
+            pending: Mutex::new(pending),
             grants: Mutex::new(grants),
             engine_self: RwLock::new(engine_self),
             remote: Mutex::new(std::collections::HashMap::new()),
@@ -265,6 +280,71 @@ impl Cluster {
         record
     }
 
+    /// Tokenless contact (REQ-06): record/refresh the pending request. Returns
+    /// true when an admin has approved it — the caller then completes
+    /// registration and consumes the approval.
+    pub fn note_pending(&self, req: &RegisterEngineRequest) -> bool {
+        let mut pending = self.pending.lock().unwrap();
+        if let Some(existing) = pending.iter_mut().find(|p| p.name == req.name) {
+            existing.address = req.address.trim_end_matches('/').to_string();
+            existing.resources = req.resources.clone();
+            let approved = existing.approved;
+            if approved {
+                pending.retain(|p| p.name != req.name);
+            }
+            write_json(&self.dir.join("pending.json"), &*pending);
+            return approved;
+        }
+        pending.push(PendingEngine {
+            name: req.name.clone(),
+            address: req.address.trim_end_matches('/').to_string(),
+            resources: req.resources.clone(),
+            first_seen: now(),
+            approved: false,
+        });
+        write_json(&self.dir.join("pending.json"), &*pending);
+        false
+    }
+
+    pub fn list_pending(&self) -> Vec<PendingEngine> {
+        self.pending.lock().unwrap().clone()
+    }
+
+    /// Approve (true) or reject (false) a pending engine. Returns whether it existed.
+    pub fn resolve_pending(&self, name: &str, approve: bool) -> bool {
+        let mut pending = self.pending.lock().unwrap();
+        let found = if approve {
+            match pending.iter_mut().find(|p| p.name == name) {
+                Some(p) => {
+                    p.approved = true;
+                    true
+                }
+                None => false,
+            }
+        } else {
+            let before = pending.len();
+            pending.retain(|p| p.name != name);
+            pending.len() != before
+        };
+        if found {
+            write_json(&self.dir.join("pending.json"), &*pending);
+        }
+        found
+    }
+
+    /// Deregister (REQ-08): the record — and with it the engine's secret — is gone;
+    /// the main will neither route sessions to it nor accept its calls.
+    pub fn deregister(&self, name: &str) -> bool {
+        let mut engines = self.engines.lock().unwrap();
+        let before = engines.len();
+        engines.retain(|e| e.name != name);
+        let removed = engines.len() != before;
+        if removed {
+            write_json(&self.dir.join("engines.json"), &*engines);
+        }
+        removed
+    }
+
     pub fn engine_by_name(&self, name: &str) -> Option<EngineRecord> {
         self.engines
             .lock()
@@ -365,16 +445,16 @@ pub async fn engine_boot(config_dir: PathBuf, cluster: std::sync::Arc<Cluster>) 
         tracing::info!("engine already registered (sticky)");
         return;
     }
-    let (Ok(main), Ok(token)) = (
-        std::env::var("PEBBLES_MAIN"),
-        std::env::var("PEBBLES_JOIN_TOKEN"),
-    ) else {
-        tracing::error!(
-            "engine role without registration: set PEBBLES_MAIN and PEBBLES_JOIN_TOKEN \
-             (or approve via the pending flow, Phase 1 M1.8)"
-        );
+    let Ok(main) = std::env::var("PEBBLES_MAIN") else {
+        tracing::error!("engine role without registration: set PEBBLES_MAIN");
         return;
     };
+    // No token → the pending-approval flow (REQ-06): keep knocking until an
+    // admin approves or rejects on the main.
+    let token = std::env::var("PEBBLES_JOIN_TOKEN").unwrap_or_default();
+    if token.is_empty() {
+        tracing::warn!("no join token: requesting registration as PENDING APPROVAL");
+    }
     let main = main.trim_end_matches('/').to_string();
 
     let lake_root = crate::catalog::lake_root();
@@ -439,6 +519,9 @@ pub async fn engine_boot(config_dir: PathBuf, cluster: std::sync::Arc<Cluster>) 
                     }
                     Err(err) => tracing::error!(%err, "malformed registration response"),
                 }
+            }
+            Ok(resp) if resp.status() == reqwest::StatusCode::ACCEPTED => {
+                tracing::info!("pending admin approval on the main; retrying");
             }
             Ok(resp) => {
                 let status = resp.status();

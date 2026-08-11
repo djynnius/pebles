@@ -7,6 +7,18 @@ All notable changes to Pebbles are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **M1.8 — admin completeness**: the operator's cockpit. **Usage** page: host
+  CPU load, memory, and per-mount disk — explicitly resources, never credits
+  (REQ-48). **Hosts** page: this container with its Main badge plus every
+  engine with role, state, and a Remove action — deregistering invalidates the
+  engine's credentials (REQ-08). **Settings → Compute runtime**: join tokens
+  minted in the UI (plaintext shown exactly once), listed and revocable
+  (REQ-05), and the **pending-approval flow** (REQ-06): an engine booted
+  without a token knocks every 10 s, shows up as pending, and completes
+  registration the moment an admin approves — reject sends it away. Admin
+  pages now surface fetch errors instead of silently emptying (REQ-49
+  groundwork). The duo smoke proves the pending → approve → registered →
+  deregistered lifecycle end to end.
 - **M1.7 — git**: first-class git, entirely under the user's own identity. The
   kernel gained a whitelisted `git` op (porcelain subcommands only) that runs
   as the session user with their credentials — `~/.ssh` keys or an HTTPS PAT

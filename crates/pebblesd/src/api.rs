@@ -86,6 +86,11 @@ pub fn router(role: Role, state: AppState) -> Router {
             .route("/cluster/tokens/{id}", delete(revoke_token))
             .route("/engines", get(list_engines))
             .route("/engines/{name}/access", post(set_engine_access))
+            .route("/engines/{name}", delete(deregister_engine))
+            .route("/engines/pending", get(list_pending))
+            .route("/engines/pending/{name}/approve", post(approve_pending))
+            .route("/engines/pending/{name}", delete(reject_pending))
+            .route("/usage", get(usage))
             .route("/workflows", get(list_workflows).post(save_workflow))
             .route("/workflows/{name}/run", post(trigger_workflow))
             .route("/workflows/{name}/runs", get(workflow_runs))
@@ -609,7 +614,17 @@ async fn register_engine(
             format!("uid audit failed, registration refused: {conflict}"),
         ));
     }
-    if !state.cluster.consume_token(&req.token) {
+    if req.token.is_empty() {
+        // Tokenless contact (REQ-06): pending until an admin approves; the
+        // engine keeps retrying and completes registration once approved.
+        if !state.cluster.note_pending(&req) {
+            return Err(error(
+                StatusCode::ACCEPTED,
+                format!("engine {:?} is pending admin approval", req.name),
+            ));
+        }
+        tracing::info!(engine = %req.name, "pending engine approved; completing registration");
+    } else if !state.cluster.consume_token(&req.token) {
         return Err(error(
             StatusCode::UNAUTHORIZED,
             "invalid, used, or expired join token",
@@ -823,6 +838,119 @@ fn replicate(state: &AppState) {
     let cluster = state.cluster.clone();
     let dir = state.config_dir.clone();
     tokio::spawn(async move { cluster.push_accounts(&dir).await });
+}
+
+// ---- admin completeness (M1.8, REQ-06/08/48) ----
+
+async fn deregister_engine(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> ApiResult<Value> {
+    if state.cluster.deregister(&name) {
+        tracing::info!(engine = %name, "engine deregistered; credentials invalidated");
+        Ok(Json(serde_json::json!({ "deregistered": name })))
+    } else {
+        Err(error(StatusCode::NOT_FOUND, format!("no engine {name:?}")))
+    }
+}
+
+async fn list_pending(
+    State(state): State<AppState>,
+) -> ApiResult<Vec<pebbles_api::PendingEngineInfo>> {
+    Ok(Json(
+        state
+            .cluster
+            .list_pending()
+            .into_iter()
+            .map(|p| pebbles_api::PendingEngineInfo {
+                name: p.name,
+                address: p.address,
+                cpus: p.resources.cpus,
+                first_seen: p.first_seen,
+                approved: p.approved,
+            })
+            .collect(),
+    ))
+}
+
+async fn approve_pending(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> ApiResult<Value> {
+    if state.cluster.resolve_pending(&name, true) {
+        Ok(Json(serde_json::json!({ "approved": name })))
+    } else {
+        Err(error(
+            StatusCode::NOT_FOUND,
+            format!("no pending engine {name:?}"),
+        ))
+    }
+}
+
+async fn reject_pending(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> ApiResult<Value> {
+    if state.cluster.resolve_pending(&name, false) {
+        Ok(Json(serde_json::json!({ "rejected": name })))
+    } else {
+        Err(error(
+            StatusCode::NOT_FOUND,
+            format!("no pending engine {name:?}"),
+        ))
+    }
+}
+
+fn disk_usage(mount: &str) -> Option<pebbles_api::DiskUsage> {
+    let c_mount = std::ffi::CString::new(mount).ok()?;
+    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+    // SAFETY: valid CString pointer and zeroed out-struct.
+    if unsafe { libc::statvfs(c_mount.as_ptr(), &mut stat) } != 0 {
+        return None;
+    }
+    Some(pebbles_api::DiskUsage {
+        mount: mount.to_string(),
+        total_bytes: stat.f_blocks as u64 * stat.f_frsize as u64,
+        free_bytes: stat.f_bavail as u64 * stat.f_frsize as u64,
+    })
+}
+
+/// Host resources (REQ-48): CPU load, memory, disks — never "credits".
+async fn usage(State(state): State<AppState>) -> ApiResult<pebbles_api::UsageInfo> {
+    let meminfo = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
+    let mem = |key: &str| -> u64 {
+        meminfo
+            .lines()
+            .find(|l| l.starts_with(key))
+            .and_then(|l| l.split_whitespace().nth(1))
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0)
+            * 1024
+    };
+    let loadavg = std::fs::read_to_string("/proc/loadavg").unwrap_or_default();
+    let mut load = loadavg.split_whitespace().map(|v| v.parse().unwrap_or(0.0));
+    let mut disks: Vec<_> = ["/", "/home"]
+        .iter()
+        .filter_map(|m| disk_usage(m))
+        .collect();
+    if let Some(cfg) = state.config_dir.to_str() {
+        disks.extend(disk_usage(cfg));
+    }
+    Ok(Json(pebbles_api::UsageInfo {
+        hostname: std::fs::read_to_string("/etc/hostname")
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+        cpus: std::thread::available_parallelism()
+            .map(|n| n.get() as u32)
+            .unwrap_or(1),
+        load_1: load.next().unwrap_or(0.0),
+        load_5: load.next().unwrap_or(0.0),
+        load_15: load.next().unwrap_or(0.0),
+        mem_total_bytes: mem("MemTotal"),
+        mem_available_bytes: mem("MemAvailable"),
+        disks,
+    }))
 }
 
 // ---- jobs on hidden Airflow (M1.6, REQ-38..42) ----

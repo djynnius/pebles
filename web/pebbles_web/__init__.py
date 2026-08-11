@@ -664,6 +664,72 @@ def create_app(pebblesd: PebblesdClient | None = None) -> Flask:
                 _git(username, ["config", "--global", "credential.helper", "store"])
         return redirect(url_for("git_settings"))
 
+    @app.get("/usage")
+    def usage_page():  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return redirect(url_for("login_form"))
+        usage, err = None, None
+        try:
+            usage = client.usage()
+        except (OSError, RuntimeError, ValueError) as exc:
+            err = str(exc)
+        return render_template("usage.html", user=user, usage=usage, error=err)
+
+    @app.get("/hosts")
+    def hosts_page():  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return redirect(url_for("login_form"))
+        usage, engines, err = None, [], None
+        try:
+            usage = client.usage()
+            engines = client.list_engines()
+        except (OSError, RuntimeError, ValueError) as exc:
+            err = str(exc)
+        return render_template(
+            "hosts.html", user=user, usage=usage, engines=engines, error=err
+        )
+
+    @app.get("/settings")
+    def settings_page():  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return redirect(url_for("login_form"))
+        tokens, pending, err = [], [], None
+        try:
+            tokens = client.list_tokens()
+            pending = client.list_pending_engines()
+        except (OSError, RuntimeError, ValueError) as exc:
+            err = str(exc)
+        minted = session.pop("minted_token", None)
+        return render_template(
+            "settings.html", user=user, tokens=tokens, pending=pending,
+            minted=minted, error=err,
+        )
+
+    @app.post("/settings/cluster")
+    def settings_cluster():  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return redirect(url_for("login_form"))
+        action = request.form.get("action", "")
+        try:
+            if action == "mint":
+                # Shown exactly once on the next page render (REQ-05).
+                session["minted_token"] = client.mint_token()
+            elif action == "revoke":
+                client.revoke_token(request.form.get("id", ""))
+            elif action == "approve":
+                client.approve_pending_engine(request.form.get("name", ""))
+            elif action == "reject":
+                client.reject_pending_engine(request.form.get("name", ""))
+            elif action == "deregister":
+                client.deregister_engine(request.form.get("name", ""))
+        except PebblesdError:
+            pass  # list views below show current truth
+        return redirect(url_for("settings_page"))
+
     @app.get("/jobs")
     def jobs_page():  # pyright: ignore[reportUnusedFunction]
         user = session.get("user")

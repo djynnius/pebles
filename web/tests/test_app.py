@@ -104,6 +104,47 @@ class FakeDaemon:
     def cancel_reservation(self, engine=None):
         return {"cancelled": True}
 
+    def usage(self):
+        return {
+            "hostname": "pebbles-main",
+            "cpus": 8,
+            "load_1": 0.4,
+            "load_5": 0.3,
+            "load_15": 0.2,
+            "mem_total_bytes": 16 * 1024**3,
+            "mem_available_bytes": 12 * 1024**3,
+            "disks": [{"mount": "/", "total_bytes": 100 * 1024**3, "free_bytes": 60 * 1024**3}],
+        }
+
+    def list_tokens(self):
+        return [{"id": "ab12", "expires_at": 1790000000, "used": False}]
+
+    def mint_token(self):
+        return {"id": "cd34", "token": "s3cr3t-token", "expires_at": 1790000000}
+
+    def revoke_token(self, token_id):
+        return {"revoked": token_id}
+
+    def list_pending_engines(self):
+        return [
+            {
+                "name": "worker-9",
+                "address": "http://10.0.0.9:7443",
+                "cpus": 4,
+                "first_seen": 1780000000,
+                "approved": False,
+            }
+        ]
+
+    def approve_pending_engine(self, name):
+        return {"approved": name}
+
+    def reject_pending_engine(self, name):
+        return {"rejected": name}
+
+    def deregister_engine(self, name):
+        return {"deregistered": name}
+
     def list_workflows(self):
         return list(getattr(self, "workflows", []))
 
@@ -387,6 +428,37 @@ def test_repo_status_actions_and_settings():
         "/settings/git", data={"action": "identity", "name": "Maya", "email": "m@x.y"}
     ).status_code == 302
     assert c.post("/settings/git", data={"action": "keygen"}).status_code == 302
+
+
+def test_usage_hosts_and_settings_pages():
+    c = signed_in()
+    assert client().get("/usage").status_code == 302
+
+    usage = c.get("/usage").get_data(as_text=True)
+    assert "pebbles-main" in usage and "4.0 GB" in usage and "16.0 GB" in usage
+
+    hosts = c.get("/hosts").get_data(as_text=True)
+    assert "Main" in hosts and "worker-1" in hosts and "Remove" in hosts
+
+    settings = c.get("/settings").get_data(as_text=True)
+    assert "ab12" in settings and "worker-9" in settings and "Approve" in settings
+
+    # Minted tokens show exactly once on the next render.
+    assert c.post("/settings/cluster", data={"action": "mint"}).status_code == 302
+    once = c.get("/settings").get_data(as_text=True)
+    assert "s3cr3t-token" in once
+    again = c.get("/settings").get_data(as_text=True)
+    assert "s3cr3t-token" not in again
+
+    for action, extra in [
+        ("revoke", {"id": "ab12"}),
+        ("approve", {"name": "worker-9"}),
+        ("reject", {"name": "worker-9"}),
+        ("deregister", {"name": "worker-1"}),
+    ]:
+        assert c.post(
+            "/settings/cluster", data={"action": action, **extra}
+        ).status_code == 302
 
 
 def test_notebook_names_are_validated():

@@ -126,4 +126,32 @@ allowed="$(pd -H 'Content-Type: application/json' \
   -d '{"username":"maya","engine":"worker-1"}' http://pebblesd/sessions)"
 expect '"engine":"worker-1"' "member may attach after joining analysts" "$allowed"
 
+echo "==> M1.8: tokenless engines wait for approval (REQ-06), removal invalidates (REQ-08)"
+ENGINE2="pebbles-duo-engine2-$$"
+cleanup2() { ctr rm -f "$ENGINE2" >/dev/null 2>&1 || true; }
+trap 'cleanup2; cleanup' EXIT
+ctr run -d --name "$ENGINE2" --network "$NET" \
+  -v "$HOMES":/home -v "$LAKE":/var/lib/pebbles/lake \
+  -e PEBBLES_ROLE=engine \
+  -e PEBBLES_MAIN="http://$main_ip:7443" \
+  -e PEBBLES_ENGINE_NAME=worker-2 "$IMAGE" >/dev/null
+pending=""
+for _ in $(seq 1 30); do
+  pending="$(pd http://pebblesd/engines/pending 2>/dev/null || true)"
+  grep -q '"name":"worker-2"' <<<"$pending" && break
+  sleep 2
+done
+expect '"name":"worker-2"' "tokenless engine shows as pending" "$pending"
+pd -X POST http://pebblesd/engines/pending/worker-2/approve >/dev/null
+ready2=""
+for _ in $(seq 1 30); do # the engine retries every 10s and completes registration
+  ready2="$(pd http://pebblesd/engines 2>/dev/null || true)"
+  grep -q '"name":"worker-2"' <<<"$ready2" && break
+  sleep 2
+done
+expect '"name":"worker-2"' "approved engine registered" "$ready2"
+pd -X DELETE http://pebblesd/engines/worker-2 >/dev/null
+pd http://pebblesd/engines | grep -q '"name":"worker-2"' \
+  && { echo "FAIL: deregistered engine still listed (REQ-08)" >&2; exit 1; }
+
 echo "==> main+engine smoke OK"
