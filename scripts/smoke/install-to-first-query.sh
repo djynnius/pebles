@@ -286,11 +286,9 @@ done
 [ "$listening" = "up" ] || { echo "FAIL: sshd never listened on 22" >&2; show_logs >&2 | tail -30 || true; exit 1; }
 ctr_exec sh -c 'exec 3<>/dev/tcp/127.0.0.1/22; head -c 8 <&3' 2>/dev/null | grep -q 'SSH-2.0' \
   || { echo "FAIL: no SSH-2.0 banner on port 22" >&2; exit 1; }
-sshd_pid="$(ctr_exec pgrep -x sshd | head -1)"
-[ -n "$sshd_pid" ] || { echo "FAIL: sshd not running" >&2; exit 1; }
-ctr_exec sh -c "tr '\0' ' ' < /proc/$sshd_pid/cmdline" | grep -q 'internal-sftp' \
-  || { echo "FAIL: sshd not configured with the SFTP subsystem" >&2; exit 1; }
-echo "    sshd up on 22, SSH-2.0, PAM + internal-sftp configured"
+ctr_exec grep -qiE '^Subsystem[[:space:]]+sftp' /etc/ssh/sshd_config \
+  || { echo "FAIL: sshd config declares no SFTP subsystem" >&2; exit 1; }
+echo "    sshd up on 22, SSH-2.0, PAM + sftp subsystem configured"
 
 echo "==> Files screen: browse/upload/delete run as the user (REQ-15/32)"
 pd -H 'Content-Type: application/json' \

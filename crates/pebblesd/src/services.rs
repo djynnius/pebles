@@ -170,8 +170,8 @@ fn sshd() -> Option<ServiceSpec> {
                 "UsePAM=yes".into(),
                 "-o".into(),
                 "PasswordAuthentication=yes".into(),
-                "-o".into(),
-                "Subsystem=sftp internal-sftp".into(),
+                // No Subsystem override: Debian's stock sshd_config already
+                // declares the sftp subsystem, and redefining it is fatal.
             ],
             envs: vec![],
             run_as: None,
