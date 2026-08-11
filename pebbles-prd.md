@@ -2,8 +2,9 @@
 
 **Version:** 1.0 · **Date:** August 2026 · **Status:** Draft for review
 **Companion documents:** `pebbles-spec-v2.md` (design & architecture detail — the source
-of truth for UX and technical decisions), `Pebbles__15_.html` (interactive prototype —
-the source of truth for visual design).
+of truth for UX and technical decisions), `ui_ux.html` (interactive prototype —
+the source of truth for visual design), `pebbles-implementation-plan.md` (stack, repo
+layout, container-runtime strategy, CI/CD, and Phase 0 milestones).
 
 This PRD states *what* Pebbles must do and *why*, in what order, and how we will know it
 works. Where the spec already fixes a design, this document references it rather than
@@ -83,7 +84,7 @@ Priorities: **P0** = MVP, cannot ship without · **P1** = v1.0 release · **P2**
 | ID | Requirement | Priority |
 |---|---|---|
 | REQ-01 | Ship **one container image** containing all services (Rust daemon `pebblesd`, Flask web app, DuckDB, Python + SQL kernels, Airflow, git). | P0 |
-| REQ-02 | Image runs under **Docker and LXC**; both are supported install targets and both are supported engine backends simultaneously. | P0 |
+| REQ-02 | Image runs under **Docker, Podman and LXC (via Incus)**; all three are supported install targets and engine backends simultaneously. Podman support is rootful-only in v1 (rootless uid remapping breaks REQ-11; detected and refused with guidance). | P0 |
 | REQ-03 | **Role selected at setup**: `main` or `engine`, via env var / cloud-init (scripted) or terminal wizard (interactive). Role is sticky in the config volume. Exactly one main per workspace. | P0 |
 | REQ-04 | The main can optionally serve engine sessions itself, so a **single-container install is a complete product**. Admin toggle governs this. | P0 |
 | REQ-05 | Engines register **on the main** using a **single-use join token** (default 24 h expiry, one engine per token; tokens listed/revocable in admin settings; mintable via API for scripted fleets). | P0 |
@@ -232,6 +233,7 @@ first-class design; HA investigation.
 | Airflow operational weight contradicts "install in an afternoon" | Setup pain | Airflow pre-configured inside the image, zero user-facing config; treat as internal dependency we can swap later |
 | Draining state confuses users ("why can't I attach?") | Support load | Explicit Draining row state with holder, reason and ETA; cancellable |
 | Local-model quality limits Nkoyo/Auto ETL usefulness | Feature disappoints | Approval-gated design means low confidence degrades to "helpful suggestions", never wrong actions; model choice per function in settings |
+| Three runtime backends (Docker/Podman/Incus) triple the integration surface | Regression risk, broken installs | One OCI image with a single build path (Incus consumes a converted artifact); small runtime abstraction in `pebblesd`; CI integration matrix runs the same install-to-first-query script on every runtime per merge (see implementation plan §7) |
 
 ## 9. Open questions
 

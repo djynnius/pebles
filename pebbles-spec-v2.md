@@ -22,8 +22,9 @@ the UI is sample data.
 A self-hosted data analysis platform — data lakes, notebooks, jobs and dashboards —
 positioned as a free alternative to Databricks and Snowflake. **[decided]**
 
-The differentiator is deployment economics: it installs as Docker or LXC containers on
-hardware you already own. No licence cost, no per-second compute billing. **[decided]**
+The differentiator is deployment economics: it installs as Docker, Podman **[new]** or LXC
+containers on hardware you already own. No licence cost, no per-second compute billing.
+**[decided]**
 
 Target deployment is hybrid / bring-your-own-cloud. **[decided]**
 Sample data domain throughout is healthcare claims. **[decided]**
@@ -59,7 +60,7 @@ container *is* gets decided at setup, not at build. **[new]**
 Engines are registered *on the main*. **[new]** Flow:
 
 1. Admin opens **Engines → Register engine** on the main. The screen shows a
-   **single-use join token** and a copy-paste run command for Docker and for LXC.
+   **single-use join token** and a copy-paste run command for Docker/Podman and for LXC.
    **[decided]** Each token registers exactly one engine and expires after a short window
    (default 24 h) if unused; tokens are listed and revocable under Settings → Workspace ·
    admin → Compute runtime. Scripted fleet installs mint N tokens via the API rather than
@@ -115,9 +116,13 @@ Engines are registered *on the main*. **[new]** Flow:
 
 The user-facing noun is **Engine**, never "cluster". **[decided]**
 
-- Backend is Docker **or** LXC, both supported; Settings sets the default for new engines,
-  with per-engine override. **[decided]** LXC is the better fit for GPU passthrough and
-  long-lived interactive engines; Docker for short-lived job engines. **[inferred v1, kept]**
+- Backend is Docker, Podman **[new]**, or LXC — all supported; Settings sets the default
+  for new engines, with per-engine override. **[decided]** Podman is driven through its
+  Docker-compatible API and is **rootful-only in v1** — rootless uid remapping would break
+  the host-uid identity model (§3 Identity). **[new + proposed detail]** The LXC backend
+  targets **Incus** (the community LXC manager); LXD compatibility is incidental, not
+  claimed. **[proposed]** LXC is the better fit for GPU passthrough and long-lived
+  interactive engines; Docker/Podman for short-lived job engines. **[inferred v1, kept]**
 - Per-engine config: memory limit, CPU limit, scratch volume, host pinning, auto-stop on
   idle, enabled kernels — plus, now, **access** (everyone / group / user), **max concurrent
   sessions**, and **allow dedicated sessions** (on/off). **[built + new]**

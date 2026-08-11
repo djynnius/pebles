@@ -1,1 +1,41 @@
-# pebles
+# pe{b}les
+
+**Pebbles** is a self-hosted data platform — a data lake with time travel, multi-user
+notebooks, drag-and-drop pipelines, dashboards, git integration, and a local AI
+assistant — that turns hardware you already own into a Databricks alternative.
+**$0 licence cost. No metered compute. No data leaves your network.**
+
+One container image, one setup question ("is this the main, or an engine?"), and a small
+team has a complete platform in under an hour — on **Docker, Podman, or LXC (Incus)**.
+
+## How it works
+
+- **One image, role at first boot** — `PEBBLES_ROLE=main` runs the control plane (Flask
+  UI, Postgres catalog, jobs); `PEBBLES_ROLE=engine` runs compute. A single container is
+  a complete product.
+- **Engines, not clusters** — compute is DuckDB with DuckLake storage (Parquet files +
+  Postgres catalog, snapshots with time travel). Scale by registering more engines.
+- **UNIX accounts are the permission system** — every Pebbles user is a real host
+  account; sessions, files, lake data, and jobs are all governed by uid/gid and
+  filesystem permissions. There is no second ACL system.
+- **`pebblesd` (Rust) is the only privileged component**; the web tier is a thin Flask
+  app that can only act through its API.
+- **Nkoyo**, the assistant, runs on local Ollama models. Fully air-gapped operation is a
+  hard requirement.
+
+## Status
+
+**Pre-code — Phase 0 (Foundation) starting.** The design is complete and the repo holds
+the scaffold: Rust workspace, Flask skeleton, Containerfile, and CI. Nothing installable
+yet — see `HOWTO.md` for what you *can* run today.
+
+## Documents
+
+| File | What it is |
+|---|---|
+| `pebbles-prd.md` | Product requirements (stable REQ/NFR IDs, priorities, phasing) |
+| `pebbles-spec-v2.md` | Design & architecture spec — source of truth for UX and technical decisions |
+| `pebbles-implementation-plan.md` | Stack, repo layout, runtime strategy, CI/CD, Phase 0 milestones |
+| `ui_ux.html` | Interactive v15 prototype — source of truth for visual design (open in a browser) |
+| `HOWTO.md` | What can be run right now, and how |
+| `CHANGELOG.md` | Notable changes |
