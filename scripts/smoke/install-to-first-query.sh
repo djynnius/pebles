@@ -135,22 +135,27 @@ pd -H 'Content-Type: application/json' \
   -d '{"id":10,"op":"write","path":"/home/maya/claims.csv","content":"claim_id,amount\nC-1,120.50\nC-2,80.00\n"}' \
   "http://pebblesd/sessions/$id_maya/exec" | grep -q '"ok":true' \
   || { echo "FAIL: could not write maya's CSV" >&2; exit 1; }
-sql() { pd -H 'Content-Type: application/json' \
+# -s (not -fsS): a failing exec must still SHOW us its body, not die silently.
+sql() { "$RUNTIME" exec "$NAME" curl -s --unix-socket /run/pebbles/pebblesd.sock \
+  -H 'Content-Type: application/json' \
   -d "{\"id\":11,\"op\":\"sql\",\"catalog\":\"claims\",\"sql\":\"$1\"}" \
   "http://pebblesd/sessions/$id_maya/exec"; }
-sql "CREATE TABLE claims_t AS SELECT * FROM read_csv_auto('/home/maya/claims.csv');" \
-  | grep -q '"ok":true' || { echo "FAIL: CREATE TABLE from CSV failed" >&2; exit 1; }
-sql "INSERT INTO claims_t VALUES ('C-3', 42.00);" | grep -q '"ok":true' \
-  || { echo "FAIL: INSERT failed" >&2; exit 1; }
-sql "SELECT count(*) AS c FROM claims_t;" | grep -q '"c":3' \
-  || { echo "FAIL: expected 3 rows after insert" >&2; exit 1; }
+expect() { # expect <pattern> <label> <payload>
+  grep -q "$1" <<<"$3" || { echo "FAIL: $2 — got: $3" >&2; exit 1; }
+}
+expect '"ok":true' "CREATE TABLE from CSV" \
+  "$(sql "CREATE TABLE claims_t AS SELECT * FROM read_csv_auto('/home/maya/claims.csv');")"
+expect '"ok":true' "INSERT" "$(sql "INSERT INTO claims_t VALUES ('C-3', 42.00);")"
+expect '"c":3' "count after insert" "$(sql "SELECT count(*) AS c FROM claims_t;")"
 
 echo "==> time travel: the pre-insert snapshot still answers (REQ-24)"
 snaps="$(sql "SELECT snapshot_id FROM ducklake_snapshots('claims') ORDER BY snapshot_id;")"
-prev_ver="$(grep -o '"snapshot_id":[0-9]*' <<<"$snaps" | tail -2 | head -1 | cut -d: -f2)"
-[ -n "$prev_ver" ] || { echo "FAIL: no snapshots listed: $snaps" >&2; exit 1; }
-sql "SELECT count(*) AS c FROM claims_t AT (VERSION => $prev_ver);" | grep -q '"c":2' \
-  || { echo "FAIL: time-travel to snapshot $prev_ver did not return 2 rows" >&2; exit 1; }
+echo "    snapshots: $snaps"
+prev_ver="$({ grep -o '"snapshot_id":[0-9]*' <<<"$snaps" || true; } | tail -2 | head -1 | cut -d: -f2)"
+[ -n "$prev_ver" ] || { echo "FAIL: no snapshots listed" >&2; exit 1; }
+tt="$(sql "SELECT count(*) AS c FROM claims_t AT (VERSION => $prev_ver);")"
+echo "    at version $prev_ver: $tt"
+expect '"c":2' "time-travel to snapshot $prev_ver" "$tt"
 
 echo "==> results stream over SSE through the web tier (REQ-31)"
 jar5="$(mktemp)"
