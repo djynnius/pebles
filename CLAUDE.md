@@ -15,6 +15,8 @@ Each document is the source of truth for a different concern. When they conflict
 - `ui_ux.html` — the v15 interactive prototype (source of truth for **visual design**). A self-extracting single-file bundle (React + d3); open it in a browser, don't try to read it as source. Sample data only — every number and username in it is fake.
 - `CHANGELOG.md`, `HOWTO.md` — currently empty placeholders.
 
+**Keep docs in sync while building:** update `README.md`, `CHANGELOG.md`, `HOWTO.md`, and `pebbles-prd.md` as required with every change that affects behavior, usage, or scope — treat it as part of the definition of done, not a separate task.
+
 ## Planned architecture (from spec v2)
 
 - **One container image, role at first boot**: `PEBBLES_ROLE=main` (control plane: Postgres catalog, Airflow scheduler, Flask UI, `pebblesd` supervisor) or `PEBBLES_ROLE=engine` (compute: `pebblesd` + kernels). Engines join the main via single-use tokens.
