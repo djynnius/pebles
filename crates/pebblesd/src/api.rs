@@ -24,6 +24,7 @@ pub struct AppState {
     /// kernel binary is absent in a dev run).
     pub broker: Option<Arc<Broker>>,
     pub default_session_memory: u64,
+    pub config_dir: std::path::PathBuf,
 }
 
 pub fn router(role: Role, state: AppState) -> Router {
@@ -72,15 +73,24 @@ fn error(status: StatusCode, err: impl ToString) -> (StatusCode, Json<ApiError>)
     )
 }
 
-async fn create_user(Json(req): Json<CreateUserRequest>) -> ApiResult<UserInfo> {
+async fn create_user(
+    State(state): State<AppState>,
+    Json(req): Json<CreateUserRequest>,
+) -> ApiResult<UserInfo> {
     if req.password.len() < 8 {
         return Err(error(
             StatusCode::UNPROCESSABLE_ENTITY,
             "password must be at least 8 characters",
         ));
     }
+    let config_dir = state.config_dir.clone();
     let result = tokio::task::spawn_blocking(move || {
-        pebbles_identity::host::create_user(&req.username, &req.password)
+        let user = pebbles_identity::host::create_user(&req.username, &req.password)?;
+        // Identity must survive "new image, same volume" upgrades (REQ-09/11).
+        if let Err(err) = pebbles_identity::host::persist_users(&config_dir) {
+            tracing::error!(%err, "persisting account snapshot failed");
+        }
+        Ok::<_, IdentityError>(user)
     })
     .await
     .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?;

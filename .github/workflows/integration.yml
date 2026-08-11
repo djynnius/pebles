@@ -1,9 +1,10 @@
-# Cross-runtime integration matrix. Every cell runs the SAME acceptance script,
-# scripts/smoke/install-to-first-query.sh, which grows until it encodes the Phase 0
-# exit criterion (implementation plan §7).
+# Cross-runtime integration matrix (M0.6 — the Phase 0 exit): every cell runs the
+# SAME acceptance script, scripts/smoke/install-to-first-query.sh, which encodes
+# "Ade installs one container and Maya runs a query, each as themselves."
 #
-# Matrix today: docker. The podman-rootful and incus cells (plus the main+engine
-# topology and the zero-egress assertion) land with milestone M0.6.
+# docker/podman cells run the container on an INTERNAL network (zero egress, NFR-03).
+# The incus cell converts the OCI image to a system-container image and runs it
+# unprivileged with the ADR-001 idmap — pebblesd-as-init handles DHCP itself.
 name: Integration
 
 on:
@@ -23,7 +24,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runtime: [docker] # M0.6: [docker, podman, incus]
+        include:
+          - runtime: docker
+            image: pebbles:it
+            ctr: docker
+          - runtime: podman # rootful — rootless is refused by design (REQ-11)
+            image: localhost/pebbles:it
+            ctr: sudo podman
+          - runtime: incus
+            image: pebbles-it
+            ctr: sudo incus
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -35,5 +45,30 @@ jobs:
           load: true
           tags: pebbles:it
           cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Load the image into rootful podman
+        if: matrix.runtime == 'podman'
+        run: docker save pebbles:it | sudo podman load
+
+      - name: Set up incus and import the converted system-container image
+        if: matrix.runtime == 'incus'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends incus skopeo umoci xz-utils
+          # Delegate the reserved Pebbles uid range (ADR-001) to root, then restart
+          # so the daemon rereads subuid/subgid.
+          echo "root:70000:5000" | sudo tee -a /etc/subuid /etc/subgid
+          sudo systemctl restart incus
+          sudo incus admin init --minimal
+          sudo image/lxc/oci-to-incus.sh pebbles:it dist/incus x86_64 it
+          sudo incus image import dist/incus/metadata.tar.xz dist/incus/rootfs.tar.xz \
+            --alias pebbles-it
+          sudo incus profile create pebbles
+          printf 'config:\n  raw.idmap: |-\n    both 70000-74999 70000-74999\n' \
+            | sudo incus profile edit pebbles
+
       - name: install-to-first-query (${{ matrix.runtime }}, single-box)
-        run: RUNTIME=${{ matrix.runtime }} scripts/smoke/install-to-first-query.sh pebbles:it
+        run: |
+          RUNTIME=${{ matrix.runtime }} CTR_CMD="${{ matrix.ctr }}" \
+            scripts/smoke/install-to-first-query.sh "${{ matrix.image }}"

@@ -13,9 +13,15 @@ const WEB_USER: &str = "pebbles-web";
 const PG_SOCKET_DIR: &str = "/run/postgresql";
 
 pub fn for_role(cfg: &Config) -> Vec<ServiceSpec> {
+    let mut services = Vec::new();
+    // As PID 1 of a system container (Incus), pebblesd IS the init: nothing else
+    // will configure the network. Docker/Podman pre-configure it and the service
+    // detects that and stands down.
+    if let Some(spec) = network() {
+        services.push(spec);
+    }
     match cfg.role {
         Role::Main => {
-            let mut services = Vec::new();
             match postgres(cfg) {
                 Some(spec) => services.push(spec),
                 None => tracing::warn!("postgres not available; catalog services disabled"),
@@ -24,11 +30,45 @@ pub fn for_role(cfg: &Config) -> Vec<ServiceSpec> {
                 Some(spec) => services.push(spec),
                 None => tracing::warn!("web tier not available; UI disabled"),
             }
-            services
         }
-        // Engine services (session broker, kernels) land in M0.4.
-        Role::Engine => Vec::new(),
+        // Engine-role services (session broker serving a remote main) land in Phase 1.
+        Role::Engine => {}
     }
+    services
+}
+
+/// Loopback + DHCP on eth0, via busybox, only when the runtime didn't already
+/// configure the interface (no eth0 routes = we're the init that must do it).
+fn network() -> Option<ServiceSpec> {
+    let busybox = Path::new("/bin/busybox");
+    if !Path::new("/sys/class/net/eth0").exists() || !busybox.exists() {
+        return None;
+    }
+    let routes = std::fs::read_to_string("/proc/net/route").unwrap_or_default();
+    if routes.lines().skip(1).any(|l| l.starts_with("eth0")) {
+        return None; // Docker/Podman already configured networking
+    }
+    let bb = |args: &[&str]| Exec {
+        program: busybox.to_path_buf(),
+        args: args.iter().map(|s| s.to_string()).collect(),
+        envs: vec![],
+        run_as: None,
+    };
+    Some(ServiceSpec {
+        name: "network".into(),
+        pre: vec![
+            bb(&["ip", "link", "set", "lo", "up"]),
+            bb(&["ip", "link", "set", "eth0", "up"]),
+        ],
+        exec: bb(&[
+            "udhcpc",
+            "-f",
+            "-i",
+            "eth0",
+            "-s",
+            "/opt/pebbles/scripts/udhcpc.sh",
+        ]),
+    })
 }
 
 /// Postgres for the DuckLake catalog (spec §3 Storage). Unix socket only — nothing

@@ -108,6 +108,19 @@ pub fn pebbles_users(content: &str) -> Vec<ProvisionedUser> {
         .collect()
 }
 
+/// Shadow lines belonging to the named users (for persistence into the config
+/// volume — accounts must survive "pull new image, same volume" upgrades, REQ-09).
+pub fn filter_shadow_lines<'a>(shadow: &'a str, names: &[&str]) -> Vec<&'a str> {
+    shadow
+        .lines()
+        .filter(|line| {
+            line.split(':')
+                .next()
+                .is_some_and(|name| names.contains(&name))
+        })
+        .collect()
+}
+
 /// Verify `password` against a shadow-format database. Pure and testable; the
 /// root-only read of `/etc/shadow` lives in [`host`]. Returns `NoSuchUser` when the
 /// account is absent, `Ok(false)` for wrong passwords and locked accounts.
@@ -186,6 +199,7 @@ impl UidAllocator {
 pub mod host {
     use super::*;
     use std::io::Write;
+    use std::path::Path;
     use std::process::{Command, Stdio};
 
     /// Create a real UNIX account (REQ-11/13): uid == gid (personal primary group),
@@ -242,6 +256,87 @@ pub mod host {
         Ok(pebbles_users(&std::fs::read_to_string("/etc/passwd")?)
             .into_iter()
             .find(|u| u.username == name))
+    }
+
+    /// Snapshot every Pebbles account (passwd + shadow lines) into the config
+    /// volume so identity survives image upgrades (REQ-09/11). Root-only files.
+    pub fn persist_users(state_dir: &Path) -> Result<(), IdentityError> {
+        use std::os::unix::fs::PermissionsExt;
+        let passwd = std::fs::read_to_string("/etc/passwd")?;
+        let shadow = std::fs::read_to_string("/etc/shadow")?;
+        let users = pebbles_users(&passwd);
+        let names: Vec<&str> = users.iter().map(|u| u.username.as_str()).collect();
+
+        let dir = state_dir.join("identity");
+        std::fs::create_dir_all(&dir)?;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+        let passwd_lines: Vec<&str> = passwd
+            .lines()
+            .filter(|l| l.split(':').next().is_some_and(|n| names.contains(&n)))
+            .collect();
+        for (file, content) in [
+            ("passwd", passwd_lines.join("\n")),
+            ("shadow", filter_shadow_lines(&shadow, &names).join("\n")),
+        ] {
+            let path = dir.join(file);
+            std::fs::write(&path, format!("{content}\n"))?;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        }
+        Ok(())
+    }
+
+    /// Recreate any persisted account missing from this container (fresh image,
+    /// same config volume). Returns how many were restored.
+    pub fn restore_users(state_dir: &Path) -> Result<usize, IdentityError> {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = state_dir.join("identity");
+        let Ok(stored_passwd) = std::fs::read_to_string(dir.join("passwd")) else {
+            return Ok(0); // nothing persisted yet
+        };
+        let stored_shadow = std::fs::read_to_string(dir.join("shadow")).unwrap_or_default();
+        let current = std::fs::read_to_string("/etc/passwd")?;
+
+        let mut restored = 0;
+        for user in pebbles_users(&stored_passwd) {
+            if parse_passwd(&current, &user.username).is_some() {
+                continue;
+            }
+            let id = user.uid.to_string();
+            run("groupadd", &["-g", &id, &user.username], None)?;
+            run(
+                "useradd",
+                &[
+                    "-u",
+                    &id,
+                    "-g",
+                    &id,
+                    "-M",
+                    "-d",
+                    &user.home,
+                    "-s",
+                    "/bin/bash",
+                    &user.username,
+                ],
+                None,
+            )?;
+            if !Path::new(&user.home).exists() {
+                std::fs::create_dir_all(&user.home)?;
+            }
+            std::os::unix::fs::chown(&user.home, Some(user.uid), Some(user.gid))?;
+            std::fs::set_permissions(&user.home, std::fs::Permissions::from_mode(0o700))?;
+            if let Some(hash_line) = filter_shadow_lines(&stored_shadow, &[&user.username]).first()
+            {
+                if let Some(hash) = hash_line.split(':').nth(1) {
+                    run(
+                        "chpasswd",
+                        &["-e"],
+                        Some(&format!("{}:{hash}\n", user.username)),
+                    )?;
+                }
+            }
+            restored += 1;
+        }
+        Ok(restored)
     }
 
     fn set_mode(path: &str, mode: u32) -> Result<(), IdentityError> {
@@ -325,6 +420,16 @@ mod tests {
         for bad in ["", "Maya", "1maya", "maya!", "a".repeat(33).as_str(), "-x"] {
             assert!(validate_username(bad).is_err(), "{bad:?} should be invalid");
         }
+    }
+
+    #[test]
+    fn shadow_lines_filter_to_the_named_users_only() {
+        let shadow = "root:*:1::::::\nmaya:$6$abc:19900::::::\ntomas:$6$def:19900::::::\n";
+        assert_eq!(
+            filter_shadow_lines(shadow, &["maya", "tomas"]),
+            vec!["maya:$6$abc:19900::::::", "tomas:$6$def:19900::::::"]
+        );
+        assert!(filter_shadow_lines(shadow, &["ghost"]).is_empty());
     }
 
     #[test]

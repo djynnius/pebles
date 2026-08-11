@@ -8,6 +8,7 @@
 mod api;
 mod catalog;
 mod config;
+mod migrations;
 mod services;
 mod supervisor;
 mod wizard;
@@ -43,11 +44,22 @@ async fn main() -> anyhow::Result<()> {
     let cfg = config::Config::load(wizard::prompt_role)?;
     tracing::info!(role = %cfg.role, config = %cfg.config_dir.display(), "pebblesd starting");
 
+    // Same volume, fresh image (REQ-09): recreate persisted accounts before
+    // anything can reference them.
+    match pebbles_identity::host::restore_users(&cfg.config_dir) {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(restored = n, "restored persisted UNIX accounts"),
+        Err(err) => tracing::error!(%err, "restoring persisted accounts failed"),
+    }
+
     let socket_path = cfg.socket_path();
     let listener = bind_api_socket(&socket_path)?;
     tracing::info!(socket = %socket_path.display(), "privileged API listening");
 
     let sup = supervisor::Supervisor::start(services::for_role(&cfg));
+    if cfg.role == pebbles_api::Role::Main {
+        tokio::spawn(migrations::run(cfg.config_dir.clone()));
+    }
     let state = session_state(&cfg);
 
     let mut sigterm = signal(SignalKind::terminate())?;
@@ -99,5 +111,6 @@ fn session_state(cfg: &config::Config) -> api::AppState {
     api::AppState {
         broker,
         default_session_memory,
+        config_dir: cfg.config_dir.clone(),
     }
 }

@@ -26,7 +26,7 @@ ARG DUCKDB_VERSION=1.5.2
 # git: REQ-32..37 · openssh-server: SFTP parity (REQ-15) · postgresql: DuckLake catalog
 # The `pebbles` group gates the pebblesd socket; `pebbles-web` runs gunicorn (never root).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git openssh-server ca-certificates curl postgresql \
+    && apt-get install -y --no-install-recommends git openssh-server ca-certificates curl postgresql busybox \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system pebbles \
     && useradd --system --gid pebbles --home-dir /nonexistent --shell /usr/sbin/nologin pebbles-web
@@ -46,6 +46,8 @@ RUN curl -fsSL -o /tmp/duckdb.zip \
 COPY --from=rust-builder /src/target/release/pebblesd /usr/local/bin/pebblesd
 COPY --from=rust-builder /src/target/release/sql-runner /usr/local/bin/pebbles-sql-runner
 COPY --from=web-builder /opt/pebbles/web /opt/pebbles/web
+COPY image/rootfs/ /
+RUN chmod 755 /opt/pebbles/scripts/udhcpc.sh
 
 # pebblesd is the init for every runtime: OCI entrypoint here, /sbin/init for Incus
 # system containers. One init contract (implementation plan §2.1).

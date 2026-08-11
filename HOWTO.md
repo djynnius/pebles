@@ -31,8 +31,22 @@ UNIX user, streaming results over SSE — try `SELECT 42 AS answer;` or load a C
 from your home with `read_csv_auto('/home/maya/file.csv')`. Time travel works:
 `SELECT * FROM t AT (VERSION => 1);`. `/healthz` shows the daemon's role proxied
 over the privileged socket. Omit `-e PEBBLES_ROLE=…` and run with `-it` to get the
-setup wizard instead. Podman (rootful) works with the same flags; Incus
-instructions land with M0.6.
+setup wizard instead. Podman (rootful) works with the same flags.
+
+### Incus
+
+Grab `metadata.tar.xz` + `rootfs.tar.xz` from the Image workflow's
+`pebbles-incus-amd64` artifact (or convert locally with
+`image/lxc/oci-to-incus.sh`), then:
+
+```sh
+echo "root:70000:5000" | sudo tee -a /etc/subuid /etc/subgid   # ADR-001 range
+sudo systemctl restart incus
+incus image import metadata.tar.xz rootfs.tar.xz --alias pebbles
+incus profile create pebbles && incus profile edit pebbles < deploy/incus/profile.yaml
+incus launch pebbles pebbles-main -p default -p pebbles -c environment.PEBBLES_ROLE=main
+incus list pebbles-main   # open http://<its IP>:8080
+```
 
 ## Explore the product
 

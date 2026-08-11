@@ -7,6 +7,19 @@ All notable changes to Pebbles are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **M0.6 — three runtimes + upgrade scaffold (Phase 0 exit)**: the CI integration
+  matrix now runs the full install-to-first-query acceptance script on **Docker,
+  rootful Podman, and Incus** — the Incus cell converts the OCI image to a
+  system-container image and runs it unprivileged with the ADR-001 idmap. As the
+  init of a system container, pebblesd now configures networking itself (loopback
+  + busybox DHCP on eth0), standing down when Docker/Podman already did it. The
+  docker/podman cells run on an **internal network with zero egress** — the whole
+  product path works air-gapped (NFR-03). Identity now survives upgrades:
+  accounts snapshot into the config volume and restore on boot (REQ-09/11).
+  A schema-version stamp plus a **mandatory pre-migration `pg_dumpall` backup**
+  form the migration scaffold, and a nightly workflow proves the whole upgrade
+  path (old edge → current main on the same volumes, forced schema bump, data
+  and accounts intact) plus an arm64 smoke cell.
 - **M0.5 — DuckLake + SQL editor + SSE**: the lake is real. The image vendors the
   DuckDB CLI (pinned) with the `ducklake` and `postgres` extensions installed at
   build time — sessions load them from a shared read-only directory, never from
