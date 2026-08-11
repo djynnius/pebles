@@ -265,6 +265,39 @@ def test_notebook_create_edit_save_and_run_cells():
     assert "claims-eda" in listing
 
 
+def test_dashboard_create_save_and_tile_stream():
+    c = signed_in()
+    assert c.get("/dashboards").status_code == 200
+
+    assert c.post("/dashboards", data={"name": "claims-kpis"}).status_code == 302
+    page = c.get("/dashboards/claims-kpis")
+    assert page.status_code == 200
+    assert "Edit" in page.get_data(as_text=True)
+
+    saved = c.post(
+        "/dashboards/claims-kpis/save",
+        json={
+            "catalog": "claims",
+            "tiles": [
+                {"title": "Total claims", "kind": "stat", "sql": "SELECT count(*) FROM t;"},
+                {"title": "By state", "kind": "bars", "sql": "SELECT s, n FROM x;"},
+                {"title": "Bad kind", "kind": "sparkle", "sql": "SELECT 1;"},
+            ],
+        },
+    )
+    assert saved.status_code == 200
+
+    tile_stream = c.get("/dashboards/claims-kpis/tiles/0/stream").get_data(as_text=True)
+    assert "event: result" in tile_stream and '"answer": 42' in tile_stream
+
+    # The invalid kind was dropped on save, so tile index 2 must not exist.
+    gone = c.get("/dashboards/claims-kpis/tiles/2/stream").get_data(as_text=True)
+    assert "no such tile" in gone
+
+    listing = c.get("/dashboards").get_data(as_text=True)
+    assert "claims-kpis" in listing
+
+
 def test_notebook_names_are_validated():
     c = signed_in()
     assert c.post("/notebooks", data={"name": "../evil"}).status_code == 422

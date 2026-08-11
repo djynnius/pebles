@@ -372,6 +372,135 @@ def create_app(pebblesd: PebblesdClient | None = None) -> Flask:
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    def _load_dashboard(username: str, name: str) -> dict | None:
+        got = _session_op(username, {"op": "read", "path": f"dashboards/{name}.json"})
+        if not got.get("ok"):
+            return None
+        try:
+            dash = json.loads(got.get("content", ""))
+        except json.JSONDecodeError:
+            return None
+        dash.setdefault("catalog", None)
+        dash.setdefault("tiles", [])
+        return dash
+
+    @app.get("/dashboards")
+    def dashboards_page():  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return redirect(url_for("login_form"))
+        dashboards = []
+        try:
+            listing = _session_op(user["username"], {"op": "list", "path": "dashboards"})
+            if listing.get("ok"):
+                dashboards = [
+                    e[: -len(".json")] for e in listing.get("entries", []) if e.endswith(".json")
+                ]
+        except (OSError, RuntimeError, ValueError):
+            pass
+        return render_template("dashboards.html", user=user, dashboards=dashboards)
+
+    @app.post("/dashboards")
+    def dashboards_create():  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return redirect(url_for("login_form"))
+        name = request.form.get("name", "").strip()
+        if not NOTEBOOK_NAME.match(name):
+            return render_template(
+                "dashboards.html", user=user, dashboards=[], error="Invalid dashboard name."
+            ), 422
+        empty = {"catalog": None, "tiles": []}
+        _session_op(
+            user["username"],
+            {"op": "write", "path": f"dashboards/{name}.json", "content": json.dumps(empty)},
+        )
+        return redirect(url_for("dashboard_page", name=name))
+
+    @app.get("/dashboards/<name>")
+    def dashboard_page(name):  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return redirect(url_for("login_form"))
+        if not NOTEBOOK_NAME.match(name):
+            return redirect(url_for("dashboards_page"))
+        dash = _load_dashboard(user["username"], name)
+        if dash is None:
+            return redirect(url_for("dashboards_page"))
+        try:
+            catalogs = client.list_catalogs()
+        except (OSError, RuntimeError, ValueError):
+            catalogs = []
+        return render_template(
+            "dashboard.html", user=user, name=name, dashboard=dash, catalogs=catalogs
+        )
+
+    @app.post("/dashboards/<name>/save")
+    def dashboard_save(name):  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return jsonify({"error": "not signed in"}), 401
+        if not NOTEBOOK_NAME.match(name):
+            return jsonify({"error": "bad name"}), 422
+        dash = request.get_json(silent=True) or {}
+        payload = {
+            "catalog": dash.get("catalog") or None,
+            "tiles": [
+                {
+                    "title": str(t.get("title", ""))[:80],
+                    "sql": str(t.get("sql", "")),
+                    "kind": t.get("kind", "table"),
+                }
+                for t in dash.get("tiles", [])
+                if t.get("kind", "table") in ("table", "stat", "bars")
+            ],
+        }
+        _session_op(
+            user["username"],
+            {"op": "write", "path": f"dashboards/{name}.json", "content": json.dumps(payload)},
+        )
+        return jsonify({"saved": True})
+
+    @app.get("/dashboards/<name>/tiles/<int:index>/stream")
+    def dashboard_tile_stream(name, index):  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return jsonify({"error": "not signed in"}), 401
+        if not NOTEBOOK_NAME.match(name):
+            return jsonify({"error": "bad name"}), 422
+
+        def sse(event: str, data: dict) -> str:
+            return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+        result = None
+        error = None
+        try:
+            dash = _load_dashboard(user["username"], name)
+            if dash is None or index >= len(dash["tiles"]):
+                error = "no such tile"
+            else:
+                result = _run_sql(
+                    user["username"], dash["tiles"][index]["sql"], dash.get("catalog")
+                )
+        except (OSError, RuntimeError, ValueError) as exc:
+            error = str(exc)
+
+        def stream():
+            yield sse("status", {"state": "running"})
+            if error is not None:
+                yield sse("error", {"error": error})
+            elif result and result.get("ok"):
+                yield sse("result", result)
+            else:
+                yield sse("error", {"error": (result or {}).get("error", "tile failed")})
+            yield sse("done", {})
+
+        return Response(
+            stream(),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     @app.post("/engines/cancel-reservation")
     def cancel_reservation():  # pyright: ignore[reportUnusedFunction]
         if session.get("user") is None:

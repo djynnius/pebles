@@ -7,6 +7,14 @@ All notable changes to Pebbles are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **M1.5 — dashboards**: a gallery plus a rearrangeable single-dashboard view
+  (REQ-28). Dashboards are JSON files in `~/dashboards` — same identity story
+  as notebooks — holding tiles of saved SQL that run through the viewer's own
+  session against a chosen catalog, streaming over SSE. Three tile kinds:
+  table, stat (big single value), and bars (dependency-free CSS bar chart —
+  nothing fetched at runtime, NFR-03). Edit mode adds, removes, and reorders
+  tiles; sharing beyond the owner arrives with catalog grants doing the data
+  side today and dashboard-level sharing tracked for Phase 2.
 - **Miniforge runtimes + bundled scientific stack (REQ-51/52) and R cells**:
   Python, R and Jupyter now ship in-image via miniforge (conda-forge) at
   `/opt/conda`, with the owner-specified package set out of the box — Python:

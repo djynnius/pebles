@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+  <div class="page">
+    <p class="nav">
+      <a href="{{ url_for('index') }}">home</a> · <strong>dashboards</strong>
+      · <a href="{{ url_for('notebooks_page') }}">notebooks</a>
+      · <a href="{{ url_for('sql_editor') }}">sql</a>
+      · signed in as {{ user.username }} · <a href="{{ url_for('logout') }}">sign out</a>
+    </p>
+    <h2>Dashboards</h2>
+    {% if dashboards %}
+      <div class="card wide">
+        <table>
+          <tbody>
+          {% for d in dashboards %}
+            <tr><td><a href="{{ url_for('dashboard_page', name=d) }}">{{ d }}</a></td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="status">No dashboards yet — create the first one below.</p>
+    {% endif %}
+    <form class="card wide" method="post" action="{{ url_for('dashboards_create') }}">
+      <label for="name">New dashboard</label>
+      <input id="name" name="name" pattern="[a-z0-9][a-z0-9_-]*" required>
+      <button type="submit">Create dashboard</button>
+      {% if error %}<p class="error">{{ error }}</p>{% endif %}
+    </form>
+  </div>
+{% endblock %}
