@@ -2,6 +2,7 @@
 name = "sql-runner"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "SQL session kernel: runs DuckDB + DuckLake under the session user's uid, speaking a line protocol to pebblesd."
 
 [dependencies]

@@ -2,6 +2,7 @@
 name = "pebbles-api"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "Shared API types for pebblesd. The OpenAPI schema generated from this crate is the only contract the web tier may build against (NFR-01)."
 
 [dependencies]

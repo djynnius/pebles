@@ -7,6 +7,11 @@ All notable changes to Pebbles are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **MIT license**: `LICENSE` at the repo root, declared in every Rust crate and
+  the Python package. Bundled third-party components (DuckDB, Airflow, Postgres,
+  the miniforge Python/R stack, …) are invoked as separate processes and keep
+  their own licenses; a harvested third-party notices manifest is planned for
+  the release pipeline.
 - **Phase 2 — SFTP & Files parity (REQ-15/32)**: OpenSSH now runs under pebblesd
   supervision on both roles, PAM/shadow-authenticated — the same password that
   signs into the web UI logs into SFTP, and files dropped there land in the

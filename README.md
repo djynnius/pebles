@@ -47,3 +47,9 @@ what exists.
 | `ui_ux.html` | Interactive v15 prototype — source of truth for visual design (open in a browser) |
 | `HOWTO.md` | What can be run right now, and how |
 | `CHANGELOG.md` | Notable changes |
+
+## License
+
+MIT — see `LICENSE`. The image bundles third-party components (DuckDB, Airflow,
+Postgres, the miniforge Python/R stack, and others) under their own licenses;
+they are invoked as separate processes and retain their respective terms.

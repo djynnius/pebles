@@ -2,6 +2,7 @@
 name = "pebblesd"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "The Pebbles daemon: PID-1 supervisor, role bootstrap, privileged local API (NFR-01/02)."
 
 [dependencies]

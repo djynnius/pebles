@@ -2,6 +2,7 @@
 name = "pebbles-runtime"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "ContainerRuntime abstraction over Docker, rootful Podman, and Incus, used only for main-managed engines and host inspection."
 
 [dependencies]

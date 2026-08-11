@@ -5,6 +5,7 @@ members = ["crates/*", "kernels/sql-runner"]
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 
 [workspace.dependencies]
 pebbles-api = { path = "crates/pebbles-api" }
