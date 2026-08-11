@@ -52,6 +52,13 @@ All notable changes to Pebbles are documented here. The format follows
   correctly-owned files in her home.
 
 ### Fixed
+- **Jobs now run on Airflow 2.10 instead of 3.3.** Airflow 3's Task Execution API
+  (task supervisor → HTTP `/execution/…` with a JWT handshake) kept returning 404
+  in the supervised single-node setup despite correct URLs, `--apps all`, and
+  shared secrets. Airflow is a hidden, swappable internal dependency (spec risk
+  table); 2.10's LocalExecutor runs tasks as direct subprocesses against the
+  metadata DB — no execution API, no JWT, and only ONE supervised service (the
+  scheduler) instead of three. Deletes the entire failure class.
 - Hard timeouts so a hung Airflow CLI can't wedge a request handler or CI: the
   trigger path runs the CLI under a 60 s cap and every smoke curl carries
   `--max-time`. The api-server now serves all apps (`--apps all`) so task

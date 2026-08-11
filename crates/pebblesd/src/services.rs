@@ -76,48 +76,25 @@ fn airflow(cfg: &Config) -> Vec<ServiceSpec> {
         envs: envs.clone(),
         run_as: Some((uid, gid)),
     };
-    let bootstrap = || {
-        vec![
-            sh(crate::jobs::WAIT_PG_SH, None),
-            sh(crate::jobs::PROVISION_SH, Some((pg_uid, pg_gid))),
-        ]
-    };
-    let mut with_migrate = bootstrap();
-    with_migrate.push(Exec {
+    // Airflow 2.10 needs only ONE service: the scheduler with LocalExecutor runs
+    // tasks itself (subprocess against the metadata DB — no api-server, no
+    // dag-processor, no execution API). Pre-steps wait for Postgres, provision the
+    // role/db, and migrate the schema.
+    let mut pre = vec![
+        sh(crate::jobs::WAIT_PG_SH, None),
+        sh(crate::jobs::PROVISION_SH, Some((pg_uid, pg_gid))),
+    ];
+    pre.push(Exec {
         program: "sh".into(),
         args: vec!["-c".into(), crate::jobs::MIGRATE_SH.to_string()],
         envs: envs.clone(),
         run_as: Some((uid, gid)),
     });
-    vec![
-        ServiceSpec {
-            name: "airflow-api".into(),
-            pre: with_migrate,
-            // --apps all: the execution app must be served here too, or task
-            // supervisors get 404 from the execution API and every task fails.
-            exec: exec(&[
-                "api-server",
-                "--host",
-                "127.0.0.1",
-                "--port",
-                &crate::jobs::API_PORT.to_string(),
-                "--apps",
-                "all",
-            ]),
-        },
-        // Scheduler and dag-processor crash-restart with backoff until the
-        // migrated schema appears; the supervisor absorbs that window.
-        ServiceSpec {
-            name: "airflow-scheduler".into(),
-            pre: bootstrap(),
-            exec: exec(&["scheduler"]),
-        },
-        ServiceSpec {
-            name: "airflow-dag-processor".into(),
-            pre: bootstrap(),
-            exec: exec(&["dag-processor"]),
-        },
-    ]
+    vec![ServiceSpec {
+        name: "airflow-scheduler".into(),
+        pre,
+        exec: exec(&["scheduler"]),
+    }]
 }
 
 /// OpenSSH in SFTP-serving mode (REQ-15). Host keys live in the config volume so

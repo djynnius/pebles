@@ -29,9 +29,13 @@ ENV UV_PYTHON_DOWNLOADS=never
 RUN uv sync --no-dev
 
 ########## Airflow: its OWN venv (REQ-38; nothing outside it imports from it) ##########
+# Airflow 2.10 (not 3.x): its LocalExecutor runs tasks as direct subprocesses
+# against the metadata DB — no Task Execution API / JWT handshake to configure.
+# Airflow is a hidden, swappable internal dependency (spec §risks), and 2.10 is
+# the simplest reliable single-node headless executor.
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS airflow-builder
 WORKDIR /opt/pebbles/airflow
-ARG AIRFLOW_VERSION=3.3.0
+ARG AIRFLOW_VERSION=2.10.4
 ENV UV_PYTHON_DOWNLOADS=never
 RUN uv venv .venv \
     && uv pip install --python .venv/bin/python \
