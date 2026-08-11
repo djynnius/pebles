@@ -298,9 +298,12 @@ impl Broker {
         let kernel = |e: String| SessionError::Kernel(e);
         let mut cmd = Command::new(&self.cfg.kernel);
         cmd.env_clear()
-            // /opt/conda first: sessions get the miniforge Python/R/Jupyter
+            // The miniforge `pebbles` env first: sessions get the Python/R/Jupyter
             // runtimes and the bundled scientific stack (REQ-51/52).
-            .env("PATH", "/opt/conda/bin:/usr/local/bin:/usr/bin:/bin")
+            .env(
+                "PATH",
+                "/opt/conda/envs/pebbles/bin:/opt/conda/bin:/usr/local/bin:/usr/bin:/bin",
+            )
             .env("HOME", &req.home)
             .env("USER", &req.username)
             .env("LOGNAME", &req.username)
