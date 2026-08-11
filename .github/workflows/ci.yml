@@ -1,0 +1,86 @@
+# PR/main CI — fast, cached, path-filtered. Heavy work (image build, runtime matrix)
+# lives in image.yml / integration.yml. Design: implementation plan §7.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      python: ${{ steps.filter.outputs.python }}
+      docs: ${{ steps.filter.outputs.docs }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - 'crates/**'
+              - 'kernels/**'
+              - 'Cargo.toml'
+              - 'rust-toolchain.toml'
+            python:
+              - 'web/**'
+            docs:
+              - '**/*.md'
+
+  rust:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --workspace
+      # api-drift guard, v0: the schema must export and parse. The generated-client
+      # dirty-tree check lands when the Flask client is generated (M0.2).
+      - name: API schema exports cleanly
+        run: cargo run -p xtask -- api-schema | python3 -m json.tool > /dev/null
+
+  python:
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run ruff check .
+      - run: uv run pytest
+
+  docs:
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Required docs exist and CHANGELOG has an Unreleased section
+        run: |
+          set -e
+          for f in README.md CHANGELOG.md HOWTO.md CLAUDE.md \
+                   pebbles-prd.md pebbles-spec-v2.md pebbles-implementation-plan.md; do
+            [ -s "$f" ] || { echo "missing or empty: $f" >&2; exit 1; }
+          done
+          grep -q '^## \[Unreleased\]' CHANGELOG.md \
+            || { echo 'CHANGELOG.md needs an "## [Unreleased]" section' >&2; exit 1; }

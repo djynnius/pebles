@@ -1,0 +1,9 @@
+[package]
+name = "pebbles-session"
+version.workspace = true
+edition.workspace = true
+description = "Session broker: per-user engine session processes, memory admission control (REQ-16/18/19/20)."
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }

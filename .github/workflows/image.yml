@@ -1,0 +1,126 @@
+# Image build — CI does the heavy lifting (implementation plan §7).
+# PR: amd64 build (no push) + size gate + docker smoke.
+# main: native amd64 + arm64 builds (no QEMU) → manifest merge → GHCR :edge,
+#       then the Incus conversion artifacts.
+name: Image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/**'
+      - 'kernels/**'
+      - 'web/**'
+      - 'image/**'
+      - 'scripts/**'
+      - 'Cargo.toml'
+      - '.github/workflows/image.yml'
+  pull_request:
+    paths:
+      - 'crates/**'
+      - 'kernels/**'
+      - 'web/**'
+      - 'image/**'
+      - 'scripts/**'
+      - 'Cargo.toml'
+      - '.github/workflows/image.yml'
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  pr-build:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: image/Containerfile
+          load: true
+          tags: pebbles:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Size budget gate
+        run: scripts/ci/size-gate.sh pebbles:ci
+      - name: Smoke (docker single-box)
+        run: RUNTIME=docker scripts/smoke/install-to-first-query.sh pebbles:ci
+
+  build:
+    if: github.event_name == 'push'
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: image/Containerfile
+          push: true
+          tags: ${{ env.IMAGE }}:edge-${{ matrix.arch }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+  merge:
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Merge multi-arch manifest
+        run: |
+          docker buildx imagetools create -t "$IMAGE:edge" \
+            "$IMAGE:edge-amd64" "$IMAGE:edge-arm64"
+      - name: Size budget gate (uncompressed, amd64)
+        run: |
+          docker pull "$IMAGE:edge-amd64"
+          scripts/ci/size-gate.sh "$IMAGE:edge-amd64"
+
+  convert-incus:
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Convert OCI image to Incus artifact (amd64)
+        run: |
+          sudo apt-get update && sudo apt-get install -y skopeo umoci
+          docker pull "$IMAGE:edge-amd64"
+          image/lxc/oci-to-incus.sh "$IMAGE:edge-amd64" dist/incus-amd64 x86_64 edge
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pebbles-incus-amd64
+          path: dist/incus-amd64/
+          retention-days: 14

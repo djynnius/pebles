@@ -1,0 +1,10 @@
+[package]
+name = "pebbles-runtime"
+version.workspace = true
+edition.workspace = true
+description = "ContainerRuntime abstraction over Docker, rootful Podman, and Incus, used only for main-managed engines and host inspection."
+
+[dependencies]
+async-trait = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }

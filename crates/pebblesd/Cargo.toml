@@ -1,0 +1,16 @@
+[package]
+name = "pebblesd"
+version.workspace = true
+edition.workspace = true
+description = "The Pebbles daemon: PID-1 supervisor, role bootstrap, privileged local API (NFR-01/02)."
+
+[dependencies]
+anyhow = { workspace = true }
+axum = { workspace = true }
+pebbles-api = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

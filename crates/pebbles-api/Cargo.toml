@@ -1,0 +1,10 @@
+[package]
+name = "pebbles-api"
+version.workspace = true
+edition.workspace = true
+description = "Shared API types for pebblesd. The OpenAPI schema generated from this crate is the only contract the web tier may build against (NFR-01)."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+utoipa = { workspace = true }

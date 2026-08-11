@@ -1,0 +1,23 @@
+# Single-box Pebbles: one container is the whole product (REQ-04).
+#   docker compose -f deploy/docker/single-box.yml up -d
+services:
+  pebbles:
+    image: ghcr.io/djynnius/pebles:edge
+    container_name: pebbles-main
+    environment:
+      PEBBLES_ROLE: main
+    ports:
+      - "8080:8080"
+    volumes:
+      - pebbles-config:/var/lib/pebbles
+      - pebbles-home:/home # user homes; identity is real UNIX accounts (REQ-11)
+    # Default capabilities are required (setuid sessions) — do NOT add
+    # `security_opt: [no-new-privileges:true]` and do NOT use `privileged: true`.
+    cap_drop:
+      - NET_RAW
+      - MKNOD
+    restart: unless-stopped
+
+volumes:
+  pebbles-config:
+  pebbles-home:

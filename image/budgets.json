@@ -1,0 +1,12 @@
+{
+  "_comment": "Image size budgets, hard-gated in CI (scripts/ci/size-gate.sh). Raising a budget must happen in the same PR as the change that needs it, where reviewers can see it. The v1 budget pre-reserves Airflow's headroom (implementation plan §6).",
+  "active": "phase0",
+  "phase0": {
+    "compressed_max_bytes": 1288490188,
+    "uncompressed_max_bytes": 3221225472
+  },
+  "v1": {
+    "compressed_max_bytes": 2147483648,
+    "uncompressed_max_bytes": 4831838208
+  }
+}

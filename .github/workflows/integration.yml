@@ -1,0 +1,39 @@
+# Cross-runtime integration matrix. Every cell runs the SAME acceptance script,
+# scripts/smoke/install-to-first-query.sh, which grows until it encodes the Phase 0
+# exit criterion (implementation plan §7).
+#
+# Matrix today: docker. The podman-rootful and incus cells (plus the main+engine
+# topology and the zero-egress assertion) land with milestone M0.6.
+name: Integration
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [docker] # M0.6: [docker, podman, incus]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: image/Containerfile
+          load: true
+          tags: pebbles:it
+          cache-from: type=gha
+      - name: install-to-first-query (${{ matrix.runtime }}, single-box)
+        run: RUNTIME=${{ matrix.runtime }} scripts/smoke/install-to-first-query.sh pebbles:it

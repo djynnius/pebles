@@ -1,0 +1,8 @@
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+description = "Repo automation: `cargo run -p xtask -- <task>`."
+
+[dependencies]
+pebbles-api = { workspace = true }

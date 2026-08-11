@@ -1,0 +1,41 @@
+# syntax=docker/dockerfile:1
+# The one Pebbles image (REQ-01/02). Docker and Podman build this file directly;
+# Incus consumes the CI-converted artifact of the same image (image/lxc/).
+# Role is chosen at first boot via PEBBLES_ROLE and sticky in the config volume.
+
+########## Rust: static pebblesd + kernels (NFR-02) ##########
+FROM rust:alpine AS rust-builder
+RUN apk add --no-cache musl-dev
+WORKDIR /src
+COPY Cargo.toml ./
+COPY crates ./crates
+COPY kernels ./kernels
+RUN cargo build --release -p pebblesd -p sql-runner
+
+########## Python: web venv (isolated; Airflow gets its OWN venv in Phase 1) ##########
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS web-builder
+WORKDIR /opt/pebbles/web
+COPY web/ .
+ENV UV_PYTHON_DOWNLOADS=never
+RUN uv sync --no-dev
+
+########## Runtime ##########
+FROM python:3.12-slim-bookworm
+# git: REQ-32..37 · openssh-server: SFTP parity (REQ-15) · Postgres/DuckDB land in M0.2/M0.5
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git openssh-server ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=rust-builder /src/target/release/pebblesd /usr/local/bin/pebblesd
+COPY --from=rust-builder /src/target/release/sql-runner /usr/local/bin/pebbles-sql-runner
+COPY --from=web-builder /opt/pebbles/web /opt/pebbles/web
+
+# pebblesd is the init for every runtime: OCI entrypoint here, /sbin/init for Incus
+# system containers. One init contract (implementation plan §2.1).
+RUN ln -sf /usr/local/bin/pebblesd /sbin/init
+
+ENV PEBBLES_CONFIG=/var/lib/pebbles
+VOLUME /var/lib/pebbles
+EXPOSE 8080
+
+ENTRYPOINT ["/usr/local/bin/pebblesd"]

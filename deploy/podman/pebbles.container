@@ -1,0 +1,21 @@
+# Rootful Podman quadlet for a single-box Pebbles install.
+# Install to /etc/containers/systemd/pebbles.container (ROOTFUL — rootless Podman is
+# refused in v1, see deploy/README.md), then: systemctl daemon-reload && systemctl start pebbles
+[Unit]
+Description=Pebbles (main)
+
+[Container]
+Image=ghcr.io/djynnius/pebles:edge
+ContainerName=pebbles-main
+Environment=PEBBLES_ROLE=main
+PublishPort=8080:8080
+Volume=pebbles-config:/var/lib/pebbles
+Volume=pebbles-home:/home
+# Default caps are required for setuid sessions; never NoNewPrivileges=true here.
+DropCapability=NET_RAW MKNOD
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
