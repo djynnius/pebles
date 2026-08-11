@@ -7,6 +7,23 @@ All notable changes to Pebbles are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **M2.3 — Nkoyo agency (REQ-44/45)**: Nkoyo can now *act*, and does so bounded by
+  the user. The agentic loop drives the planner model with tools; **every tool
+  call executes through the invoking user's own engine session**, so Nkoyo can
+  never see or touch anything the user can't — REQ-45 is structural, not a check.
+  Tools are graded always-on / ask-first / blocked (read-only queries, file
+  reads, and catalog listing run automatically; writes and mutating SQL need
+  the user's per-turn approval; anything blocked never runs), with a read-only
+  SQL guard on the auto query tool. Folder-based skills (`~/.pebbles/skills`,
+  `/opt/pebbles/skills`) load their `SKILL.md` into the system prompt (REQ-44).
+  The chat page gained per-turn approval checkboxes and shows which tools ran.
+  Auto ETL (REQ-46) builds on this next.
+
+### Changed
+- **CI builds the integration image once and every cell pulls it** (plan §7):
+  the Airflow/science image is too heavy to rebuild in each of five matrix
+  cells. A single job now builds and pushes a run-scoped tag to GHCR; docker,
+  podman, and incus cells pull it. `cancel-in-progress` prevents run pileups.
 - **M2.2 — Nkoyo foundation (REQ-43)**: the assistant arrives, strictly on local
   models. Ollama endpoints are configured under Settings → Nkoyo and
   auto-detected across the fleet (the main's host plus every registered

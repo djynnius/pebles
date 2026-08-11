@@ -1,10 +1,8 @@
-# Cross-runtime integration matrix (M0.6 — the Phase 0 exit): every cell runs the
-# SAME acceptance script, scripts/smoke/install-to-first-query.sh, which encodes
-# "Ade installs one container and Maya runs a query, each as themselves."
-#
-# docker/podman cells run the container on an INTERNAL network (zero egress, NFR-03).
-# The incus cell converts the OCI image to a system-container image and runs it
-# unprivileged with the ADR-001 idmap — pebblesd-as-init handles DHCP itself.
+# Cross-runtime integration matrix (M0.6+, the Phase 0 exit). Build ONCE, test the
+# same digest everywhere (implementation plan §7) — the Airflow/science image is too
+# heavy to rebuild per cell. A single job builds and pushes a run-scoped tag to
+# GHCR; every matrix cell pulls it and runs the SAME acceptance script,
+# scripts/smoke/install-to-first-query.sh.
 name: Integration
 
 on:
@@ -14,59 +12,83 @@ on:
 
 permissions:
   contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
 
 concurrency:
   group: integration-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
+  build:
+    runs-on: ubuntu-24.04
+    outputs:
+      ref: ${{ steps.meta.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/free-disk
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        run: echo "ref=$IMAGE:it-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: image/Containerfile
+          push: true
+          tags: ${{ steps.meta.outputs.ref }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   smoke:
+    needs: build
     strategy:
       fail-fast: false
       matrix:
         include:
           - runtime: docker
-            image: pebbles:it
             ctr: docker
           - runtime: podman # rootful — rootless is refused by design (REQ-11)
-            image: localhost/pebbles:it
             ctr: sudo podman
           - runtime: incus
-            image: pebbles-it
             ctr: sudo incus
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/free-disk
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
+      - uses: docker/login-action@v3
         with:
-          context: .
-          file: image/Containerfile
-          load: true
-          tags: pebbles:it
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull the prebuilt image
+        run: docker pull "${{ needs.build.outputs.ref }}"
 
-      - name: Load the image into rootful podman
+      - name: Prepare docker
+        if: matrix.runtime == 'docker'
+        run: docker tag "${{ needs.build.outputs.ref }}" pebbles:it
+
+      - name: Prepare rootful podman
         if: matrix.runtime == 'podman'
         run: |
-          docker save pebbles:it | sudo podman load
-          # podman names docker-saved images docker.io/library/…; give it the
-          # fully-qualified local name so nothing tries to hit a registry.
-          sudo podman tag docker.io/library/pebbles:it localhost/pebbles:it
+          docker save "${{ needs.build.outputs.ref }}" | sudo podman load
+          sudo podman tag "${{ needs.build.outputs.ref }}" localhost/pebbles:it
 
-      - name: Set up incus and import the converted system-container image
+      - name: Prepare incus (convert + import the pulled image)
         if: matrix.runtime == 'incus'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends incus skopeo umoci xz-utils dnsmasq-base
-          # Delegate the reserved Pebbles uid range (ADR-001) to root, then restart
-          # so the daemon rereads subuid/subgid.
           echo "root:70000:5000" | sudo tee -a /etc/subuid /etc/subgid
           sudo systemctl restart incus
           sudo incus admin init --minimal
-          sudo image/lxc/oci-to-incus.sh pebbles:it dist/incus x86_64 it
+          sudo image/lxc/oci-to-incus.sh "${{ needs.build.outputs.ref }}" dist/incus x86_64 it
           sudo incus image import dist/incus/metadata.tar.xz dist/incus/rootfs.tar.xz \
             --alias pebbles-it
           sudo incus profile create pebbles
@@ -75,36 +97,41 @@ jobs:
 
       - name: install-to-first-query (${{ matrix.runtime }}, single-box)
         run: |
+          img=pebbles:it
+          [ "${{ matrix.runtime }}" = podman ] && img=localhost/pebbles:it
+          [ "${{ matrix.runtime }}" = incus ] && img=pebbles-it
           RUNTIME=${{ matrix.runtime }} CTR_CMD="${{ matrix.ctr }}" \
-            scripts/smoke/install-to-first-query.sh "${{ matrix.image }}"
+            scripts/smoke/install-to-first-query.sh "$img"
 
   main-plus-engine:
+    needs: build
     strategy:
       fail-fast: false
       matrix:
         include:
           - runtime: docker
-            image: pebbles:it
             ctr: docker
+            image: pebbles:it
           - runtime: podman
-            image: localhost/pebbles:it
             ctr: sudo podman
+            image: localhost/pebbles:it
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/free-disk
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
+      - uses: docker/login-action@v3
         with:
-          context: .
-          file: image/Containerfile
-          load: true
-          tags: pebbles:it
-          cache-from: type=gha
-      - name: Load the image into rootful podman
-        if: matrix.runtime == 'podman'
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - run: docker pull "${{ needs.build.outputs.ref }}"
+      - name: Prepare image for ${{ matrix.runtime }}
         run: |
-          docker save pebbles:it | sudo podman load
-          sudo podman tag docker.io/library/pebbles:it localhost/pebbles:it
+          if [ "${{ matrix.runtime }}" = podman ]; then
+            docker save "${{ needs.build.outputs.ref }}" | sudo podman load
+            sudo podman tag "${{ needs.build.outputs.ref }}" localhost/pebbles:it
+          else
+            docker tag "${{ needs.build.outputs.ref }}" pebbles:it
+          fi
       - name: main+engine topology (${{ matrix.runtime }})
         run: CTR_CMD="${{ matrix.ctr }}" scripts/smoke/main-plus-engine.sh "${{ matrix.image }}"

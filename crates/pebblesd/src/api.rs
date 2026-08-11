@@ -993,11 +993,13 @@ async fn nkoyo_rescan(
 
 #[derive(serde::Deserialize)]
 struct NkoyoChatBody {
-    #[allow(dead_code)] // becomes the session identity when the tool loop lands
+    /// The signed-in user — tools run in THEIR session, so Nkoyo is bounded by
+    /// their grants (REQ-45).
     username: String,
     messages: Vec<crate::nkoyo::ChatMessage>,
+    /// Tools the user pre-authorized this turn (for ask-first grades).
     #[serde(default)]
-    which: Option<String>,
+    approved: Vec<String>,
 }
 
 async fn nkoyo_chat(
@@ -1005,16 +1007,84 @@ async fn nkoyo_chat(
     Json(body): Json<NkoyoChatBody>,
 ) -> ApiResult<Value> {
     let cfg = crate::nkoyo::load(&state.config_dir);
-    let which = body.which.as_deref().unwrap_or("planner");
-    match crate::nkoyo::chat(&state.cluster.http, &cfg, which, &body.messages).await {
-        Ok((content, model, endpoint)) => Ok(Json(serde_json::json!({
-            "content": content,
-            "model": model,
-            "endpoint": endpoint,
-        }))),
-        Err(msg) if msg.starts_with("no Ollama endpoints") => {
-            Err(error(StatusCode::SERVICE_UNAVAILABLE, msg))
+
+    // Resolve the user and open a session for the agent's tools (REQ-45).
+    let username = body.username.clone();
+    let user = tokio::task::spawn_blocking(move || pebbles_identity::host::find_user(&username))
+        .await
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "unknown user"))?;
+
+    let skills = crate::nkoyo::load_skills(std::path::Path::new(&user.home));
+    let system = crate::nkoyo::system_prompt(&body.username, &skills);
+
+    // A transient session hosts the agent's tool calls; None → no tools, plain chat.
+    let broker = state.broker.clone();
+    let session = if let Some(broker) = &broker {
+        broker
+            .open(OpenRequest {
+                username: user.username.clone(),
+                uid: user.uid,
+                gid: user.gid,
+                home: user.home.clone(),
+                mode: SessionMode::Shared,
+                memory_limit_bytes: state.default_session_memory,
+            })
+            .await
+            .ok()
+            .and_then(|o| match o {
+                OpenOutcome::Session(info) => Some(info.id),
+                OpenOutcome::Reserved(_) => None,
+            })
+    } else {
+        None
+    };
+
+    let run_op = |op: Value| {
+        let broker = broker.clone();
+        async move {
+            // Catalog listing is pebblesd-level metadata, not a kernel op.
+            if op["op"] == "list_catalogs" {
+                let catalogs = tokio::task::spawn_blocking(catalog::list_catalogs)
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .map_err(|e| e.to_string())?;
+                let names: Vec<&str> = catalogs.iter().map(|c| c.name.as_str()).collect();
+                return Ok(serde_json::json!({"ok": true, "catalogs": names}));
+            }
+            match (broker, session) {
+                (Some(broker), Some(sid)) => broker.exec(sid, op).await.map_err(|e| e.to_string()),
+                _ => Err("no engine session available for tools".to_string()),
+            }
         }
+    };
+
+    let result = crate::nkoyo::agent_turn(
+        &state.cluster.http,
+        &cfg,
+        &system,
+        &body.messages,
+        &body.approved,
+        run_op,
+    )
+    .await;
+
+    if let (Some(broker), Some(sid)) = (&broker, session) {
+        let _ = broker.close(sid).await;
+    }
+
+    match result {
+        Ok((content, trace)) => Ok(Json(serde_json::json!({
+            "content": content,
+            "model": cfg.planner_model,
+            "tools_used": trace,
+        }))),
+        Err(msg) if msg.starts_with("no Ollama endpoints") => Err(error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no Ollama endpoints configured — add one under Settings → Nkoyo \
+             (models run locally; nothing leaves your hosts)",
+        )),
         Err(msg) => Err(error(StatusCode::BAD_GATEWAY, msg)),
     }
 }

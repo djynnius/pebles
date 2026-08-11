@@ -764,13 +764,15 @@ def create_app(pebblesd: PebblesdClient | None = None) -> Flask:
         user = session.get("user")
         if user is None:
             return jsonify({"error": "not signed in"}), 401
-        prompt = (request.get_json(silent=True) or {}).get("prompt", "").strip()
+        body = request.get_json(silent=True) or {}
+        prompt = body.get("prompt", "").strip()
+        approved = [t for t in body.get("approved", []) if isinstance(t, str)]
         if not prompt:
             return jsonify({"error": "empty prompt"}), 422
         chat = session.get("nkoyo_chat", [])
         chat.append({"role": "user", "content": prompt})
         try:
-            reply = client.nkoyo_chat(user["username"], chat[-20:])
+            reply = client.nkoyo_chat(user["username"], chat[-20:], approved)
         except PebblesdError as exc:
             chat.pop()
             session["nkoyo_chat"] = chat

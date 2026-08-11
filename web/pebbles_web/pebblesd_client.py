@@ -188,9 +188,11 @@ class PebblesdClient:
             raise PebblesdError(status, str(data))
         return data
 
-    def nkoyo_chat(self, username: str, messages: list, which: str = "planner") -> dict:
+    def nkoyo_chat(self, username: str, messages: list, approved: list | None = None) -> dict:
         return self._expect(
-            "POST", "/nkoyo/chat", {"username": username, "messages": messages, "which": which}
+            "POST",
+            "/nkoyo/chat",
+            {"username": username, "messages": messages, "approved": approved or []},
         )
 
     def cancel_reservation(self, engine: str | None = None) -> dict:

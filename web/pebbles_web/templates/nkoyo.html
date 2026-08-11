@@ -27,6 +27,10 @@
     <form class="card wide" id="ask">
       <label for="prompt">Ask Nkoyo</label>
       <textarea id="prompt" rows="2" spellcheck="false"></textarea>
+      <p class="status">Allow this turn (ask-first tools):
+        <label><input type="checkbox" class="approve" value="write_file"> write files</label>
+        <label><input type="checkbox" class="approve" value="sql_exec"> modify data</label>
+      </p>
       <button type="submit">Send</button>
       <p id="state" class="status" aria-live="polite"></p>
     </form>
@@ -56,14 +60,16 @@
       bubble("{{ user.username }}", prompt, false);
       document.getElementById("prompt").value = "";
       state.textContent = "thinking…";
+      const approved = [...document.querySelectorAll(".approve:checked")].map(c => c.value);
       const resp = await fetch("{{ url_for('nkoyo_send') }}", {
         method: "POST", headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt, approved }),
       });
       const data = await resp.json();
       if (resp.ok) {
         bubble("nkoyo", data.content, true);
-        state.textContent = data.model + " @ " + data.endpoint;
+        const used = (data.tools_used || []).length ? " · used " + data.tools_used.join(", ") : "";
+        state.textContent = data.model + used;
       } else {
         state.textContent = data.error || ("error " + resp.status);
       }

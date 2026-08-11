@@ -140,13 +140,13 @@ class FakeDaemon:
     def nkoyo_rescan(self):
         return [{"endpoint": "http://127.0.0.1:11434", "models": ["llama3.2:latest"]}]
 
-    def nkoyo_chat(self, username, messages, which="planner"):
+    def nkoyo_chat(self, username, messages, approved=None):
         if not self.nkoyo_config()["endpoints"]:
             raise PebblesdError(503, "no Ollama endpoints configured")
         return {
             "content": f"hello {username}, you said: {messages[-1]['content']}",
             "model": "llama3.2",
-            "endpoint": "http://127.0.0.1:11434",
+            "tools_used": ["list_catalogs"] + list(approved or []),
         }
 
     def usage(self):
@@ -543,9 +543,14 @@ def test_nkoyo_chat_and_settings():
     assert client().get("/nkoyo").status_code == 302
     assert c.get("/nkoyo").status_code == 200
 
-    reply = c.post("/nkoyo/send", json={"prompt": "profile the claims table"})
+    reply = c.post(
+        "/nkoyo/send",
+        json={"prompt": "profile the claims table", "approved": ["write_file"]},
+    )
     assert reply.status_code == 200
-    assert "you said: profile the claims table" in reply.get_json()["content"]
+    data = reply.get_json()
+    assert "you said: profile the claims table" in data["content"]
+    assert "write_file" in data["tools_used"]  # pre-authorized tool passes through
 
     page = c.get("/nkoyo").get_data(as_text=True)
     assert "profile the claims table" in page  # conversation persists in session
