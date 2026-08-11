@@ -277,18 +277,20 @@ echo "==> Phase 2: SFTP is served, PAM-backed, on the SFTP subsystem (REQ-15)"
 # the login test already exercised. (Password-driving an SSH client needs a
 # credential-injection tool we deliberately keep out of the image; the Files ops
 # below are the hard functional gate that files land as the user.)
+# Listening check via /proc/net/tcp (port 22 = :0016, state 0A = LISTEN) — the
+# image's /bin/sh is dash, which has no /dev/tcp, and no extra tools are needed.
 listening=""
 for _ in $(seq 1 30); do
-  listening="$(ctr_exec sh -c 'echo > /dev/tcp/127.0.0.1/22 && echo up' 2>/dev/null || true)"
-  [ "$listening" = "up" ] && break
+  if ctr_exec sh -c 'awk "\$2 ~ /:0016$/ && \$4 == \"0A\" {f=1} END {exit !f}" /proc/net/tcp /proc/net/tcp6 2>/dev/null'; then
+    listening=up; break
+  fi
   sleep 1
 done
 [ "$listening" = "up" ] || { echo "FAIL: sshd never listened on 22" >&2; show_logs >&2 | tail -30 || true; exit 1; }
-ctr_exec sh -c 'exec 3<>/dev/tcp/127.0.0.1/22; head -c 8 <&3' 2>/dev/null | grep -q 'SSH-2.0' \
-  || { echo "FAIL: no SSH-2.0 banner on port 22" >&2; exit 1; }
+ctr_exec pgrep -x sshd >/dev/null || { echo "FAIL: sshd not running" >&2; exit 1; }
 ctr_exec grep -qiE '^Subsystem[[:space:]]+sftp' /etc/ssh/sshd_config \
   || { echo "FAIL: sshd config declares no SFTP subsystem" >&2; exit 1; }
-echo "    sshd up on 22, SSH-2.0, PAM + sftp subsystem configured"
+echo "    sshd listening on 22, running, PAM + sftp subsystem configured"
 
 echo "==> Files screen: browse/upload/delete run as the user (REQ-15/32)"
 pd -H 'Content-Type: application/json' \
