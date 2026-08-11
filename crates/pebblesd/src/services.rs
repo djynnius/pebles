@@ -1,0 +1,134 @@
+//! Which services a role runs (implementation plan §2.1: pebblesd supervises
+//! everything). Paths are probed at startup: in the image they exist; in the native
+//! dev loop they don't, and each missing service is skipped with a warning so
+//! `cargo run -p pebblesd` stays useful on a laptop.
+
+use crate::config::Config;
+use crate::supervisor::{Exec, ServiceSpec};
+use pebbles_api::Role;
+use std::path::{Path, PathBuf};
+
+const WEB_ROOT: &str = "/opt/pebbles/web";
+const WEB_USER: &str = "pebbles-web";
+const PG_SOCKET_DIR: &str = "/run/postgresql";
+
+pub fn for_role(cfg: &Config) -> Vec<ServiceSpec> {
+    match cfg.role {
+        Role::Main => {
+            let mut services = Vec::new();
+            match postgres(cfg) {
+                Some(spec) => services.push(spec),
+                None => tracing::warn!("postgres not available; catalog services disabled"),
+            }
+            match gunicorn(cfg) {
+                Some(spec) => services.push(spec),
+                None => tracing::warn!("web tier not available; UI disabled"),
+            }
+            services
+        }
+        // Engine services (session broker, kernels) land in M0.4.
+        Role::Engine => Vec::new(),
+    }
+}
+
+/// Postgres for the DuckLake catalog (spec §3 Storage). Unix socket only — nothing
+/// outside the container ever talks to it. Data lives in the config volume so
+/// "upgrade = pull new image, same volume" (REQ-09) covers the catalog.
+fn postgres(cfg: &Config) -> Option<ServiceSpec> {
+    let bindir = pg_bindir()?;
+    let (uid, gid) = pebbles_identity::system_user("postgres")?;
+    let datadir = cfg.config_dir.join("postgres");
+
+    for (dir, mode) in [(&datadir, 0o700), (&PathBuf::from(PG_SOCKET_DIR), 0o755)] {
+        if let Err(err) = prepare_dir(dir, uid, gid, mode) {
+            tracing::error!(dir = %dir.display(), %err, "cannot prepare postgres dir");
+            return None;
+        }
+    }
+
+    let pre = if datadir.join("PG_VERSION").exists() {
+        vec![]
+    } else {
+        vec![Exec {
+            program: bindir.join("initdb"),
+            args: vec![
+                "-D".into(),
+                datadir.display().to_string(),
+                "--auth-local=peer".into(),
+                "--auth-host=reject".into(),
+            ],
+            envs: vec![],
+            run_as: Some((uid, gid)),
+        }]
+    };
+
+    Some(ServiceSpec {
+        name: "postgres".into(),
+        pre,
+        exec: Exec {
+            program: bindir.join("postgres"),
+            args: vec![
+                "-D".into(),
+                datadir.display().to_string(),
+                "-k".into(),
+                PG_SOCKET_DIR.into(),
+                "-c".into(),
+                "listen_addresses=".into(),
+            ],
+            envs: vec![],
+            run_as: Some((uid, gid)),
+        },
+    })
+}
+
+/// The Flask tier under gunicorn on :8080, always as the unprivileged web user —
+/// never root (NFR-01). It reaches pebblesd only through the unix socket.
+fn gunicorn(cfg: &Config) -> Option<ServiceSpec> {
+    let gunicorn = Path::new(WEB_ROOT).join(".venv/bin/gunicorn");
+    if !gunicorn.exists() {
+        return None;
+    }
+    let Some((uid, gid)) = pebbles_identity::system_user(WEB_USER) else {
+        tracing::error!("user {WEB_USER} missing; refusing to run the web tier as root (NFR-01)");
+        return None;
+    };
+    Some(ServiceSpec {
+        name: "web".into(),
+        pre: vec![],
+        exec: Exec {
+            program: gunicorn,
+            args: vec![
+                "--bind".into(),
+                "0.0.0.0:8080".into(),
+                "--workers".into(),
+                "2".into(),
+                "--chdir".into(),
+                WEB_ROOT.into(),
+                "pebbles_web:create_app()".into(),
+            ],
+            envs: vec![(
+                "PEBBLES_SOCKET".into(),
+                cfg.socket_path().display().to_string(),
+            )],
+            run_as: Some((uid, gid)),
+        },
+    })
+}
+
+/// Highest-versioned Debian postgres bindir (`/usr/lib/postgresql/<N>/bin`).
+fn pg_bindir() -> Option<PathBuf> {
+    let base = Path::new("/usr/lib/postgresql");
+    let version = std::fs::read_dir(base)
+        .ok()?
+        .filter_map(|e| e.ok()?.file_name().into_string().ok()?.parse::<u32>().ok())
+        .max()?;
+    let bindir = base.join(version.to_string()).join("bin");
+    bindir.join("postgres").exists().then_some(bindir)
+}
+
+fn prepare_dir(dir: &Path, uid: u32, gid: u32, mode: u32) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(dir)?;
+    std::os::unix::fs::chown(dir, Some(uid), Some(gid))?;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode))
+}

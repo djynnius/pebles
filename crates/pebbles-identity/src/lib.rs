@@ -9,6 +9,40 @@
 use std::collections::BTreeSet;
 use thiserror::Error;
 
+/// (uid, gid) for `name` from passwd-format content.
+pub fn parse_passwd(content: &str, name: &str) -> Option<(u32, u32)> {
+    content.lines().find_map(|line| {
+        let fields: Vec<&str> = line.split(':').collect();
+        if fields.len() >= 4 && fields[0] == name {
+            Some((fields[2].parse().ok()?, fields[3].parse().ok()?))
+        } else {
+            None
+        }
+    })
+}
+
+/// gid for `name` from group-format content.
+pub fn parse_group(content: &str, name: &str) -> Option<u32> {
+    content.lines().find_map(|line| {
+        let fields: Vec<&str> = line.split(':').collect();
+        if fields.len() >= 3 && fields[0] == name {
+            fields[2].parse().ok()
+        } else {
+            None
+        }
+    })
+}
+
+/// (uid, gid) for a host account, or `None` if it doesn't exist.
+pub fn system_user(name: &str) -> Option<(u32, u32)> {
+    parse_passwd(&std::fs::read_to_string("/etc/passwd").ok()?, name)
+}
+
+/// gid for a host group, or `None` if it doesn't exist.
+pub fn system_group(name: &str) -> Option<u32> {
+    parse_group(&std::fs::read_to_string("/etc/group").ok()?, name)
+}
+
 /// First uid/gid Pebbles may allocate (ADR-001).
 pub const PEBBLES_UID_MIN: u32 = 60000;
 /// Last uid/gid Pebbles may allocate, inclusive (ADR-001).
@@ -69,6 +103,24 @@ impl UidAllocator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const PASSWD: &str = "root:x:0:0:root:/root:/bin/bash\n\
+                          postgres:x:102:104:PostgreSQL:/var/lib/postgresql:/bin/sh\n\
+                          pebbles-web:x:998:997::/nonexistent:/usr/sbin/nologin\n";
+    const GROUP: &str = "root:x:0:\npebbles:x:997:pebbles-web\n";
+
+    #[test]
+    fn parses_uid_and_gid_from_passwd_content() {
+        assert_eq!(parse_passwd(PASSWD, "postgres"), Some((102, 104)));
+        assert_eq!(parse_passwd(PASSWD, "pebbles-web"), Some((998, 997)));
+        assert_eq!(parse_passwd(PASSWD, "maya"), None);
+    }
+
+    #[test]
+    fn parses_gid_from_group_content() {
+        assert_eq!(parse_group(GROUP, "pebbles"), Some(997));
+        assert_eq!(parse_group(GROUP, "wheel"), None);
+    }
 
     #[test]
     fn allocates_lowest_free_uid_first() {

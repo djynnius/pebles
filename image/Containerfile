@@ -21,10 +21,13 @@ RUN uv sync --no-dev
 
 ########## Runtime ##########
 FROM python:3.12-slim-bookworm
-# git: REQ-32..37 · openssh-server: SFTP parity (REQ-15) · Postgres/DuckDB land in M0.2/M0.5
+# git: REQ-32..37 · openssh-server: SFTP parity (REQ-15) · postgresql: DuckLake catalog
+# The `pebbles` group gates the pebblesd socket; `pebbles-web` runs gunicorn (never root).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git openssh-server ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends git openssh-server ca-certificates curl postgresql \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system pebbles \
+    && useradd --system --gid pebbles --home-dir /nonexistent --shell /usr/sbin/nologin pebbles-web
 
 COPY --from=rust-builder /src/target/release/pebblesd /usr/local/bin/pebblesd
 COPY --from=rust-builder /src/target/release/sql-runner /usr/local/bin/pebbles-sql-runner

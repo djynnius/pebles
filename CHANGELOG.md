@@ -7,6 +7,15 @@ All notable changes to Pebbles are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **M0.2 — pebblesd boots the box**: pebblesd is now a real PID-1 supervisor — it
+  starts and supervises Postgres (unix-socket only, data in the config volume) and
+  gunicorn (as the unprivileged `pebbles-web` user, never root) on the `main` role,
+  with restart backoff and graceful SIGTERM fan-out. Interactive first boots get a
+  TTY setup wizard for the role question. The web tier now owns port 8080; Flask's
+  `/healthz` proxies pebblesd over the group-gated unix socket (`pebbles` group,
+  mode 0660) — the NFR-01 privilege boundary exercised end to end. The smoke test
+  asserts the M0.2 exit criterion: `docker run -e PEBBLES_ROLE=main` serves the
+  Flask shell and the role survives restarts.
 - `pebbles-implementation-plan.md` — stack decisions, repository layout,
   container-runtime strategy (Docker / rootful Podman / LXC via Incus), image
   engineering, full CI/CD design, and the Phase 0 milestone plan (M0.1–M0.6).

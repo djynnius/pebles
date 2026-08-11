@@ -8,13 +8,26 @@ privileged action is an API call to pebblesd over its unix socket, via
 
 from flask import Flask, jsonify, render_template
 
+from pebbles_web.pebblesd_client import PebblesdClient
 
-def create_app() -> Flask:
+
+def create_app(pebblesd: PebblesdClient | None = None) -> Flask:
     app = Flask(__name__)
+    client = pebblesd or PebblesdClient()
 
     @app.get("/healthz")
     def healthz():  # pyright: ignore[reportUnusedFunction]
-        return jsonify({"status": "ok", "service": "pebbles-web"})
+        payload: dict = {"service": "pebbles-web", "status": "ok"}
+        try:
+            daemon = client.health()
+        # Socket/protocol failures mean degraded, not dead: the web tier itself is up.
+        except (OSError, RuntimeError, ValueError) as exc:
+            payload["status"] = "degraded"
+            payload["pebblesd"] = {"error": str(exc)}
+            return jsonify(payload), 503
+        payload["pebblesd"] = daemon
+        payload["role"] = daemon.get("role")
+        return jsonify(payload)
 
     @app.get("/")
     def index():  # pyright: ignore[reportUnusedFunction]

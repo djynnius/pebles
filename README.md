@@ -25,9 +25,10 @@ team has a complete platform in under an hour — on **Docker, Podman, or LXC (I
 
 ## Status
 
-**Pre-code — Phase 0 (Foundation) starting.** The design is complete and the repo holds
-the scaffold: Rust workspace, Flask skeleton, Containerfile, and CI. Nothing installable
-yet — see `HOWTO.md` for what you *can* run today.
+**Phase 0 (Foundation) in progress — M0.2 landed.** A single container boots the
+control plane: pebblesd (PID 1) supervises Postgres and the web tier, the role is
+chosen at first boot and sticky, and CI builds/tests the image on every merge. Users,
+sessions, and the lake arrive with M0.3–M0.5 — see `HOWTO.md` to run what exists.
 
 ## Documents
 

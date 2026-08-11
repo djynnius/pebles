@@ -7,7 +7,9 @@ description = "The Pebbles daemon: PID-1 supervisor, role bootstrap, privileged 
 [dependencies]
 anyhow = { workspace = true }
 axum = { workspace = true }
+libc = { workspace = true }
 pebbles-api = { workspace = true }
+pebbles-identity = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

@@ -252,8 +252,8 @@ already reserve its headroom.
 
 | # | Milestone | Exit criteria |
 |---|---|---|
-| M0.1 | **Scaffold + PR CI** (this pass) | Workspace compiles; Flask hello; `ci.yml` green; path filters work; a docs-only PR runs <1 min. |
-| M0.2 | **pebblesd boots the box** | PID-1 supervisor; role via env + minimal TTY wizard, sticky in config volume (REQ-03); unix-socket API (health/version); supervises Postgres + gunicorn on `main`. `docker run -e PEBBLES_ROLE=main` serves the Flask shell; restart preserves role; size gate live. |
+| M0.1 ✅ | **Scaffold + PR CI** | Workspace compiles; Flask hello; `ci.yml` green; path filters work; a docs-only PR runs <1 min. |
+| M0.2 ✅ | **pebblesd boots the box** | PID-1 supervisor; role via env + minimal TTY wizard, sticky in config volume (REQ-03); unix-socket API (health/version); supervises Postgres + gunicorn on `main`. `docker run -e PEBBLES_ROLE=main` serves the Flask shell; restart preserves role; size gate live. |
 | M0.3 | **UNIX identity** (REQ-11 core) | ADR-001 (uid range) written; create-user API → real account + home + personal primary group (REQ-13 machinery); PAM login through pebblesd; Flask login. Host `getent`/`ls -ln` agree with the API. |
 | M0.4 | **Sessions as the user** (REQ-12/16/20 core) | Broker forks `sql-runner` with setuid/setgid, home at `/workspace`; per-session `memory_limit` with sum-of-limits admission; idle timeout. Two users hold concurrent sessions with distinct uids; A cannot read B's files; over-budget third session refused cleanly. **This is the spec's load-bearing reconciliation — prove it early.** |
 | M0.5 | **DuckLake + SQL editor + SSE** | Postgres-cataloged DuckLake in the runner (extensions baked in — NFR-03); Create Catalog with live SQL (REQ-25 subset); SQL editor with results grid; SSE streaming under gunicorn with 5 concurrent users (the PRD names Flask streaming a Phase 0 prototype target). Maya loads a CSV and time-travels a snapshot. |

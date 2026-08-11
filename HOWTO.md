@@ -1,7 +1,23 @@
 # HOWTO
 
-Pebbles is pre-code (Phase 0 starting), so there is nothing installable yet. What you
-can do today:
+Pebbles is mid-Phase 0. A single container already boots the control plane (milestone
+M0.2); users, sessions, and the lake arrive with M0.3–M0.5. What you can do today:
+
+## Run it
+
+```sh
+docker login ghcr.io          # if the package is private
+docker run -d --name pebbles \
+  -e PEBBLES_ROLE=main \
+  -p 8080:8080 \
+  -v pebbles-config:/var/lib/pebbles \
+  ghcr.io/djynnius/pebles:edge
+```
+
+Open http://localhost:8080 — the shell page is served by gunicorn under pebblesd's
+supervision, and `/healthz` shows the daemon's role proxied over the privileged
+socket. Omit `-e PEBBLES_ROLE=…` and run with `-it` to get the setup wizard instead.
+Podman (rootful) works with the same flags; Incus instructions land with M0.6.
 
 ## Explore the product
 

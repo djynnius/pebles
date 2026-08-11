@@ -15,7 +15,7 @@ import json
 import os
 import socket
 
-DEFAULT_SOCKET = "/var/lib/pebbles/pebblesd.sock"
+DEFAULT_SOCKET = "/run/pebbles/pebblesd.sock"
 
 
 class _UnixHTTPConnection(http.client.HTTPConnection):
