@@ -51,7 +51,7 @@ jobs:
           load: true
           tags: pebbles:ci
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=min
       - name: Size budget gate
         run: scripts/ci/size-gate.sh pebbles:ci
       - name: Smoke (docker single-box)
@@ -84,7 +84,7 @@ jobs:
           push: true
           tags: ${{ env.IMAGE }}:edge-${{ matrix.arch }}
           cache-from: type=gha,scope=${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=min,scope=${{ matrix.arch }}
 
   merge:
     if: github.event_name == 'push'

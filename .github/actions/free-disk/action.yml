@@ -1,13 +1,29 @@
 name: Free runner disk space
 description: >
-  Remove preinstalled toolchains the Pebbles build never uses (~25-30 GB). The
-  image carries the miniforge scientific stack (REQ-51/52), and hosted runners
-  don't have room for the build + export + load cycle otherwise.
+  Reclaim ~40-45 GB of preinstalled toolchains the Pebbles build never uses. The
+  image carries the miniforge scientific stack + Airflow + the React bundle
+  (REQ-51/52), which sits right at the hosted runner's disk limit — without this
+  the build + export + push cycle intermittently fails with ENOSPC.
 runs:
   using: composite
   steps:
     - shell: bash
       run: |
-        sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
-          /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+        set -x
+        sudo rm -rf \
+          /usr/local/lib/android \
+          /usr/share/dotnet \
+          /opt/ghc /usr/local/.ghcup \
+          /opt/hostedtoolcache/CodeQL \
+          /usr/local/share/boost \
+          /usr/share/swift \
+          /usr/local/lib/node_modules \
+          /opt/hostedtoolcache/go \
+          /opt/hostedtoolcache/PyPy \
+          /usr/local/graalvm \
+          /usr/lib/jvm \
+          "$AGENT_TOOLSDIRECTORY" 2>/dev/null || true
+        # Preinstalled docker images we don't use (keeps buildkit's own store).
+        docker image prune -af 2>/dev/null || true
+        sudo apt-get clean 2>/dev/null || true
         df -h / | tail -1
