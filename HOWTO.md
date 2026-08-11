@@ -26,9 +26,11 @@ docker exec pebbles curl -s --unix-socket /run/pebbles/pebblesd.sock \
 That provisions a real UNIX account (uid in the reserved 70000+ range, private
 `/home/maya`) and the same password signs into the web UI. From there: **Lake
 catalogs** creates a DuckLake catalog (the form shows the equivalent
-`CREATE CATALOG` SQL), and the **SQL editor** runs queries against it as your own
-UNIX user, streaming results over SSE — try `SELECT 42 AS answer;` or load a CSV
-from your home with `read_csv_auto('/home/maya/file.csv')`. Time travel works:
+`CREATE CATALOG` SQL), **Notebooks** gives you SQL + Python cells (state persists
+across Python cells; files live in `~/notebooks`), and the **SQL editor** runs
+queries against the lake as your own UNIX user, streaming results over SSE — try
+`SELECT 42 AS answer;` or load a CSV from your home with
+`read_csv_auto('/home/maya/file.csv')`. Time travel works:
 `SELECT * FROM t AT (VERSION => 1);`. `/healthz` shows the daemon's role proxied
 over the privileged socket. Omit `-e PEBBLES_ROLE=…` and run with `-it` to get the
 setup wizard instead. Podman (rootful) works with the same flags.

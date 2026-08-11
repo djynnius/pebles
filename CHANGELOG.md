@@ -7,6 +7,17 @@ All notable changes to Pebbles are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **M1.4 — notebooks & workbench v1**: notebooks arrive. A persistent Python
+  executor runs inside each session (spawned by the kernel, so it inherits the
+  session user's uid and home) — cell state carries across executions like a
+  real notebook, and the last expression echoes notebook-style. Notebooks are
+  plain JSON files in `~/notebooks` (yours alone, SFTP-visible, ready for git —
+  REQ-32's story) with SQL and Python cells; the editor is the first cut of the
+  workbench shell: 46 px icon rail, folding panel, document tab bar, and the
+  <1280 px overlay-with-scrim rule (REQ-29/30). Cell output streams over SSE
+  (REQ-31) — SQL cells render a results grid, Python cells stdout/stderr. The
+  kernel protocol gained `python` and `list` ops, and `write` now creates parent
+  directories. Smoke proves python-as-the-user with persistent state.
 - **M1.3 — dedicated sessions & draining**: the REQ-19 state machine. A dedicated
   request on a busy engine returns **202 with a reservation** — never refusal,
   never preemption; the engine enters *draining* (no new shared sessions;

@@ -8,6 +8,7 @@ privileged action is an API call to pebblesd over its unix socket, via
 
 import json
 import os
+import re
 
 from flask import (
     Flask,
@@ -226,6 +227,150 @@ def create_app(pebblesd: PebblesdClient | None = None) -> Flask:
         except (OSError, RuntimeError, ValueError):
             engines = []
         return render_template("engines.html", user=user, engines=engines)
+
+    NOTEBOOK_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
+    def _session_op(username: str, payload: dict) -> dict:
+        sid = _engine_session_id(username)
+        try:
+            return client.exec_in_session(sid, payload)
+        except PebblesdError as exc:
+            if exc.status != 404:
+                raise
+            session.pop("engine_session", None)
+            return client.exec_in_session(_engine_session_id(username), payload)
+
+    def _load_notebook(username: str, name: str) -> dict | None:
+        got = _session_op(
+            username, {"op": "read", "path": f"notebooks/{name}.json"}
+        )
+        if not got.get("ok"):
+            return None
+        try:
+            nb = json.loads(got.get("content", ""))
+        except json.JSONDecodeError:
+            return None
+        nb.setdefault("catalog", None)
+        nb.setdefault("cells", [])
+        return nb
+
+    @app.get("/notebooks")
+    def notebooks_page():  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return redirect(url_for("login_form"))
+        notebooks = []
+        try:
+            listing = _session_op(user["username"], {"op": "list", "path": "notebooks"})
+            if listing.get("ok"):
+                notebooks = [
+                    e[: -len(".json")] for e in listing.get("entries", []) if e.endswith(".json")
+                ]
+        except (OSError, RuntimeError, ValueError):
+            pass
+        return render_template("notebooks.html", user=user, notebooks=notebooks)
+
+    @app.post("/notebooks")
+    def notebooks_create():  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return redirect(url_for("login_form"))
+        name = request.form.get("name", "").strip()
+        if not NOTEBOOK_NAME.match(name):
+            return render_template(
+                "notebooks.html", user=user, notebooks=[], error="Invalid notebook name."
+            ), 422
+        empty = {"catalog": None, "cells": [{"type": "sql", "source": ""}]}
+        _session_op(
+            user["username"],
+            {"op": "write", "path": f"notebooks/{name}.json", "content": json.dumps(empty)},
+        )
+        return redirect(url_for("notebook_page", name=name))
+
+    @app.get("/notebooks/<name>")
+    def notebook_page(name):  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return redirect(url_for("login_form"))
+        if not NOTEBOOK_NAME.match(name):
+            return redirect(url_for("notebooks_page"))
+        nb = _load_notebook(user["username"], name)
+        if nb is None:
+            return redirect(url_for("notebooks_page"))
+        try:
+            catalogs = client.list_catalogs()
+        except (OSError, RuntimeError, ValueError):
+            catalogs = []
+        return render_template(
+            "notebook.html", user=user, name=name, notebook=nb, catalogs=catalogs
+        )
+
+    @app.post("/notebooks/<name>/save")
+    def notebook_save(name):  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return jsonify({"error": "not signed in"}), 401
+        if not NOTEBOOK_NAME.match(name):
+            return jsonify({"error": "bad name"}), 422
+        nb = request.get_json(silent=True) or {}
+        payload = {
+            "catalog": nb.get("catalog") or None,
+            "cells": [
+                {"type": c.get("type", "sql"), "source": str(c.get("source", ""))}
+                for c in nb.get("cells", [])
+                if c.get("type", "sql") in ("sql", "python")
+            ],
+        }
+        _session_op(
+            user["username"],
+            {"op": "write", "path": f"notebooks/{name}.json", "content": json.dumps(payload)},
+        )
+        return jsonify({"saved": True})
+
+    @app.get("/notebooks/<name>/cells/<int:index>/stream")
+    def notebook_cell_stream(name, index):  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return jsonify({"error": "not signed in"}), 401
+        if not NOTEBOOK_NAME.match(name):
+            return jsonify({"error": "bad name"}), 422
+
+        def sse(event: str, data: dict) -> str:
+            return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+        # Resolve everything inside the request context; stream after (REQ-31).
+        result = None
+        error = None
+        try:
+            nb = _load_notebook(user["username"], name)
+            if nb is None or index >= len(nb["cells"]):
+                error = "no such cell"
+            else:
+                cell = nb["cells"][index]
+                if cell["type"] == "python":
+                    result = _session_op(
+                        user["username"], {"op": "python", "code": cell["source"]}
+                    )
+                else:
+                    result = _run_sql(user["username"], cell["source"], nb.get("catalog"))
+        except (OSError, RuntimeError, ValueError) as exc:
+            error = str(exc)
+
+        def stream():
+            yield sse("status", {"state": "running"})
+            if error is not None:
+                yield sse("error", {"error": error})
+            elif result and result.get("ok"):
+                yield sse("result", result)
+            else:
+                yield sse("error", {"error": (result or {}).get("error", "cell failed")})
+            yield sse("done", {})
+
+        return Response(
+            stream(),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @app.post("/engines/cancel-reservation")
     def cancel_reservation():  # pyright: ignore[reportUnusedFunction]

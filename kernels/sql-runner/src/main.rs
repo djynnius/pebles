@@ -85,6 +85,71 @@ fn run_sql(id: &Value, sql: &str, catalog: Option<&str>) -> Value {
     }
 }
 
+/// The lazily-spawned persistent Python executor: a `python3 pyexec.py` child of
+/// THIS process (so it runs as the session user), kept alive so cell state
+/// persists across executions — what a notebook expects.
+struct PyExec {
+    stdin: std::process::ChildStdin,
+    stdout: std::io::BufReader<std::process::ChildStdout>,
+    child: std::process::Child,
+}
+
+const PYEXEC: &str = "/opt/pebbles/kernels/pyexec.py";
+
+fn run_python(id: &Value, code: &str, python: &mut Option<PyExec>) -> Value {
+    use std::io::{BufRead, Write};
+    let fail = |err: String| json!({"id": id, "ok": false, "error": err});
+
+    if python.is_none() {
+        let spawned = std::process::Command::new("python3")
+            .arg(PYEXEC)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .spawn();
+        match spawned {
+            Ok(mut child) => {
+                let stdin = child.stdin.take().expect("piped stdin");
+                let stdout = std::io::BufReader::new(child.stdout.take().expect("piped stdout"));
+                *python = Some(PyExec {
+                    stdin,
+                    stdout,
+                    child,
+                });
+            }
+            Err(e) => return fail(format!("cannot start python executor: {e}")),
+        }
+    }
+    let exec = python.as_mut().expect("just ensured");
+    let request = json!({ "code": code }).to_string();
+    let round_trip = (|| -> std::io::Result<String> {
+        exec.stdin.write_all(request.as_bytes())?;
+        exec.stdin.write_all(b"\n")?;
+        exec.stdin.flush()?;
+        let mut reply = String::new();
+        exec.stdout.read_line(&mut reply)?;
+        Ok(reply)
+    })();
+    match round_trip {
+        Ok(reply) if !reply.trim().is_empty() => match serde_json::from_str::<Value>(&reply) {
+            Ok(mut value) => {
+                value["id"] = id.clone();
+                value
+            }
+            Err(e) => fail(format!("bad python reply: {e}")),
+        },
+        _ => {
+            // The executor died (or never answered): reap it and let the next
+            // cell start a fresh interpreter.
+            if let Some(mut dead) = python.take() {
+                let _ = dead.child.kill();
+                let _ = dead.child.wait();
+            }
+            fail("python executor exited; state reset — run the cell again".into())
+        }
+    }
+}
+
 /// The last complete JSON array in the CLI's stdout — the caller's final statement.
 /// `-json` prints one array per result-bearing statement, and multi-row arrays span
 /// MULTIPLE lines (`[{…},` / `{…},` / `{…}]`), so this joins from the last line that
@@ -107,7 +172,7 @@ fn getgid() -> u32 {
     unsafe { libc::getgid() }
 }
 
-fn handle(request: &Value) -> Value {
+fn handle(request: &Value, python: &mut Option<PyExec>) -> Value {
     let id = request.get("id").cloned().unwrap_or(Value::Null);
     let fail = |err: String| json!({"id": id, "ok": false, "error": err});
 
@@ -134,18 +199,42 @@ fn handle(request: &Value) -> Value {
             request.get("path").and_then(Value::as_str),
             request.get("content").and_then(Value::as_str),
         ) {
-            (Some(path), Some(content)) => match std::fs::write(path, content) {
-                Ok(()) => json!({"id": id, "ok": true}),
+            (Some(path), Some(content)) => {
+                if let Some(parent) = std::path::Path::new(path).parent() {
+                    if !parent.as_os_str().is_empty() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                }
+                match std::fs::write(path, content) {
+                    Ok(()) => json!({"id": id, "ok": true}),
+                    Err(e) => fail(e.to_string()),
+                }
+            }
+            _ => fail("write needs a path and content".into()),
+        },
+        Some("list") => match request.get("path").and_then(Value::as_str) {
+            Some(path) => match std::fs::read_dir(path) {
+                Ok(entries) => {
+                    let mut names: Vec<String> = entries
+                        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+                        .collect();
+                    names.sort();
+                    json!({"id": id, "ok": true, "entries": names})
+                }
                 Err(e) => fail(e.to_string()),
             },
-            _ => fail("write needs a path and content".into()),
+            None => fail("list needs a path".into()),
         },
         Some("sql") => match request.get("sql").and_then(Value::as_str) {
             Some(sql) => run_sql(&id, sql, request.get("catalog").and_then(Value::as_str)),
             None => fail("sql needs a sql string".into()),
         },
+        Some("python") => match request.get("code").and_then(Value::as_str) {
+            Some(code) => run_python(&id, code, python),
+            None => fail("python needs a code string".into()),
+        },
         other => fail(format!(
-            "unknown op {other:?} (proto 1: ping/read/write/sql)"
+            "unknown op {other:?} (proto 1: ping/read/write/list/sql/python)"
         )),
     }
 }
@@ -166,13 +255,14 @@ fn main() {
     }
 
     let stdin = std::io::stdin();
+    let mut python: Option<PyExec> = None;
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
         if line.trim().is_empty() {
             continue;
         }
         let response = match serde_json::from_str::<Value>(&line) {
-            Ok(request) => handle(&request),
+            Ok(request) => handle(&request, &mut python),
             Err(e) => json!({"id": null, "ok": false, "error": format!("bad request: {e}")}),
         };
         let mut out = stdout.lock();

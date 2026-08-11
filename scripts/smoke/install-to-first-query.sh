@@ -174,6 +174,16 @@ pd -H 'Content-Type: application/json' \
   "http://pebblesd/sessions/$id_tomas/exec" | grep -q 'tomas-only' \
   || { echo "FAIL: tomas cannot read his own file back" >&2; exit 1; }
 
+echo "==> M1.4: python cells run as the user, with state across cells"
+py1="$(pd -H 'Content-Type: application/json' \
+  -d '{"id":30,"op":"python","code":"import getpass\nx = 41\nprint(getpass.getuser())"}' \
+  "http://pebblesd/sessions/$id_maya/exec")"
+expect '"stdout":"maya' "python cell runs as maya" "$py1"
+py2="$(pd -H 'Content-Type: application/json' \
+  -d '{"id":31,"op":"python","code":"x + 1"}' \
+  "http://pebblesd/sessions/$id_maya/exec")"
+expect '"stdout":"42' "python state persists across cells" "$py2"
+
 echo "==> memory admission refuses cleanly (REQ-20)"
 refuse_code="$(pd_code -H 'Content-Type: application/json' \
   -d '{"username":"maya","memory_limit_bytes":99999999999999}' http://pebblesd/sessions)"

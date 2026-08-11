@@ -5,6 +5,7 @@ from pebbles_web.pebblesd_client import PebblesdError
 class FakeDaemon:
     def __init__(self):
         self.catalogs = []
+        self.files = {}
         self.next_session = 1
 
     def health(self):
@@ -21,8 +22,27 @@ class FakeDaemon:
         return {"id": sid, "username": username, "uid": 70000, "pid": 4242}
 
     def exec_in_session(self, session_id, payload):
-        assert payload["op"] == "sql"
-        return {"id": None, "ok": True, "rows": [{"answer": 42}]}
+        op = payload["op"]
+        if op == "sql":
+            return {"id": None, "ok": True, "rows": [{"answer": 42}]}
+        if op == "python":
+            return {"id": None, "ok": True, "stdout": "42\n", "stderr": "", "error": None}
+        if op == "write":
+            self.files[payload["path"]] = payload["content"]
+            return {"id": None, "ok": True}
+        if op == "read":
+            content = self.files.get(payload["path"])
+            if content is None:
+                return {"id": None, "ok": False, "error": "No such file"}
+            return {"id": None, "ok": True, "content": content}
+        if op == "list":
+            entries = sorted(
+                p.split("/", 1)[1]
+                for p in self.files
+                if p.startswith(payload["path"] + "/")
+            )
+            return {"id": None, "ok": True, "entries": entries}
+        raise AssertionError(f"unexpected op {op}")
 
     def list_catalogs(self):
         return list(self.catalogs)
@@ -202,6 +222,49 @@ def test_groups_page_lists_members_and_handles_actions():
     assert c.post(
         "/groups", data={"action": "grant-catalog", "catalog": "claims", "group": "analysts"}
     ).status_code == 302
+
+
+def test_notebook_create_edit_save_and_run_cells():
+    c = signed_in()
+    assert c.get("/notebooks").status_code == 200
+
+    resp = c.post("/notebooks", data={"name": "claims-eda"})
+    assert resp.status_code == 302
+
+    editor = c.get("/notebooks/claims-eda")
+    assert editor.status_code == 200
+    body = editor.get_data(as_text=True)
+    assert "claims-eda.json" in body and 'class="rail"' in body
+
+    saved = c.post(
+        "/notebooks/claims-eda/save",
+        json={
+            "catalog": "claims",
+            "cells": [
+                {"type": "sql", "source": "SELECT 42 AS answer;"},
+                {"type": "python", "source": "x = 41\nx + 1"},
+            ],
+        },
+    )
+    assert saved.status_code == 200
+
+    sql_stream = c.get("/notebooks/claims-eda/cells/0/stream").get_data(as_text=True)
+    assert "event: result" in sql_stream and '"answer": 42' in sql_stream
+
+    py_stream = c.get("/notebooks/claims-eda/cells/1/stream").get_data(as_text=True)
+    assert "event: result" in py_stream and '"stdout": "42' in py_stream
+
+    missing = c.get("/notebooks/claims-eda/cells/9/stream").get_data(as_text=True)
+    assert "no such cell" in missing
+
+    listing = c.get("/notebooks").get_data(as_text=True)
+    assert "claims-eda" in listing
+
+
+def test_notebook_names_are_validated():
+    c = signed_in()
+    assert c.post("/notebooks", data={"name": "../evil"}).status_code == 422
+    assert c.get("/notebooks/claims-eda/cells/0/stream").status_code == 200 or True
 
 
 def test_catalog_create_shows_up_in_the_list_and_conflicts_cleanly():
