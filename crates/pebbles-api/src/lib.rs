@@ -53,10 +53,52 @@ pub struct VersionInfo {
     pub version: String,
 }
 
+/// Create a real UNIX account in the reserved Pebbles uid range (REQ-11).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CreateUserRequest {
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct UserInfo {
+    pub username: String,
+    pub uid: u32,
+    pub gid: u32,
+    pub home: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct LoginRequest {
+    pub username: String,
+    pub password: String,
+}
+
+/// Successful login: the caller's verified identity.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct LoginResponse {
+    pub username: String,
+    pub uid: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ApiError {
+    pub error: String,
+}
+
 #[derive(OpenApi)]
 #[openapi(
     info(title = "pebblesd", description = "Local privileged API for Pebbles"),
-    components(schemas(Role, Health, VersionInfo))
+    components(schemas(
+        Role,
+        Health,
+        VersionInfo,
+        CreateUserRequest,
+        UserInfo,
+        LoginRequest,
+        LoginResponse,
+        ApiError
+    ))
 )]
 pub struct ApiDoc;
 

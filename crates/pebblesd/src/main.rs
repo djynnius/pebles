@@ -5,36 +5,14 @@
 //! API on a unix socket. The Flask tier is a client of that socket and nothing else
 //! (NFR-01): the socket is root-owned with group `pebbles`, mode 0660.
 
+mod api;
 mod config;
 mod services;
 mod supervisor;
 mod wizard;
 
-use axum::{routing::get, Json, Router};
-use pebbles_api::{Health, Role, VersionInfo};
 use tokio::net::UnixListener;
 use tokio::signal::unix::{signal, SignalKind};
-
-fn app(role: Role) -> Router {
-    Router::new()
-        .route(
-            "/healthz",
-            get(move || async move {
-                Json(Health {
-                    status: "ok".to_string(),
-                    role,
-                })
-            }),
-        )
-        .route(
-            "/version",
-            get(|| async {
-                Json(VersionInfo {
-                    version: env!("CARGO_PKG_VERSION").to_string(),
-                })
-            }),
-        )
-}
 
 fn bind_api_socket(path: &std::path::Path) -> anyhow::Result<UnixListener> {
     use std::os::unix::fs::PermissionsExt;
@@ -72,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut sigterm = signal(SignalKind::terminate())?;
     tokio::select! {
-        r = axum::serve(listener, app(cfg.role)) => r?,
+        r = axum::serve(listener, api::router(cfg.role)) => r?,
         _ = sigterm.recv() => tracing::info!("SIGTERM"),
         _ = tokio::signal::ctrl_c() => tracing::info!("interrupt"),
     }

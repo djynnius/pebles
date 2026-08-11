@@ -5,4 +5,5 @@ edition.workspace = true
 description = "UNIX identity: uid/gid allocation in the reserved Pebbles range, account provisioning, PAM auth (REQ-11..15)."
 
 [dependencies]
+pwhash = { workspace = true }
 thiserror = { workspace = true }

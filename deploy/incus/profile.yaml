@@ -1,8 +1,8 @@
 # Incus profile for Pebbles containers (system containers running pebblesd as init).
 #
-# Prereq — delegate the reserved Pebbles uid range to root on the host:
-#   echo "root:60000:5000" >> /etc/subuid
-#   echo "root:60000:5000" >> /etc/subgid
+# Prereq — delegate the reserved Pebbles uid range (ADR-001) to root on the host:
+#   echo "root:70000:5000" >> /etc/subuid
+#   echo "root:70000:5000" >> /etc/subgid
 #
 #   incus profile create pebbles
 #   incus profile edit pebbles < deploy/incus/profile.yaml
@@ -13,10 +13,10 @@ name: pebbles
 description: Pebbles engine/main — unprivileged with the reserved uid range identity-mapped
 config:
   security.privileged: "false"
-  # 1:1 map of the reserved Pebbles user range (ADR-001): uid 60001 in the container
-  # IS uid 60001 on the host, which is what keeps homes and lake files consistent.
+  # 1:1 map of the reserved Pebbles user range (ADR-001): uid 70001 in the container
+  # IS uid 70001 on the host, which is what keeps homes and lake files consistent.
   raw.idmap: |-
-    both 60000-64999 60000-64999
+    both 70000-74999 70000-74999
   environment.PEBBLES_CONFIG: /var/lib/pebbles
 devices:
   eth0:

@@ -10,8 +10,8 @@ One image, three runtimes. Non-negotiables that apply to every runtime:
   `/etc/containers/systemd/`). Rootless remaps uids through subuid ranges, which breaks
   the host-uid identity model (REQ-11); pebblesd detects a rootless socket and refuses.
 - **Incus engines run unprivileged** with a 1:1 idmap of the reserved Pebbles uid range
-  (60000–64999). Delegate the range to root first:
-  `echo "root:60000:5000" >> /etc/subuid && echo "root:60000:5000" >> /etc/subgid`.
+  (70000–74999, ADR-001). Delegate the range to root first:
+  `echo "root:70000:5000" >> /etc/subuid && echo "root:70000:5000" >> /etc/subgid`.
   Privileged containers are the fallback where subuid delegation isn't possible.
 - The config volume (`/var/lib/pebbles`) holds the role and all state — keep it on
   restarts; upgrading is "pull new image, same volume" (REQ-09).

@@ -3,10 +3,10 @@
 # podman, incus) and locally. It grows with the milestones until it encodes the full
 # Phase 0 exit: "Ade installs one container and Maya runs a query, each as themselves."
 #
-#   v0.2 (M0.2, current): boot as main; the FLASK tier answers on :8080 and its
-#     /healthz proxies pebblesd over the unix socket (the NFR-01 boundary, end to
-#     end); the shell page serves; the role survives a restart (REQ-03).
-#   M0.3 adds: create user maya via API, assert uid ∈ 60000+ and home ownership.
+#   v0.3 (M0.3, current): boot as main; web tier on :8080 proxies pebblesd over the
+#     unix socket (NFR-01 end to end); Ade creates maya through the privileged API
+#     (real UNIX account, uid ∈ 70000+, 0700 home); Maya signs into the web UI with
+#     her UNIX password; the role and the account survive a restart (REQ-03/11).
 #   M0.5 adds: CREATE CATALOG + query DuckLake as maya; SSE round-trip.
 #   M0.6 adds: zero-egress assertion (NFR-03) and the main+engine topology.
 #
@@ -45,14 +45,42 @@ echo "$health" | grep -q '"status":"ok"' \
 echo "$health" | grep -q '"role":"main"' \
   || { echo "FAIL: expected role=main via the pebblesd proxy" >&2; exit 1; }
 
-echo "==> the Flask shell serves (M0.2 exit criterion)"
-curl -fsS "$BASE/" | grep -q 'data-pb-theme' \
+echo "==> the Flask shell serves (login page when signed out)"
+curl -fsSL "$BASE/" | grep -q 'data-pb-theme' \
   || { echo "FAIL: / did not serve the shell page" >&2; exit 1; }
 
-echo "==> restart preserves the sticky role (REQ-03)"
+echo "==> Ade path: create maya through the privileged API (M0.3)"
+pd() { "$RUNTIME" exec "$NAME" curl -fsS --unix-socket /run/pebbles/pebblesd.sock "$@"; }
+created="$(pd -H 'Content-Type: application/json' \
+  -d '{"username":"maya","password":"pebbles-demo-1"}' http://pebblesd/users)"
+echo "    $created"
+echo "$created" | grep -q '"uid":70000' \
+  || { echo "FAIL: expected maya at uid 70000 (ADR-001 range)" >&2; exit 1; }
+
+echo "==> the host agrees with the API (REQ-11)"
+"$RUNTIME" exec "$NAME" getent passwd maya | grep -q ':70000:70000:' \
+  || { echo "FAIL: getent disagrees about maya's uid/gid" >&2; exit 1; }
+[ "$("$RUNTIME" exec "$NAME" stat -c '%u:%g:%a' /home/maya)" = "70000:70000:700" ] \
+  || { echo "FAIL: /home/maya must be owned by maya, mode 0700" >&2; exit 1; }
+
+echo "==> Maya path: sign into the web UI with her UNIX password"
+jar="$(mktemp)"
+code="$(curl -s -o /dev/null -w '%{http_code}' -c "$jar" \
+  -d 'username=maya&password=pebbles-demo-1' "$BASE/login")"
+[ "$code" = "302" ] || { echo "FAIL: login expected 302, got $code" >&2; exit 1; }
+curl -fsS -b "$jar" "$BASE/" | grep -q 'maya' \
+  || { echo "FAIL: signed-in shell does not show maya" >&2; exit 1; }
+badcode="$(curl -s -o /dev/null -w '%{http_code}' \
+  -d 'username=maya&password=wrong-password' "$BASE/login")"
+[ "$badcode" = "401" ] || { echo "FAIL: wrong password expected 401, got $badcode" >&2; exit 1; }
+rm -f "$jar"
+
+echo "==> restart preserves the sticky role and the account (REQ-03/11)"
 "$RUNTIME" restart "$NAME" >/dev/null
 sticky="$(wait_healthy)"
 echo "$sticky" | grep -q '"role":"main"' \
   || { echo "FAIL: role lost across restart" >&2; exit 1; }
+"$RUNTIME" exec "$NAME" getent passwd maya >/dev/null \
+  || { echo "FAIL: maya vanished across restart" >&2; exit 1; }
 
 echo "==> smoke OK ($RUNTIME)"

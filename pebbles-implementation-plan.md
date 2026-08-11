@@ -50,18 +50,19 @@ records the working resolution; contested calls are listed in §10 for owner sig
 
 ## 3. Identity model — the load-bearing constants
 
-- **Reserved uid/gid range for Pebbles users: 60000–64999** (5000 accounts; NFR-05 needs 25).
-  Allocated by the main, stamped into the config volume, audited at engine registration;
-  registration **refuses on conflict** (PRD uid-drift risk). This is ADR-001 — treat the
-  range like a wire-protocol constant; changing it post-v1 means chowning every home and
-  lake file on every host.
+- **Reserved uid/gid range for Pebbles users: 70000–74999** (5000 accounts; NFR-05 needs
+  25). Decided in `docs/adr/ADR-001-uid-range.md` — the earlier 60000–64999 proposal sat
+  inside Debian's globally-reserved block, and our image is Debian. Allocated by the main,
+  stamped into the config volume, audited at engine registration; registration **refuses
+  on conflict** (PRD uid-drift risk). Treat the range like a wire-protocol constant;
+  changing it post-v1 means chowning every home and lake file on every host.
 - **Rootful Podman only in v1.** Rootless remaps uids through the invoking user's subuid
   range, so uid 60001 in-container ≠ 60001 on the host — bind-mounted homes and lake files
   get garbage owners and REQ-11..15 silently break. `pebblesd` detects a rootless socket at
   setup and **fails loudly** with a doc link. Rootless support would be a second identity
   model; post-v1 at the earliest.
 - **Incus: unprivileged containers with an explicit 1:1 idmap** of the reserved range
-  (`raw.idmap: "both 60000-64999 60000-64999"`; host root's subuid must delegate the range —
+  (`raw.idmap: "both 70000-74999 70000-74999"`; host root's subuid must delegate the range —
   deploy docs and the CI setup action handle it). Privileged containers are the documented
   fallback for hosts without subuid delegation.
 - **Engine container capabilities:** `pebblesd` runs as root in-container and forks session
@@ -113,7 +114,7 @@ pebles/
 │   ├── pebblesd/               # binary: PID-1 supervisor, role bootstrap, unix-socket REST API
 │   ├── pebbles-api/            # request/response types; utoipa → OpenAPI → generated Flask client
 │   ├── pebbles-runtime/        # ContainerRuntime trait + docker/podman/incus drivers
-│   ├── pebbles-identity/       # uid allocator (60000–64999), useradd/usermod wrappers, PAM auth
+│   ├── pebbles-identity/       # uid allocator (70000–74999, ADR-001), useradd wrappers, shadow auth
 │   ├── pebbles-session/        # session broker: spawn-as-uid, memory admission (REQ-20), idle timers
 │   └── xtask/                  # cargo xtask: api-schema export, size report
 ├── web/                        # Flask app; pebblesd_client.py is generated, talks ONLY to the socket
@@ -208,12 +209,12 @@ Docs-only PRs finish in under a minute; Rust and Python run in parallel.
 `runtime ∈ {docker, podman-rootful, incus} × topology ∈ {single-box, main+engine}` = 6
 cells (arm64 cells nightly). Podman is preinstalled on `ubuntu-24.04` runners; Incus
 installs in-job (archive or Zabbly repo) via a `setup-incus` composite action that also
-delegates subuids 60000–64999 and imports the converted tarball. Every cell runs the
+delegates subuids 70000–74999 and imports the converted tarball. Every cell runs the
 **same** `scripts/smoke/install-to-first-query.sh`:
 
 1. Boot main from the exact digest built upstream (`PEBBLES_ROLE=main`, fresh config
    volume); for main+engine, boot a second container with a token minted via the API.
-2. **Ade path:** create user `maya` via API; assert uid ∈ 60000+ and `/home/maya`
+2. **Ade path:** create user `maya` via API; assert uid ∈ 70000+ and `/home/maya`
    ownership *on the host*.
 3. **Maya path:** authenticate as maya; open a session; `CREATE CATALOG` + query DuckLake;
    assert results, session-process uid == maya's uid, and a file maya writes is hers on
@@ -254,7 +255,7 @@ already reserve its headroom.
 |---|---|---|
 | M0.1 ✅ | **Scaffold + PR CI** | Workspace compiles; Flask hello; `ci.yml` green; path filters work; a docs-only PR runs <1 min. |
 | M0.2 ✅ | **pebblesd boots the box** | PID-1 supervisor; role via env + minimal TTY wizard, sticky in config volume (REQ-03); unix-socket API (health/version); supervises Postgres + gunicorn on `main`. `docker run -e PEBBLES_ROLE=main` serves the Flask shell; restart preserves role; size gate live. |
-| M0.3 | **UNIX identity** (REQ-11 core) | ADR-001 (uid range) written; create-user API → real account + home + personal primary group (REQ-13 machinery); PAM login through pebblesd; Flask login. Host `getent`/`ls -ln` agree with the API. |
+| M0.3 ✅ | **UNIX identity** (REQ-11 core) | ADR-001 (uid range) written; create-user API → real account + 0700 home + personal primary group (REQ-13 machinery); shadow-verified login through pebblesd (SHA-512 crypt — PAM can't link into a static musl binary; same shadow entry sshd uses, so REQ-15 holds); Flask login. Host `getent`/`ls -ln` agree with the API. |
 | M0.4 | **Sessions as the user** (REQ-12/16/20 core) | Broker forks `sql-runner` with setuid/setgid, home at `/workspace`; per-session `memory_limit` with sum-of-limits admission; idle timeout. Two users hold concurrent sessions with distinct uids; A cannot read B's files; over-budget third session refused cleanly. **This is the spec's load-bearing reconciliation — prove it early.** |
 | M0.5 | **DuckLake + SQL editor + SSE** | Postgres-cataloged DuckLake in the runner (extensions baked in — NFR-03); Create Catalog with live SQL (REQ-25 subset); SQL editor with results grid; SSE streaming under gunicorn with 5 concurrent users (the PRD names Flask streaming a Phase 0 prototype target). Maya loads a CSV and time-travels a snapshot. |
 | M0.6 | **Three runtimes + upgrade scaffold** | Incus conversion job; `deploy/` examples (compose / rootful quadlet / incus profile with `raw.idmap`); full 6-cell matrix green on `install-to-first-query.sh`; a trivial-but-real migration framework with pre-migration backup so the nightly upgrade test exercises something from day one. **= Phase 0 exit.** |
@@ -269,9 +270,10 @@ the runtime matrix must not be left for last.
 2. **Rootful-only Podman v1** — rootless is Podman's default posture; we must *detect and
    refuse*, not degrade. Failing to detect rootless is a data-integrity incident, not an
    inconvenience. *Sign-off needed.*
-3. **ADR-001: uid/gid range 60000–64999** — near-irreversible; written before M0.3.
-   (Debian nominally reserves 60000–64999 for the project; if that worries us, 70000–74999
-   is the alternative — decide in the ADR.) *Sign-off needed.*
+3. **ADR-001: uid/gid range 70000–74999** — decided and written (`docs/adr/`): the
+   60000–64999 candidate sat inside Debian's globally-reserved block and our image is
+   Debian, so the range moved to unallocated space. Near-irreversible from M0.3 on.
+   *Sign-off needed (review the ADR).*
 4. **Airflow 3.x weight + venv isolation** — three venvs; budget headroom pre-reserved;
    Airflow pinned to a constraints file. Watch: Airflow 3 requires our operator to use the
    Task SDK model (no DB access) — which is what REQ-41 wanted anyway.

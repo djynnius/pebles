@@ -7,6 +7,16 @@ All notable changes to Pebbles are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **M0.3 — UNIX identity**: creating a Pebbles user now provisions a real host
+  account — uid from the reserved range with a personal primary group (uid == gid),
+  a private `0700` home, and an SHA-512-crypt password in `/etc/shadow` (the same
+  credential SSH uses). New pebblesd endpoints on the privileged socket:
+  `POST/GET /users` and `POST /auth/login` (shadow-verified). The web UI gained a
+  Monokai login page; the shell is session-gated and shows the signed-in identity.
+  `docs/adr/ADR-001-uid-range.md` fixes the reserved uid/gid range at **70000–74999**
+  (moved off the earlier 60000–64999 working proposal because Debian globally
+  reserves that block and the image is Debian). The smoke test now runs the full
+  Ade-creates-maya / maya-signs-in path and asserts host state matches the API.
 - **M0.2 — pebblesd boots the box**: pebblesd is now a real PID-1 supervisor — it
   starts and supervises Postgres (unix-socket only, data in the config volume) and
   gunicorn (as the unprivileged `pebbles-web` user, never root) on the `main` role,

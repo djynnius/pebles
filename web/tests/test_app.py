@@ -5,6 +5,11 @@ class FakeDaemon:
     def health(self):
         return {"status": "ok", "role": "main"}
 
+    def login(self, username, password):
+        if password == "pebbles-demo-1":
+            return {"username": username, "uid": 70000}
+        return None
+
 
 class DownDaemon:
     def health(self):
@@ -34,8 +39,33 @@ def test_healthz_degrades_to_503_when_pebblesd_is_unreachable():
     assert "no socket" in body["pebblesd"]["error"]
 
 
-def test_index_serves_the_wordmark_shell():
+def test_index_requires_login():
     resp = client().get("/")
+    assert resp.status_code == 302
+    assert "/login" in resp.headers["Location"]
+
+
+def test_wrong_password_is_rejected_on_the_login_page():
+    resp = client().post("/login", data={"username": "maya", "password": "nope"})
+    assert resp.status_code == 401
+    assert "Invalid username or password" in resp.get_data(as_text=True)
+
+
+def test_login_and_signed_in_shell():
+    c = client()
+    resp = c.post("/login", data={"username": "maya", "password": "pebbles-demo-1"})
+    assert resp.status_code == 302
+
+    shell = c.get("/")
+    assert shell.status_code == 200
+    body = shell.get_data(as_text=True)
+    assert "maya" in body and "70000" in body and "data-pb-theme" in body
+
+    c.get("/logout")
+    assert c.get("/").status_code == 302
+
+
+def test_login_page_serves_the_design_shell():
+    resp = client().get("/login")
     assert resp.status_code == 200
-    body = resp.get_data(as_text=True)
-    assert "les" in body and "data-pb-theme" in body
+    assert "data-pb-theme" in resp.get_data(as_text=True)

@@ -92,6 +92,22 @@ fn gunicorn(cfg: &Config) -> Option<ServiceSpec> {
         tracing::error!("user {WEB_USER} missing; refusing to run the web tier as root (NFR-01)");
         return None;
     };
+    let mut envs = vec![(
+        "PEBBLES_SOCKET".into(),
+        cfg.socket_path().display().to_string(),
+    )];
+    match ensure_web_secret(cfg) {
+        Ok(secret) => envs.push((
+            "PEBBLES_WEB_SECRET_FILE".into(),
+            secret.display().to_string(),
+        )),
+        // Without a shared secret, each gunicorn worker would mint its own and
+        // session cookies would bounce between workers — better to fail the service.
+        Err(err) => {
+            tracing::error!(%err, "cannot provision web session secret; UI disabled");
+            return None;
+        }
+    }
     Some(ServiceSpec {
         name: "web".into(),
         pre: vec![],
@@ -106,13 +122,29 @@ fn gunicorn(cfg: &Config) -> Option<ServiceSpec> {
                 WEB_ROOT.into(),
                 "pebbles_web:create_app()".into(),
             ],
-            envs: vec![(
-                "PEBBLES_SOCKET".into(),
-                cfg.socket_path().display().to_string(),
-            )],
+            envs,
             run_as: Some((uid, gid)),
         },
     })
+}
+
+/// Stable Flask session secret in the config volume: root-owned, readable by the
+/// `pebbles` group only, survives restarts so logins do too.
+fn ensure_web_secret(cfg: &Config) -> std::io::Result<PathBuf> {
+    use std::io::Read;
+    use std::os::unix::fs::PermissionsExt;
+    let path = cfg.config_dir.join("web-secret");
+    if !path.exists() {
+        let mut bytes = [0u8; 32];
+        std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+        let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        std::fs::write(&path, hex)?;
+    }
+    if let Some(gid) = pebbles_identity::system_group("pebbles") {
+        std::os::unix::fs::chown(&path, Some(0), Some(gid))?;
+    }
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640))?;
+    Ok(path)
 }
 
 /// Highest-versioned Debian postgres bindir (`/usr/lib/postgresql/<N>/bin`).

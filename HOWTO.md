@@ -14,10 +14,20 @@ docker run -d --name pebbles \
   ghcr.io/djynnius/pebles:edge
 ```
 
-Open http://localhost:8080 — the shell page is served by gunicorn under pebblesd's
-supervision, and `/healthz` shows the daemon's role proxied over the privileged
-socket. Omit `-e PEBBLES_ROLE=…` and run with `-it` to get the setup wizard instead.
-Podman (rootful) works with the same flags; Incus instructions land with M0.6.
+Open http://localhost:8080 — you'll land on the login page. Create the first user
+through the privileged API (admin screens arrive in Phase 1):
+
+```sh
+docker exec pebbles curl -s --unix-socket /run/pebbles/pebblesd.sock \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"maya","password":"choose-a-password"}' http://pebblesd/users
+```
+
+That provisions a real UNIX account (uid in the reserved 70000+ range, private
+`/home/maya`) and the same password signs into the web UI. `/healthz` shows the
+daemon's role proxied over the privileged socket. Omit `-e PEBBLES_ROLE=…` and run
+with `-it` to get the setup wizard instead. Podman (rootful) works with the same
+flags; Incus instructions land with M0.6.
 
 ## Explore the product
 

@@ -105,8 +105,8 @@ mod tests {
     fn shared(mem: u64) -> SessionSpec {
         SessionSpec {
             user: "maya".into(),
-            uid: 60001,
-            gid: 60001,
+            uid: 70001,
+            gid: 70001,
             mode: SessionMode::Shared,
             memory_limit_bytes: mem,
         }
