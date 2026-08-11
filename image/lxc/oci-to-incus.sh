@@ -12,18 +12,24 @@ OUTDIR="${2:?missing outdir}"
 ARCH="${3:-x86_64}"
 VERSION="${4:-dev}"
 
+# Unpacking preserves in-image file ownership (chown), which needs root; a system
+# container image must also keep numeric uids/gids intact in the tarball.
+SUDO=""
+[ "$(id -u)" -ne 0 ] && SUDO="sudo"
+
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+trap '$SUDO rm -rf "$WORK"' EXIT
 mkdir -p "$OUTDIR"
 
 echo "==> copying $IMAGE_REF to OCI layout"
 skopeo copy "docker-daemon:${IMAGE_REF}" "oci:${WORK}/oci:pebbles"
 
 echo "==> unpacking rootfs"
-umoci unpack --image "${WORK}/oci:pebbles" "${WORK}/bundle"
+$SUDO umoci unpack --image "${WORK}/oci:pebbles" "${WORK}/bundle"
 
 echo "==> packaging rootfs.tar.xz"
-tar -C "${WORK}/bundle/rootfs" -cJf "${OUTDIR}/rootfs.tar.xz" .
+$SUDO tar -C "${WORK}/bundle/rootfs" --numeric-owner -cJf "${OUTDIR}/rootfs.tar.xz" .
+[ -n "$SUDO" ] && $SUDO chown "$(id -u):$(id -g)" "${OUTDIR}/rootfs.tar.xz"
 
 echo "==> packaging metadata.tar.xz"
 sed -e "s/{{ARCH}}/${ARCH}/" \
