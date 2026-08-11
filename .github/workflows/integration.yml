@@ -49,13 +49,17 @@ jobs:
 
       - name: Load the image into rootful podman
         if: matrix.runtime == 'podman'
-        run: docker save pebbles:it | sudo podman load
+        run: |
+          docker save pebbles:it | sudo podman load
+          # podman names docker-saved images docker.io/library/…; give it the
+          # fully-qualified local name so nothing tries to hit a registry.
+          sudo podman tag docker.io/library/pebbles:it localhost/pebbles:it
 
       - name: Set up incus and import the converted system-container image
         if: matrix.runtime == 'incus'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends incus skopeo umoci xz-utils
+          sudo apt-get install -y --no-install-recommends incus skopeo umoci xz-utils dnsmasq-base
           # Delegate the reserved Pebbles uid range (ADR-001) to root, then restart
           # so the daemon rereads subuid/subgid.
           echo "root:70000:5000" | sudo tee -a /etc/subuid /etc/subgid
