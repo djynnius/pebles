@@ -60,6 +60,8 @@ async fn main() -> anyhow::Result<()> {
         );
     }
     tracing_subscriber::fmt().with_target(false).init();
+    #[cfg(target_os = "linux")]
+    ensure_init_mounts();
 
     let cfg = config::Config::load(wizard::prompt_role)?;
     tracing::info!(role = %cfg.role, config = %cfg.config_dir.display(), "pebblesd starting");
@@ -107,6 +109,53 @@ async fn main() -> anyhow::Result<()> {
     }
     sup.shutdown().await;
     Ok(())
+}
+
+/// Mounts that are the INIT's job. Docker/Podman mount a tmpfs on /dev/shm before
+/// our process starts; Incus/LXC do not — autodev populates /dev with device nodes
+/// only and leaves /dev/shm to the init system (systemd images mount it themselves).
+/// Without it, glibc shm_open/sem_open fail, which kills Python `multiprocessing`
+/// — concretely, Airflow's LocalExecutor scheduler crash-loops at startup and no
+/// workflow ever triggers, while everything else (Postgres falls back to sysv shm
+/// at initdb probe time) appears healthy.
+#[cfg(target_os = "linux")]
+fn ensure_init_mounts() {
+    if std::process::id() != 1 {
+        return; // not the init — whoever booted us owns the mount table
+    }
+    let mounts = std::fs::read_to_string("/proc/self/mounts").unwrap_or_default();
+    if mounts
+        .lines()
+        .any(|l| l.split_whitespace().nth(1) == Some("/dev/shm"))
+    {
+        return; // the runtime already mounted it (Docker/Podman)
+    }
+    if let Err(err) = std::fs::create_dir_all("/dev/shm") {
+        tracing::error!(%err, "cannot create /dev/shm mountpoint");
+        return;
+    }
+    let src = std::ffi::CString::new("tmpfs").expect("cstr");
+    let target = std::ffi::CString::new("/dev/shm").expect("cstr");
+    let fstype = std::ffi::CString::new("tmpfs").expect("cstr");
+    let data = std::ffi::CString::new("mode=1777").expect("cstr");
+    // SAFETY: plain mount(2) with valid, NUL-terminated arguments.
+    let rc = unsafe {
+        libc::mount(
+            src.as_ptr(),
+            target.as_ptr(),
+            fstype.as_ptr(),
+            libc::MS_NOSUID | libc::MS_NODEV,
+            data.as_ptr() as *const libc::c_void,
+        )
+    };
+    if rc == 0 {
+        tracing::info!("mounted tmpfs on /dev/shm (init duty on Incus/LXC)");
+    } else {
+        tracing::error!(
+            err = %std::io::Error::last_os_error(),
+            "mounting /dev/shm failed; Python multiprocessing (Airflow) will break"
+        );
+    }
 }
 
 /// LXC/Incus ask a system container's init to shut down with SIGPWR (the

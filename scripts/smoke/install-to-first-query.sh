@@ -35,7 +35,12 @@ ctr_exec() {
 
 show_logs() {
   case "$RUNTIME" in
-    incus) ctr info "$NAME" --show-log ;;
+    incus)
+      # The console ringbuffer is where pebblesd-as-init's tracing and every
+      # supervised service's stderr land; `info --show-log` is only the (usually
+      # empty) LXC driver log.
+      ctr console "$NAME" --show-log 2>/dev/null || ctr info "$NAME" --show-log
+      ;;
     *) ctr logs "$NAME" ;;
   esac
 }
@@ -286,7 +291,7 @@ for _ in $(seq 1 30); do
   fi
   sleep 1
 done
-[ "$listening" = "up" ] || { echo "FAIL: sshd never listened on 22" >&2; show_logs >&2 | tail -30 || true; exit 1; }
+[ "$listening" = "up" ] || { echo "FAIL: sshd never listened on 22" >&2; { show_logs 2>&1 | tail -30; } >&2 || true; exit 1; }
 ctr_exec pgrep -x sshd >/dev/null || { echo "FAIL: sshd not running" >&2; exit 1; }
 ctr_exec grep -qiE '^Subsystem[[:space:]]+sftp' /etc/ssh/sshd_config \
   || { echo "FAIL: sshd config declares no SFTP subsystem" >&2; exit 1; }
@@ -347,7 +352,20 @@ for _ in $(seq 1 84); do
   [ "$code" = "200" ] && { triggered=yes; break; }
   sleep 5
 done
-[ "$triggered" = "yes" ] || { echo "FAIL: workflow trigger never accepted" >&2; show_logs >&2 | tail -40 || true; exit 1; }
+if [ "$triggered" != "yes" ]; then
+  echo "FAIL: workflow trigger never accepted" >&2
+  echo "--- last trigger response body ---" >&2
+  ctr_exec curl -s --max-time 120 --unix-socket /run/pebbles/pebblesd.sock \
+    -X POST http://pebblesd/workflows/smoke-flow/run >&2 || true
+  echo >&2
+  echo "--- /dev/shm (Airflow's LocalExecutor needs POSIX sem/shm) ---" >&2
+  ctr_exec sh -c 'ls -ld /dev/shm 2>&1; grep /dev/shm /proc/mounts 2>&1 || echo "NOT MOUNTED"' >&2 || true
+  echo "--- airflow scheduler home logs ---" >&2
+  ctr_exec sh -c 'ls -R /var/lib/pebbles/airflow/logs 2>/dev/null | head -30' >&2 || true
+  echo "--- container log tail ---" >&2
+  { show_logs 2>&1 | tail -60; } >&2 || true
+  exit 1
+fi
 echo "    triggered; waiting for the run to succeed"
 run_state=""
 for _ in $(seq 1 60); do
