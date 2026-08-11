@@ -271,6 +271,32 @@ rm -f "$jar5"
 grep -q 'event: result' <<<"$sse" && grep -q '"c": 3' <<<"$sse" \
   || { echo "FAIL: SSE stream missing the result event: $sse" >&2; exit 1; }
 
+echo "==> M1.7: the git loop runs as the user, fully offline (REQ-32/33)"
+git_op() { # git_op <json-args> <cwd-or-empty>
+  local cwd=""
+  [ -n "$2" ] && cwd=",\"cwd\":\"$2\""
+  ctr_exec curl -s --unix-socket /run/pebbles/pebblesd.sock \
+    -H 'Content-Type: application/json' \
+    -d "{\"id\":40,\"op\":\"git\",\"args\":$1$cwd}" \
+    "http://pebblesd/sessions/$id_maya/exec"
+}
+expect '"ok":true' "git identity" \
+  "$(git_op '["config","--global","user.name","Maya Ruiz"]' "")"
+git_op '["config","--global","user.email","maya@example.test"]' "" >/dev/null
+expect '"ok":true' "bare origin created" "$(git_op '["init","--bare","origin.git"]' "")"
+expect '"ok":true' "clone into ~/repos (REQ-32)" \
+  "$(git_op '["clone","/home/maya/origin.git","repos/proj"]' "")"
+pd -H 'Content-Type: application/json' \
+  -d '{"id":41,"op":"write","path":"repos/proj/hello.txt","content":"hello pebbles"}' \
+  "http://pebblesd/sessions/$id_maya/exec" >/dev/null
+expect '"ok":true' "stage" "$(git_op '["add","--","hello.txt"]' "repos/proj")"
+expect '"ok":true' "commit" "$(git_op '["commit","-m","first from pebbles"]' "repos/proj")"
+expect '"ok":true' "push" "$(git_op '["push","origin","HEAD"]' "repos/proj")"
+expect 'first from pebbles' "the push landed in origin" \
+  "$(git_op '["log","--oneline","-1"]' "origin.git")"
+[ "$(ctr_exec stat -c '%u' /home/maya/repos/proj/.git)" = "70000" ] \
+  || { echo "FAIL: repo not owned by maya (REQ-33)" >&2; exit 1; }
+
 echo "==> M1.6: workflows run through hidden Airflow as the owner (REQ-38/41/42)"
 pd -H 'Content-Type: application/json' \
   -d '{"name":"smoke-flow","username":"maya","schedule":null,"tasks":[{"id":"mark","task_type":"shell","payload":"id -un > ~/from-job.txt"}]}' \
@@ -295,6 +321,7 @@ if [ "$run_state" != "success" ]; then
   echo "FAIL: workflow run did not succeed: $runs" >&2
   run_id="$(json_str "$runs" run_id)"
   pd "http://pebblesd/workflows/smoke-flow/runs/$run_id" >&2 || true
+  { show_logs | tail -60; } >&2 || true
   exit 1
 fi
 [ "$(ctr_exec stat -c '%u' /home/maya/from-job.txt)" = "70000" ] \

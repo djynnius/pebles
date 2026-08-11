@@ -35,6 +35,22 @@ class FakeDaemon:
             if content is None:
                 return {"id": None, "ok": False, "error": "No such file"}
             return {"id": None, "ok": True, "content": content}
+        if op == "shell":
+            return {"id": None, "ok": True, "stdout": "", "stderr": "", "exit_code": 0}
+        if op == "git":
+            sub = payload["args"][0]
+            if sub == "status":
+                return {
+                    "id": None,
+                    "ok": True,
+                    "stdout": "# branch.head main\n# branch.ab +1 -0\n"
+                    "1 M. N... 100644 100644 100644 abc def analysis.sql\n"
+                    "? notes.md\n",
+                    "stderr": "",
+                }
+            if sub == "log":
+                return {"id": None, "ok": True, "stdout": "abc123 first commit\n", "stderr": ""}
+            return {"id": None, "ok": True, "stdout": "", "stderr": ""}
         if op == "list":
             entries = sorted(
                 p.split("/", 1)[1]
@@ -344,6 +360,33 @@ def test_jobs_page_save_trigger_and_run_detail():
     assert runs[0]["state"] == "success"
     detail = c.get("/jobs/nightly/runs/manual__1.json").get_json()
     assert "uid 70000" in detail[0]["log"]
+
+
+def test_repo_status_actions_and_settings():
+    c = signed_in()
+    assert client().get("/repos").status_code == 302
+    assert c.get("/repos").status_code == 200
+    assert c.get("/repos/proj").status_code == 200
+
+    status = c.get("/repos/proj/status.json").get_json()
+    assert status["branch"] == "main" and status["ahead"] == 1
+    paths = {f["path"] for f in status["files"]}
+    assert paths == {"analysis.sql", "notes.md"}
+    assert any(f.get("untracked") for f in status["files"])
+
+    assert c.post("/repos/proj/git", json={"action": "stage", "path": "notes.md"}).status_code == 200
+    assert c.post("/repos/proj/git", json={"action": "commit", "message": "wip"}).status_code == 200
+    assert c.post("/repos/proj/git", json={"action": "rebase"}).status_code == 422
+
+    log = c.post("/repos/proj/git", json={"action": "log"}).get_json()
+    assert "first commit" in log["stdout"]
+
+    settings = c.get("/settings/git")
+    assert settings.status_code == 200
+    assert c.post(
+        "/settings/git", data={"action": "identity", "name": "Maya", "email": "m@x.y"}
+    ).status_code == 302
+    assert c.post("/settings/git", data={"action": "keygen"}).status_code == 302
 
 
 def test_notebook_names_are_validated():

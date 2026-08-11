@@ -232,6 +232,12 @@ fn airflow_env(config_dir: &Path) -> Vec<(String, String)> {
         ),
         ("AIRFLOW__CORE__EXECUTOR".into(), "LocalExecutor".into()),
         ("AIRFLOW__CORE__LOAD_EXAMPLES".into(), "False".into()),
+        // Pebbles workflows are live the moment they're saved; without this, new
+        // DAGs are born paused and triggered runs sit queued forever.
+        (
+            "AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION".into(),
+            "False".into(),
+        ),
         (
             "AIRFLOW__CORE__EXECUTION_API_SERVER_URL".into(),
             format!("http://127.0.0.1:{API_PORT}/execution/"),

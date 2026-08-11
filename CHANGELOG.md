@@ -7,6 +7,18 @@ All notable changes to Pebbles are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **M1.7 — git**: first-class git, entirely under the user's own identity. The
+  kernel gained a whitelisted `git` op (porcelain subcommands only) that runs
+  as the session user with their credentials — `~/.ssh` keys or an HTTPS PAT
+  in `~/.git-credentials` at 0600; Pebbles never holds a shared GitHub
+  credential (REQ-33). New **Repos** pages: clone into `~/repos` (REQ-32), and
+  a per-repo source-control view with branch + ahead/behind, changed files
+  with click-to-stage/unstage, diff and log views, and Commit / Commit & push /
+  Pull (REQ-35 as a page; the workbench rail panel lands with the shell
+  unification). **Git settings** (REQ-34): commit identity, ed25519 keypair
+  generation with the copyable public key, PAT storage. Smoke proves the whole
+  loop offline: init a bare origin, clone, write, stage, commit, push, and
+  read the commit back from origin — all as maya, repo owned by her uid.
 - **M1.6 — jobs on hidden Airflow**: workflows are real pipelines now. Airflow
   3.x lives in its own venv, supervised by pebblesd on the main (api-server on
   localhost, scheduler, dag-processor) — completely invisible; the Jobs UI is

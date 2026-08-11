@@ -501,6 +501,169 @@ def create_app(pebblesd: PebblesdClient | None = None) -> Flask:
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    def _git(username: str, args: list, cwd: str | None = None) -> dict:
+        payload: dict = {"op": "git", "args": args}
+        if cwd:
+            payload["cwd"] = cwd
+        return _session_op(username, payload)
+
+    def _parse_status(porcelain: str) -> dict:
+        info: dict = {"branch": "", "ahead": 0, "behind": 0, "files": []}
+        for line in porcelain.splitlines():
+            if line.startswith("# branch.head "):
+                info["branch"] = line.split(" ", 2)[2]
+            elif line.startswith("# branch.ab "):
+                parts = line.split()
+                info["ahead"] = int(parts[2].lstrip("+"))
+                info["behind"] = abs(int(parts[3]))
+            elif line.startswith(("1 ", "2 ")):
+                fields = line.split(" ")
+                xy = fields[1]
+                path = line.split("\t")[0].split(" ")[-1]
+                info["files"].append(
+                    {"path": path, "staged": xy[0] != ".", "unstaged": xy[1] != "."}
+                )
+            elif line.startswith("? "):
+                info["files"].append(
+                    {"path": line[2:], "staged": False, "unstaged": True, "untracked": True}
+                )
+        return info
+
+    @app.get("/repos")
+    def repos_page():  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return redirect(url_for("login_form"))
+        repos = []
+        try:
+            listing = _session_op(user["username"], {"op": "list", "path": "repos"})
+            if listing.get("ok"):
+                repos = listing.get("entries", [])
+        except (OSError, RuntimeError, ValueError):
+            pass
+        return render_template("repos.html", user=user, repos=repos)
+
+    @app.post("/repos/clone")
+    def repos_clone():  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return redirect(url_for("login_form"))
+        url = request.form.get("url", "").strip()
+        name = request.form.get("name", "").strip() or url.rstrip("/").rsplit("/", 1)[-1]
+        name = name.removesuffix(".git")
+        if not NOTEBOOK_NAME.match(name) or not url:
+            return render_template(
+                "repos.html", user=user, repos=[], error="Invalid URL or name."
+            ), 422
+        got = _git(user["username"], ["clone", url, f"repos/{name}"])
+        if not got.get("ok"):
+            return render_template(
+                "repos.html", user=user, repos=[], error=got.get("stderr") or got.get("error")
+            ), 502
+        return redirect(url_for("repo_page", name=name))
+
+    @app.get("/repos/<name>")
+    def repo_page(name):  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return redirect(url_for("login_form"))
+        if not NOTEBOOK_NAME.match(name):
+            return redirect(url_for("repos_page"))
+        return render_template("repo.html", user=user, name=name)
+
+    @app.get("/repos/<name>/status.json")
+    def repo_status(name):  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None or not NOTEBOOK_NAME.match(name):
+            return jsonify({"error": "bad request"}), 401 if user is None else 422
+        got = _git(
+            user["username"],
+            ["status", "--porcelain=v2", "--branch"],
+            cwd=f"repos/{name}",
+        )
+        if not got.get("ok"):
+            return jsonify({"error": got.get("stderr") or got.get("error")}), 502
+        return jsonify(_parse_status(got.get("stdout", "")))
+
+    GIT_ACTIONS = {
+        "stage": lambda p, m: ["add", "--", p],
+        "unstage": lambda p, m: ["restore", "--staged", "--", p],
+        "commit": lambda p, m: ["commit", "-m", m or "(no message)"],
+        "push": lambda p, m: ["push"],
+        "pull": lambda p, m: ["pull", "--ff-only"],
+        "diff": lambda p, m: ["diff"],
+        "diff-staged": lambda p, m: ["diff", "--cached"],
+        "log": lambda p, m: ["log", "--oneline", "-15"],
+    }
+
+    @app.post("/repos/<name>/git")
+    def repo_git(name):  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None or not NOTEBOOK_NAME.match(name):
+            return jsonify({"error": "bad request"}), 401 if user is None else 422
+        body = request.get_json(silent=True) or {}
+        action = GIT_ACTIONS.get(body.get("action", ""))
+        if action is None:
+            return jsonify({"error": "unknown action"}), 422
+        got = _git(
+            user["username"],
+            action(str(body.get("path", "")), str(body.get("message", ""))),
+            cwd=f"repos/{name}",
+        )
+        status_code = 200 if got.get("ok") else 502
+        return jsonify(got), status_code
+
+    @app.get("/settings/git")
+    def git_settings():  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return redirect(url_for("login_form"))
+        pubkey = ""
+        try:
+            got = _session_op(user["username"], {"op": "read", "path": ".ssh/id_ed25519.pub"})
+            if got.get("ok"):
+                pubkey = got.get("content", "")
+        except (OSError, RuntimeError, ValueError):
+            pass
+        return render_template("settings_git.html", user=user, pubkey=pubkey)
+
+    @app.post("/settings/git")
+    def git_settings_save():  # pyright: ignore[reportUnusedFunction]
+        user = session.get("user")
+        if user is None:
+            return redirect(url_for("login_form"))
+        action = request.form.get("action", "")
+        username = user["username"]
+        if action == "identity":
+            _git(username, ["config", "--global", "user.name", request.form.get("name", "")])
+            _git(username, ["config", "--global", "user.email", request.form.get("email", "")])
+        elif action == "keygen":
+            # Only ever generates when absent — never overwrites a key.
+            _session_op(
+                username,
+                {
+                    "op": "shell",
+                    "command": "[ -f ~/.ssh/id_ed25519 ] || "
+                    "(mkdir -p ~/.ssh && chmod 700 ~/.ssh && "
+                    "ssh-keygen -t ed25519 -N '' -q -f ~/.ssh/id_ed25519)",
+                },
+            )
+        elif action == "pat":
+            host = request.form.get("host", "github.com").strip() or "github.com"
+            token = request.form.get("token", "").strip()
+            if token:
+                # PAT lives in the user's home at 0600 (REQ-34); pebbles holds nothing.
+                _session_op(
+                    username,
+                    {
+                        "op": "shell",
+                        "command": f"printf 'https://%s@{host}\\n' '{token}' > ~/.git-credentials "
+                        "&& chmod 600 ~/.git-credentials",
+                    },
+                )
+                _git(username, ["config", "--global", "credential.helper", "store"])
+        return redirect(url_for("git_settings"))
+
     @app.get("/jobs")
     def jobs_page():  # pyright: ignore[reportUnusedFunction]
         user = session.get("user")

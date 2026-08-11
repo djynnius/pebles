@@ -167,6 +167,66 @@ fn run_cell(
     }
 }
 
+/// Git subcommands the session may run (REQ-33): the porcelain loop only. The
+/// command executes AS THIS PROCESS'S USER with their own credentials (~/.ssh,
+/// ~/.git-credentials) — pebblesd never holds a shared GitHub credential.
+const GIT_ALLOWED: &[&str] = &[
+    "clone",
+    "status",
+    "add",
+    "restore",
+    "commit",
+    "push",
+    "pull",
+    "fetch",
+    "branch",
+    "checkout",
+    "switch",
+    "diff",
+    "log",
+    "remote",
+    "config",
+    "init",
+    "rev-parse",
+    "ls-files",
+];
+
+fn run_git(id: &Value, args: &[String], cwd: Option<&str>) -> Value {
+    let fail = |err: String| json!({"id": id, "ok": false, "error": err});
+    match args.first().map(String::as_str) {
+        Some(sub) if GIT_ALLOWED.contains(&sub) => {}
+        Some(sub) => return fail(format!("git subcommand {sub:?} is not allowed")),
+        None => return fail("git needs args".into()),
+    }
+    let mut cmd = std::process::Command::new("git");
+    cmd.args(args)
+        // Never hang a session on an interactive prompt.
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env(
+            "GIT_SSH_COMMAND",
+            "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new",
+        );
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
+    match cmd.output() {
+        Ok(out) => {
+            let mut stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+            stdout.truncate(MAX_RESULT_BYTES);
+            let mut stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            stderr.truncate(MAX_READ_BYTES);
+            json!({
+                "id": id,
+                "ok": out.status.success(),
+                "stdout": stdout,
+                "stderr": stderr,
+                "exit_code": out.status.code(),
+            })
+        }
+        Err(e) => fail(format!("cannot run git: {e}")),
+    }
+}
+
 /// The last complete JSON array in the CLI's stdout — the caller's final statement.
 /// `-json` prints one array per result-bearing statement, and multi-row arrays span
 /// MULTIPLE lines (`[{…},` / `{…},` / `{…}]`), so this joins from the last line that
@@ -284,8 +344,21 @@ fn handle(request: &Value, executors: &mut Executors) -> Value {
             },
             None => fail("shell needs a command string".into()),
         },
+        Some("git") => {
+            let args: Vec<String> = request
+                .get("args")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            run_git(&id, &args, request.get("cwd").and_then(Value::as_str))
+        }
         other => fail(format!(
-            "unknown op {other:?} (proto 1: ping/read/write/list/sql/python/r/shell)"
+            "unknown op {other:?} (proto 1: ping/read/write/list/sql/python/r/shell/git)"
         )),
     }
 }
@@ -329,6 +402,19 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn git_subcommands_are_whitelisted() {
+        let denied = run_git(
+            &Value::Null,
+            &["daemon".to_string(), "--export-all".to_string()],
+            None,
+        );
+        assert_eq!(denied["ok"], false);
+        assert!(denied["error"].as_str().unwrap().contains("not allowed"));
+        let empty = run_git(&Value::Null, &[], None);
+        assert_eq!(empty["ok"], false);
+    }
 
     #[test]
     fn parses_single_line_and_multi_line_result_arrays() {

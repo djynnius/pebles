@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block content %}
+  <div class="page">
+    <p class="nav">
+      <a href="{{ url_for('index') }}">home</a> · <a href="{{ url_for('repos_page') }}">repos</a>
+      · <strong>git settings</strong>
+      · signed in as {{ user.username }} · <a href="{{ url_for('logout') }}">sign out</a>
+    </p>
+    <h2>Git settings</h2>
+    <p class="status">Everything here lands in <em>your</em> home (<code>~/.gitconfig</code>,
+      <code>~/.ssh</code>, <code>~/.git-credentials</code> at 0600). Pebbles never holds a
+      shared credential.</p>
+
+    <form class="card wide" method="post">
+      <input type="hidden" name="action" value="identity">
+      <label for="name">Commit name</label>
+      <input id="name" name="name" required>
+      <label for="email">Commit email</label>
+      <input id="email" name="email" type="email" required>
+      <button type="submit">Save identity</button>
+    </form>
+
+    <form class="card wide" method="post">
+      <input type="hidden" name="action" value="keygen">
+      <label>SSH key</label>
+      {% if pubkey %}
+        <p class="status">Add this public key to GitHub:</p>
+        <pre style="white-space:pre-wrap; font-family:'IBM Plex Mono',ui-monospace,monospace; font-size:0.8rem;">{{ pubkey }}</pre>
+      {% else %}
+        <p class="status">No key yet — generate one (ed25519, stored in your <code>~/.ssh</code>).</p>
+      {% endif %}
+      <button type="submit">{{ 'Regenerate check' if pubkey else 'Generate SSH key' }}</button>
+    </form>
+
+    <form class="card wide" method="post">
+      <input type="hidden" name="action" value="pat">
+      <label for="host">Host</label>
+      <input id="host" name="host" value="github.com">
+      <label for="token">Personal access token (HTTPS)</label>
+      <input id="token" name="token" type="password">
+      <button type="submit">Store token</button>
+    </form>
+  </div>
+{% endblock %}

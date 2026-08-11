@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block content %}
+  <div class="page">
+    <p class="nav">
+      <a href="{{ url_for('index') }}">home</a> · <a href="{{ url_for('repos_page') }}">repos</a>
+      · <strong>{{ name }}</strong>
+      · signed in as {{ user.username }} · <a href="{{ url_for('logout') }}">sign out</a>
+    </p>
+    <h2>{{ name }} <span id="branch" class="status"></span></h2>
+    <div class="card wide">
+      <table id="files"></table>
+      <p id="empty" class="status" hidden>Working tree clean.</p>
+    </div>
+    <div class="card wide">
+      <label for="message">Commit message</label>
+      <input id="message">
+      <p style="margin-top:0.75rem; display:flex; gap:0.5rem;">
+        <button id="commit">Commit</button>
+        <button id="commit-push">Commit &amp; push</button>
+        <button id="pull">Pull</button>
+        <button id="show-diff">Diff</button>
+        <button id="show-log">Log</button>
+      </p>
+      <p id="state" class="status" aria-live="polite"></p>
+    </div>
+    <div class="card wide" id="output-card" hidden>
+      <pre id="output" style="white-space:pre-wrap; font-family:'IBM Plex Mono',ui-monospace,monospace; font-size:0.8rem;"></pre>
+    </div>
+  </div>
+  <script>
+    const gitUrl = "{{ url_for('repo_git', name=name) }}";
+    const statusUrl = "{{ url_for('repo_status', name=name) }}";
+    const state = document.getElementById("state");
+
+    async function act(action, extra = {}) {
+      state.textContent = action + "…";
+      const resp = await fetch(gitUrl, {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ action, ...extra }),
+      });
+      const data = await resp.json();
+      state.textContent = resp.ok ? action + " ✓" : "error: " + (data.stderr || data.error || resp.status);
+      return { ok: resp.ok, data };
+    }
+
+    async function refresh() {
+      const resp = await fetch(statusUrl);
+      const info = await resp.json();
+      if (!resp.ok) { state.textContent = "error: " + info.error; return; }
+      document.getElementById("branch").textContent =
+        `on ${info.branch}` + (info.ahead ? ` · ↑${info.ahead}` : "") + (info.behind ? ` · ↓${info.behind}` : "");
+      const table = document.getElementById("files");
+      table.replaceChildren();
+      document.getElementById("empty").hidden = info.files.length > 0;
+      info.files.forEach(f => {
+        const tr = table.insertRow();
+        tr.insertCell().textContent = f.untracked ? "U" : (f.staged && f.unstaged ? "M*" : f.staged ? "A" : "M");
+        const path = tr.insertCell(); path.innerHTML = "<code></code>";
+        path.firstChild.textContent = f.path;
+        const cell = tr.insertCell();
+        const btn = document.createElement("button");
+        btn.textContent = f.staged && !f.unstaged ? "unstage" : "stage";
+        btn.addEventListener("click", async () => {
+          await act(f.staged && !f.unstaged ? "unstage" : "stage", { path: f.path });
+          refresh();
+        });
+        cell.appendChild(btn);
+      });
+    }
+
+    async function showOutput(action) {
+      const { data } = await act(action);
+      document.getElementById("output-card").hidden = false;
+      document.getElementById("output").textContent = data.stdout || "(empty)";
+    }
+
+    document.getElementById("commit").addEventListener("click", async () => {
+      await act("commit", { message: document.getElementById("message").value });
+      refresh();
+    });
+    document.getElementById("commit-push").addEventListener("click", async () => {
+      const r = await act("commit", { message: document.getElementById("message").value });
+      if (r.ok) await act("push");
+      refresh();
+    });
+    document.getElementById("pull").addEventListener("click", async () => { await act("pull"); refresh(); });
+    document.getElementById("show-diff").addEventListener("click", () => showOutput("diff"));
+    document.getElementById("show-log").addEventListener("click", () => showOutput("log"));
+    refresh();
+  </script>
+{% endblock %}
