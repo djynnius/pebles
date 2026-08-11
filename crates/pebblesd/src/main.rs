@@ -48,6 +48,12 @@ fn bind_api_socket(path: &std::path::Path) -> anyhow::Result<UnixListener> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // As the init of a system container (Incus), pebblesd starts with NO
+    // environment at all — establish the PATH every PATH-relative spawn
+    // (groupadd, psql, …) depends on. Docker/Podman inject one; Incus doesn't.
+    if std::env::var_os("PATH").is_none() {
+        std::env::set_var("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
+    }
     tracing_subscriber::fmt().with_target(false).init();
 
     let cfg = config::Config::load(wizard::prompt_role)?;
