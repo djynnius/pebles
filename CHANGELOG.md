@@ -7,6 +7,15 @@ All notable changes to Pebbles are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **React ops screens (SPA at `/app`)** — the port is feature-complete except
+  Auto ETL: **Jobs** (expandable run history, run-now, edit), **Job builder**
+  (cron or manual, task cards with dependencies and retries), **Run detail**
+  (20-bar history strip, task timeline with OOM-highlighted logs, live 5s
+  polling), **Nkoyo** (full chat: history rail, suggestion cards, per-turn
+  tool approvals, tools-used chips), **Settings** (nine panes: profile,
+  git/repos with clone+commit+push, Nkoyo models, cluster tokens with
+  mint-once callout, engine approvals, compute runtime), **Ingestion** and
+  **Engine config**.
 - **React document screens (SPA at `/app`)**: **Notebooks** — index plus a
   workbench editor with SQL/Python/R cells, per-cell and run-all execution
   through the user's engine session, a table-of-contents panel, and the

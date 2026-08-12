@@ -83,6 +83,52 @@ export function AccentButton({
   );
 }
 
+/** The prototype's 34×19 pill switch (spec §4 "Toggles / switches"). */
+export function Switch({
+  label,
+  on,
+  onToggle,
+}: {
+  label: string;
+  on: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-label={label}
+        onClick={onToggle}
+        style={{
+          width: 34,
+          height: 19,
+          borderRadius: 14,
+          border: "none",
+          position: "relative",
+          padding: 0,
+          flexShrink: 0,
+          background: on ? "var(--accent)" : "var(--track-off)",
+        }}
+      >
+        <span
+          style={{
+            position: "absolute",
+            top: 2,
+            left: on ? 17 : 2,
+            width: 15,
+            height: 15,
+            borderRadius: "50%",
+            background: "var(--on-accent)",
+          }}
+        />
+      </button>
+      <span style={{ fontSize: 13, color: "var(--text-mid)" }}>{label}</span>
+    </div>
+  );
+}
+
 export function GhostButton({ children, onClick }: { children: ReactNode; onClick?: () => void }) {
   return (
     <button

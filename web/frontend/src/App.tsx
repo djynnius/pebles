@@ -19,6 +19,13 @@ import { Notebooks } from "./routes/Notebooks";
 import { Notebook } from "./routes/Notebook";
 import { Dashboards } from "./routes/Dashboards";
 import { Dashboard } from "./routes/Dashboard";
+import { Jobs } from "./routes/Jobs";
+import { JobBuilder } from "./routes/JobBuilder";
+import { JobRun } from "./routes/JobRun";
+import { Ingest } from "./routes/Ingest";
+import { Nkoyo } from "./routes/Nkoyo";
+import { Settings } from "./routes/Settings";
+import { EngineConfig } from "./routes/EngineConfig";
 import { Placeholder } from "./routes/Placeholder";
 
 type Auth = "loading" | "anon" | User;
@@ -47,7 +54,7 @@ export function App() {
     <Routes>
       <Route element={<AppShell user={user} onSignOut={signOut} />}>
         <Route path="/" element={<Home user={user} />} />
-        <Route path="/nkoyo" element={<Placeholder title="Nkoyo" />} />
+        <Route path="/nkoyo" element={<Nkoyo user={user} />} />
         <Route path="/files" element={<Files user={user} />} />
         <Route path="/catalog" element={<Catalog />} />
         <Route path="/newcatalog" element={<NewCatalog user={user} />} />
@@ -56,24 +63,18 @@ export function App() {
         <Route path="/sql" element={<Sql />} />
         <Route path="/dashboards" element={<Dashboards />} />
         <Route path="/dashboards/:name" element={<Dashboard />} />
-        <Route path="/jobs" element={<Placeholder title="Jobs" eyebrow="Data engineering" />} />
-        <Route path="/jobbuilder" element={<Placeholder title="Job builder" eyebrow="Data engineering" />} />
-        <Route
-          path="/jobs/:name/runs/:runId"
-          element={<Placeholder title="Job run" eyebrow="Data engineering" />}
-        />
-        <Route path="/ingest" element={<Placeholder title="Ingestion" eyebrow="Data engineering" />} />
+        <Route path="/jobs" element={<Jobs />} />
+        <Route path="/jobbuilder" element={<JobBuilder />} />
+        <Route path="/jobs/:name/runs/:runId" element={<JobRun />} />
+        <Route path="/ingest" element={<Ingest />} />
         <Route path="/autoetl" element={<Placeholder title="Auto ETL" eyebrow="Data engineering" />} />
         <Route path="/engines" element={<Engines />} />
-        <Route
-          path="/engineconfig"
-          element={<Placeholder title="Engine configuration" eyebrow="Infrastructure" />}
-        />
+        <Route path="/engineconfig" element={<EngineConfig />} />
         <Route path="/hosts" element={<Hosts />} />
         <Route path="/users" element={<Users />} />
         <Route path="/groups" element={<Groups />} />
         <Route path="/usage" element={<Usage />} />
-        <Route path="/settings" element={<Placeholder title="Account &amp; Settings" />} />
+        <Route path="/settings" element={<Settings user={user} onSignOut={signOut} />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
