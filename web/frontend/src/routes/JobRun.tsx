@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { api } from "../api";
+import { api, errorText } from "../api";
+import { ErrorBlock, Loading } from "../components/State";
 import { duration, isLive, runColor, stamp, type RunInfo, type TaskRunInfo } from "../jobs";
 
 /*
@@ -17,16 +18,21 @@ const REFRESH_MS = 5000;
 export function JobRun() {
   const nav = useNavigate();
   const { name = "", runId = "" } = useParams();
-  const [runs, setRuns] = useState<RunInfo[]>([]);
+  const [runs, setRuns] = useState<RunInfo[] | null>(null);
   const [tasks, setTasks] = useState<TaskRunInfo[] | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [stripError, setStripError] = useState("");
 
   const load = useCallback(() => {
     api
       .get<RunInfo[]>(`/jobs/${encodeURIComponent(name)}/runs`)
-      .then(setRuns)
-      .catch(() => {});
+      .then((r) => {
+        setRuns(r);
+        setStripError("");
+      })
+      // Swallowing this drew "No run history yet." over a fetch that failed.
+      .catch((e) => setStripError(errorText(e)));
     api
       .get<TaskRunInfo[]>(
         `/jobs/${encodeURIComponent(name)}/runs/${encodeURIComponent(runId)}`,
@@ -37,7 +43,7 @@ export function JobRun() {
       })
       .catch((e) => {
         setTasks([]);
-        setError(String(e.message ?? e));
+        setError(errorText(e));
       });
   }, [name, runId]);
 
@@ -55,8 +61,8 @@ export function JobRun() {
   }, [live]);
 
   // pebblesd returns newest-first; the strip reads left-to-right in time.
-  const strip = [...runs].reverse().slice(-BARS);
-  const current = runs.find((r) => r.run_id === runId);
+  const strip = [...(runs ?? [])].reverse().slice(-BARS);
+  const current = (runs ?? []).find((r) => r.run_id === runId);
 
   return (
     <div style={{ maxWidth: 1080, margin: "0 auto", padding: "34px 40px 60px" }}>
@@ -124,8 +130,16 @@ export function JobRun() {
               );
             })}
           </div>
+        ) : stripError ? (
+          <div style={{ fontSize: 12.5, color: "var(--err)" }}>
+            Couldn't read the run history — {stripError}
+          </div>
+        ) : runs === null ? (
+          <Loading label="Loading run history…" />
         ) : (
-          <div style={{ fontSize: 12.5, color: "var(--text-dim)" }}>No run history yet.</div>
+          <div style={{ fontSize: 12.5, color: "var(--text-dim)" }}>
+            No run history yet — this job has never been triggered.
+          </div>
         )}
         <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 10 }}>
           Oldest ← → latest · click a bar to open that run
@@ -134,11 +148,11 @@ export function JobRun() {
 
       {/* ---- task timeline ------------------------------------------------ */}
       <h2 style={{ fontSize: 16, fontWeight: 600, margin: "24px 0 12px" }}>Tasks</h2>
-      {error && <p style={{ color: "var(--err)", fontSize: 12.5, marginBottom: 12 }}>{error}</p>}
-      {tasks === null && <p style={{ color: "var(--text-dim)", fontSize: 13 }}>Loading…</p>}
+      {error && <ErrorBlock title="Couldn't read this run" error={error} />}
+      {tasks === null && !error && <Loading />}
       {tasks !== null && tasks.length === 0 && !error && (
         <p style={{ color: "var(--text-dim)", fontSize: 13 }}>
-          This run has no task instances yet.
+          This run has no task instances yet — Airflow creates them as the DAG starts.
         </p>
       )}
 

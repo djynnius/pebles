@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { api, type User } from "../api";
+import { useLocation } from "react-router-dom";
+import { api, errorText, type User } from "../api";
 import { NkoyoAvatar } from "../components/Avatar";
+import { ErrorBlock } from "../components/State";
 
 /*
  * /nkoyo — the assistant screen (spec §5 "nkoyo").
@@ -55,8 +57,11 @@ function pendingApprovals(content: string, tools: string[]): string[] {
 }
 
 export function Nkoyo({ user }: { user: User }) {
+  // Home's ask bar hands the draft over rather than sending it — the model call
+  // stays a deliberate act on this screen.
+  const handover = (useLocation().state as { prompt?: string } | null)?.prompt ?? "";
   const [messages, setMessages] = useState<Msg[]>([]);
-  const [draft, setDraft] = useState("");
+  const [draft, setDraft] = useState(handover);
   const [thinking, setThinking] = useState(false);
   const [error, setError] = useState("");
   const [approved, setApproved] = useState<string[]>([]);
@@ -67,7 +72,9 @@ export function Nkoyo({ user }: { user: User }) {
     api
       .get<Msg[]>("/nkoyo/chat")
       .then((m) => setMessages(m.map((x) => ({ role: x.role, content: x.content }))))
-      .catch(() => {});
+      // A history that cannot be read is worth saying: otherwise a restarting
+      // pebblesd looks exactly like a brand-new conversation.
+      .catch((e) => setError(errorText(e)));
   }, []);
 
   useEffect(() => {
@@ -98,19 +105,17 @@ export function Nkoyo({ user }: { user: User }) {
           },
         ]);
       })
-      .catch((e) => setError(String(e.message ?? e)))
+      .catch((e) => setError(errorText(e)))
       .finally(() => setThinking(false));
   };
 
   const newChat = () => {
-    api
-      .post("/nkoyo/clear")
-      .catch(() => {})
-      .finally(() => {
-        setMessages([]);
-        setError("");
-        setApproved([]);
-      });
+    setMessages([]);
+    setError("");
+    setApproved([]);
+    // If the server keeps the old transcript the next reply would carry it,
+    // so a failed clear is a fact the user needs, not a swallowed one.
+    api.post("/nkoyo/clear").catch((e) => setError(errorText(e)));
   };
 
   const firstUserLine = messages.find((m) => m.role === "user")?.content;
@@ -255,7 +260,7 @@ export function Nkoyo({ user }: { user: User }) {
                   </button>
                 ))}
               </div>
-              {error && <p style={{ color: "var(--err)", fontSize: 12.5 }}>{error}</p>}
+              {error && <ErrorBlock error={error} style={{ width: "100%", marginBottom: 0 }} />}
             </div>
           ) : (
             <div style={{ maxWidth: 760, margin: "0 auto", padding: "24px 24px 8px" }}>
@@ -401,7 +406,7 @@ export function Nkoyo({ user }: { user: User }) {
                   <span style={{ opacity: 0.75 }}>Nkoyo is thinking…</span>
                 </div>
               )}
-              {error && <p style={{ color: "var(--err)", fontSize: 12.5 }}>{error}</p>}
+              {error && <ErrorBlock error={error} />}
             </div>
           )}
         </div>

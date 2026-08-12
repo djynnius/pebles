@@ -33,7 +33,11 @@ export function Topbar({ user, onSignOut }: { user: User; onSignOut: () => void 
         pebbles
       </span>
 
+      {/* Chrome only until global search ships: hidden from assistive tech and
+          from the tab order so nobody is offered a control that does nothing. */}
       <div
+        aria-hidden="true"
+        title="Global search arrives in a later phase"
         style={{
           flex: 1,
           maxWidth: 560,
@@ -58,6 +62,7 @@ export function Topbar({ user, onSignOut }: { user: User; onSignOut: () => void 
 
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
         <span
+          title={`Signed in as ${user.username}`}
           style={{
             width: 29,
             height: 29,
@@ -72,10 +77,24 @@ export function Topbar({ user, onSignOut }: { user: User; onSignOut: () => void 
         >
           {initials}
         </span>
-        <button onClick={toggle} title="Toggle theme" style={iconBtn}>
+        <button
+          type="button"
+          onClick={toggle}
+          title={theme === "light" ? "Switch to Night" : "Switch to Daylight"}
+          aria-label={theme === "light" ? "Switch to Night theme" : "Switch to Daylight theme"}
+          style={iconBtn}
+          className="pb-icon-btn"
+        >
           {theme === "light" ? "☾" : "☀"}
         </button>
-        <button onClick={onSignOut} title="Sign out" style={iconBtn} className="signout">
+        <button
+          type="button"
+          onClick={onSignOut}
+          title="Sign out"
+          aria-label="Sign out"
+          style={iconBtn}
+          className="pb-icon-btn signout"
+        >
           ⏻
         </button>
       </div>

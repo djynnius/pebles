@@ -28,8 +28,26 @@ All notable changes to Pebbles are documented here. The format follows
     `host=<main>` (derived from the registration URL; libpq picks up
     `.pgpass` automatically). Multi-host installs need homes visible on
     engines, same class of requirement as the lake path (REQ-26).
+  - **Real progressive SSE streaming (REQ-31, completed)**: query results now
+    stream row-batch by row-batch as the engine produces them — kernel
+    (`sql_stream` op reading the DuckDB CLI's stdout incrementally, 64-row
+    batches, 100k-row cap with a truncation flag) → broker (multi-line exec
+    holding the session lock) → pebblesd (NDJSON chunked response; remote
+    engines' streams relay byte-for-byte through the main) → Flask (SSE
+    `rows` events before the final authoritative `result`) → the SQL editor
+    (batches paint as they arrive). The wire contract is backward-compatible:
+    the final `result` still carries the complete set.
+  - **REQ-49 — the empty/error/loading-state audit** (every screen): errors
+    are no longer conflated with empty states (a 503 used to render "Your
+    lake is empty"), a central 401 handler resets any expired session to
+    Login with an explanation, shared `ErrorBlock`/`Empty`/`Loading`
+    components replace ~18 ad-hoc treatments, keyboard focus is visible
+    app-wide (inputs were suppressing it), dead controls got real actions
+    (Register engine, sidebar "+ New", Home's Nkoyo ask bar), Jobs' status
+    dot now tells the truth, the every-table `CERTIFIED` pill is gone, and
+    the boot white-flash is a proper wordmark screen.
   - **ESLint 9 flat config**: `npm run lint` works again (typescript-eslint
-    recommended + react-hooks), wired into the frontend dev loop.
+    recommended + react-hooks), wired into the frontend dev loop — and passes.
 - **M2.4d — incus joins the main+engine matrix, plus an NFR-08
   degraded-but-alive proof**: `scripts/smoke/main-plus-engine.sh` now runs
   under incus (`RUNTIME=incus CTR_CMD="sudo incus"`) — two unprivileged system

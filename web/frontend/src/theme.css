@@ -135,6 +135,10 @@
 :root {
   --brand-p: #a6e22e;
   --brand-b: #fd971f;
+  /* Nkoyo's avatar is artwork, not chrome: the prototype ships it as a PNG, so
+     its two colours are fixed in both themes exactly as the image would be. */
+  --avatar-bg: #f4ecdf;
+  --avatar-ink: #33342c;
 }
 
 * {
@@ -176,10 +180,33 @@ button {
   font-family: inherit;
   cursor: pointer;
 }
+button:disabled {
+  cursor: not-allowed;
+}
 input,
 select,
 textarea {
   font-family: inherit;
+}
+
+/* Topbar utility buttons (spec §3): border→accent on hover, and the sign-out
+   goes red. `.signout` was already in the markup with no rule behind it. */
+.pb-icon-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.signout:hover {
+  border-color: var(--err);
+  color: var(--err);
+}
+
+/* Keyboard focus must always be visible. Components inline `outline:none` on
+   inputs to kill the default ring while typing, and an inline style beats a
+   stylesheet — `!important` is the only way back, and it is used here and
+   nowhere else. Keyboard-only (`:focus-visible`), so mouse clicks stay quiet. */
+:focus-visible {
+  outline: 2px solid var(--accent) !important;
+  outline-offset: 2px;
 }
 ::-webkit-scrollbar {
   width: 10px;

@@ -1,8 +1,9 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { api } from "../api";
+import { api, errorText } from "../api";
 import { useCatalogs } from "../catalogs";
 import { Switch } from "../components/Page";
+import { ErrorBlock, Loading } from "../components/State";
 import {
   DEFAULT_PREFS,
   JOB_NAME,
@@ -56,7 +57,7 @@ export function JobBuilder() {
   const nav = useNavigate();
   const [params] = useSearchParams();
   const editing = params.get("edit");
-  const { catalogs } = useCatalogs();
+  const { catalogs, error: catalogError } = useCatalogs();
 
   const [name, setName] = useState(editing ?? "");
   const [schedule, setSchedule] = useState("0 1 * * *");
@@ -109,7 +110,7 @@ export function JobBuilder() {
         );
         setPrefs(loadPrefs(found.name));
       })
-      .catch((e) => setError(String(e.message ?? e)))
+      .catch((e) => setError(errorText(e)))
       .finally(() => setLoaded(true));
   }, [editing]);
 
@@ -194,7 +195,7 @@ export function JobBuilder() {
         savePrefs(name, prefs);
         nav("/jobs");
       })
-      .catch((e) => setError(String(e.message ?? e)))
+      .catch((e) => setError(errorText(e)))
       .finally(() => setBusy(false));
   };
 
@@ -209,9 +210,16 @@ export function JobBuilder() {
         {editing ? `Edit ${editing}` : "New job"}
       </h1>
 
-      {error && <p style={{ color: "var(--err)", fontSize: 12.5, marginBottom: 14 }}>{error}</p>}
-      {!loaded && <p style={{ color: "var(--text-dim)", fontSize: 13 }}>Loading job…</p>}
-
+      {error && <ErrorBlock error={error} />}
+      {catalogError && (
+        <ErrorBlock title="Catalogs unavailable — the Catalog selects will be empty" error={catalogError} />
+      )}
+      {/* An edit that has not landed yet must not render a blank form the user
+          might start typing into: the fetch would overwrite it a moment later. */}
+      {!loaded ? (
+        <Loading label="Loading job…" />
+      ) : (
+        <>
       {/* ---- schedule card ------------------------------------------------ */}
       <div style={card}>
         <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 18 }}>
@@ -497,6 +505,8 @@ export function JobBuilder() {
           Cancel
         </button>
       </div>
+        </>
+      )}
     </div>
   );
 }

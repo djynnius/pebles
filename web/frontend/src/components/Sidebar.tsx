@@ -1,11 +1,36 @@
-import { useState } from "react";
-import { NavLink, useLocation } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { NAV } from "../nav";
 import { Wordmark } from "./Wordmark";
 
+/** What "+ New" can make. Each is an existing route that starts the thing. */
+const NEW_ITEMS: { label: string; glyph: string; path: string }[] = [
+  { label: "Notebook", glyph: "▧", path: "/notebooks" },
+  { label: "SQL query", glyph: "›_", path: "/sql" },
+  { label: "Dashboard", glyph: "▦", path: "/dashboards" },
+  { label: "Job", glyph: "⇄", path: "/jobbuilder" },
+  { label: "Catalog", glyph: "◨", path: "/newcatalog" },
+];
+
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
+  const [newOpen, setNewOpen] = useState(false);
+  const nav = useNavigate();
   const loc = useLocation();
+
+  // Dismiss the New menu on any click elsewhere or on Escape.
+  useEffect(() => {
+    if (!newOpen) return;
+    const close = () => setNewOpen(false);
+    const key = (e: KeyboardEvent) => e.key === "Escape" && close();
+    window.addEventListener("click", close);
+    window.addEventListener("keydown", key);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("keydown", key);
+    };
+  }, [newOpen]);
+
   const activeId =
     NAV.flatMap((g) => g.items).find(
       (i) => i.path === loc.pathname || (i.id === "dashboards" && loc.pathname.startsWith("/dashboard")),
@@ -38,8 +63,11 @@ export function Sidebar() {
       >
         {!collapsed && <Wordmark />}
         <button
+          type="button"
           onClick={() => setCollapsed((c) => !c)}
-          title={collapsed ? "Expand" : "Collapse"}
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-expanded={!collapsed}
           style={railBtn}
         >
           {collapsed ? "»" : "«"}
@@ -47,8 +75,16 @@ export function Sidebar() {
       </div>
 
       {/* new */}
-      <div style={{ padding: collapsed ? "0 12px 8px" : "0 14px 8px" }}>
+      <div style={{ padding: collapsed ? "0 12px 8px" : "0 14px 8px", position: "relative" }}>
         <button
+          type="button"
+          title="New…"
+          aria-haspopup="menu"
+          aria-expanded={newOpen}
+          onClick={(e) => {
+            e.stopPropagation();
+            setNewOpen((v) => !v);
+          }}
           style={{
             width: "100%",
             display: "flex",
@@ -66,6 +102,53 @@ export function Sidebar() {
         >
           + {!collapsed && "New"}
         </button>
+        {newOpen && (
+          <div
+            role="menu"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: "absolute",
+              left: collapsed ? 56 : 14,
+              right: collapsed ? "auto" : 14,
+              top: 40,
+              minWidth: 168,
+              zIndex: 40,
+              background: "var(--surface)",
+              border: "1px solid var(--border)",
+              borderRadius: 11,
+              boxShadow: "0 8px 26px rgba(20,22,16,.22)",
+              padding: "5px 0",
+            }}
+          >
+            {NEW_ITEMS.map((item) => (
+              <button
+                key={item.label}
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setNewOpen(false);
+                  nav(item.path);
+                }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  width: "100%",
+                  textAlign: "left",
+                  border: "none",
+                  background: "transparent",
+                  padding: "8px 14px",
+                  fontSize: 12.5,
+                  fontFamily: "inherit",
+                  color: "var(--text-mid)",
+                }}
+              >
+                <span style={{ width: 14, color: "var(--text-faint)" }}>{item.glyph}</span>
+                {item.label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* nav groups */}

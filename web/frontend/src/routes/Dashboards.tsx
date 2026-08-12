@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api } from "../api";
+import { api, errorText } from "../api";
 import { AccentButton, Page } from "../components/Page";
+import { Empty, ErrorBlock, Loading } from "../components/State";
 import { DOC_NAME } from "./Notebooks";
 
 /*
@@ -22,15 +23,19 @@ export function Dashboards() {
   const [error, setError] = useState("");
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+  const field = useRef<HTMLInputElement>(null);
 
   const load = useCallback(() => {
+    setError("");
     api
       .get<string[]>("/dashboards")
-      .then(setNames)
+      // Null, not [], on failure — see the note in Notebooks: an unreadable
+      // home must not be dressed up as an empty one.
       .catch((e) => {
-        setError(String(e.message ?? e));
-        setNames([]);
-      });
+        setError(errorText(e));
+        return null;
+      })
+      .then((list) => list && setNames(list));
   }, []);
 
   useEffect(load, [load]);
@@ -46,7 +51,7 @@ export function Dashboards() {
     api
       .post("/dashboards", { name: n })
       .then(() => nav(`/dashboards/${encodeURIComponent(n)}`))
-      .catch((e) => setError(String(e.message ?? e)))
+      .catch((e) => setError(errorText(e)))
       .finally(() => setBusy(false));
   };
 
@@ -55,7 +60,7 @@ export function Dashboards() {
     api
       .del(`/dashboards/${encodeURIComponent(n)}`)
       .then(load)
-      .catch((e) => setError(String(e.message ?? e)));
+      .catch((e) => setError(errorText(e)));
   };
 
   return (
@@ -74,6 +79,7 @@ export function Dashboards() {
         }}
       >
         <input
+          ref={field}
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => {
@@ -100,7 +106,8 @@ export function Dashboards() {
         </AccentButton>
       </div>
 
-      {error && <p style={{ color: "var(--err)", fontSize: 12.5, marginBottom: 12 }}>{error}</p>}
+      {error && <ErrorBlock error={error} />}
+      {!error && names === null && <Loading />}
 
       {names && names.length > 0 ? (
         <div
@@ -113,7 +120,18 @@ export function Dashboards() {
           {names.map((n) => (
             <div
               key={n}
+              // Keyboard-reachable: the card carries a delete button, so it
+              // cannot itself be a <button>.
+              role="link"
+              tabIndex={0}
+              aria-label={`Open dashboard ${n}`}
               onClick={() => nav(`/dashboards/${encodeURIComponent(n)}`)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  nav(`/dashboards/${encodeURIComponent(n)}`);
+                }
+              }}
               style={{
                 background: "var(--surface)",
                 border: "1px solid var(--border)",
@@ -191,9 +209,30 @@ export function Dashboards() {
           ))}
         </div>
       ) : (
-        <p style={{ color: "var(--text-dim)", fontSize: 13 }}>
-          {names ? "No dashboards yet — name one above to start." : "Loading…"}
-        </p>
+        names !== null && (
+          <Empty
+            glyph="▦"
+            title="No dashboards yet"
+            body="A dashboard is a grid of widgets, each backed by one query against your lake. Name one above and add a stat, table or bars widget."
+            action={
+              <button
+                type="button"
+                onClick={() => field.current?.focus()}
+                style={{
+                  background: "var(--accent)",
+                  color: "var(--on-accent)",
+                  border: "none",
+                  borderRadius: 11,
+                  fontWeight: 600,
+                  fontSize: 13,
+                  padding: "9px 18px",
+                }}
+              >
+                Name your first dashboard
+              </button>
+            }
+          />
+        )
       )}
     </Page>
   );

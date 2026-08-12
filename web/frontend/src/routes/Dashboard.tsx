@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { api, sse, type Row } from "../api";
+import { api, errorText, sse, type Row } from "../api";
 import { useCatalogs } from "../catalogs";
+import { ErrorBlock, Loading } from "../components/State";
 import { ResultGrid, cell } from "./Catalog";
 
 /*
@@ -91,7 +92,7 @@ export function Dashboard() {
         setSpans(readLayout(name, tiles));
         setOuts(tiles.map(() => ({})));
       })
-      .catch((e) => live && setError(String(e.message ?? e)));
+      .catch((e) => live && setError(errorText(e)));
     return () => {
       live = false;
     };
@@ -138,7 +139,7 @@ export function Dashboard() {
       setDirty(false);
       setError("");
     } catch (e) {
-      setError(String((e as Error).message ?? e));
+      setError(errorText(e));
       throw e;
     } finally {
       setSaving(false);
@@ -333,13 +334,16 @@ export function Dashboard() {
             <div style={{ position: "relative" }}>
               <button
                 type="button"
+                // Adding to a document that never loaded would push a layout
+                // span and an output slot with no tile behind them.
+                disabled={!doc}
                 onClick={(e) => {
                   e.stopPropagation();
                   setAddMenu((v) => !v);
                 }}
                 style={{
-                  background: "var(--accent)",
-                  color: "var(--on-accent)",
+                  background: doc ? "var(--accent)" : "var(--track)",
+                  color: doc ? "var(--on-accent)" : "var(--text-dim)",
                   border: "none",
                   borderRadius: 11,
                   fontWeight: 600,
@@ -371,38 +375,31 @@ export function Dashboard() {
           </div>
         </div>
 
-        {error && (
-          <div
-            className="mono"
-            style={{
-              background: "var(--accent-tint)",
-              border: "1px solid var(--err)",
-              borderRadius: 12,
-              padding: "10px 14px",
-              color: "var(--err)",
-              fontSize: 12.5,
-              marginBottom: 14,
-            }}
-          >
-            {error}
-          </div>
-        )}
+        {error && <ErrorBlock error={error} />}
 
         {/* widget grid */}
         {tiles.length === 0 ? (
-          <div
-            style={{
-              background: "var(--surface)",
-              border: "1px dashed var(--border-strong)",
-              borderRadius: 14,
-              padding: "48px 20px",
-              textAlign: "center",
-              color: "var(--text-dim)",
-              fontSize: 13,
-            }}
-          >
-            {doc ? "No widgets yet — add a stat, table or bars widget." : "Loading…"}
-          </div>
+          // A failed load leaves `doc` null; showing the dashed "Loading…"
+          // panel underneath the error would say the fetch was still running.
+          !doc && error ? null : (
+            <div
+              style={{
+                background: "var(--surface)",
+                border: "1px dashed var(--border-strong)",
+                borderRadius: 14,
+                padding: "48px 20px",
+                textAlign: "center",
+                color: "var(--text-dim)",
+                fontSize: 13,
+              }}
+            >
+              {doc ? (
+                "No widgets yet — add a stat, table or bars widget with the button above."
+              ) : (
+                <Loading />
+              )}
+            </div>
+          )
         ) : (
           <div
             style={{

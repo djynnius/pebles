@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { api } from "../api";
+import { api, errorText } from "../api";
 import { Page } from "../components/Page";
 import { Table, Td } from "../components/Table";
+import { Empty, ErrorBlock, Loading } from "../components/State";
 
 interface UserRow {
   username: string;
@@ -17,12 +18,13 @@ export function Users() {
     api
       .get<UserRow[]>("/users")
       .then(setUsers)
-      .catch((e) => setError(String(e.message ?? e)));
+      .catch((e) => setError(errorText(e)));
   }, []);
 
   return (
     <Page title="Users &amp; access" eyebrow="Admin">
-      {error && <p style={{ color: "var(--err)" }}>{error}</p>}
+      {error && <ErrorBlock title="Couldn't load users" error={error} />}
+      {!error && users === null && <Loading />}
       {users && users.length > 0 ? (
         <Table head={["User", "uid", "gid", "Home"]}>
           {users.map((u) => (
@@ -35,7 +37,13 @@ export function Users() {
           ))}
         </Table>
       ) : (
-        <p style={{ color: "var(--text-dim)" }}>{users ? "No users yet." : "Loading…"}</p>
+        users !== null && (
+          <Empty
+            glyph="◔"
+            title="No Pebbles users yet"
+            body="Every user is a real UNIX account in the reserved uid range. Accounts are provisioned by pebblesd on the main container — pebblesctl user add."
+          />
+        )
       )}
     </Page>
   );

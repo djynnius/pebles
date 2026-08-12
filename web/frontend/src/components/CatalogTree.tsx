@@ -162,6 +162,38 @@ export function CatalogTree({
   );
 }
 
+/**
+ * The workbench context panel wrapper shared by the SQL editor and the
+ * notebook: the same three states in the same order, so a 503 never reads as
+ * "No catalogs yet" on one screen and "Loading…" forever on the other.
+ */
+export function CatalogPanel({
+  catalogs,
+  error,
+  onPick,
+}: {
+  catalogs: Catalog[] | null;
+  error?: string;
+  onPick: (ref: TableRef) => void;
+}) {
+  return (
+    <>
+      <div style={{ padding: "8px 12px", fontSize: 11, color: "var(--text-dim)" }}>
+        Click a table to insert its name
+      </div>
+      {error ? (
+        <div style={{ padding: "8px 12px", fontSize: 11.5, color: "var(--err)" }}>{error}</div>
+      ) : catalogs === null ? (
+        <div style={hint}>Loading catalogs…</div>
+      ) : catalogs.length === 0 ? (
+        <div style={hint}>No catalogs yet — create one from the Catalog screen.</div>
+      ) : (
+        <CatalogTree catalogs={catalogs} onPick={onPick} />
+      )}
+    </>
+  );
+}
+
 function TreeRow({
   depth,
   label,

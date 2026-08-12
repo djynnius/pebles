@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
-import { api, type User } from "../api";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { api, errorText, type User } from "../api";
+import { Empty, EmptyAction, ErrorBlock, Loading } from "../components/State";
 
 /*
  * /settings — account & settings (spec §5 "settings"). Left rail of tabs, right
@@ -35,8 +36,15 @@ const ADMIN_TABS: { id: TabId; label: string }[] = [
   { id: "approvals", label: "Engine approvals" },
 ];
 
+const ALL_TABS: { id: TabId; label: string }[] = [...USER_TABS, ...ADMIN_TABS];
+
 export function Settings({ user, onSignOut }: { user: User; onSignOut: () => void }) {
-  const [tab, setTab] = useState<TabId>("profile");
+  // The tab lives in the URL so other screens can link straight to it —
+  // "Register engine" on Engines means "mint a join token", which lives here.
+  const [params, setParams] = useSearchParams();
+  const wanted = params.get("tab") as TabId | null;
+  const tab: TabId = ALL_TABS.some((t) => t.id === wanted) ? (wanted as TabId) : "profile";
+  const setTab = (id: TabId) => setParams({ tab: id }, { replace: true });
   const initials = user.username.slice(0, 2).toUpperCase();
 
   return (
@@ -118,7 +126,7 @@ export function Settings({ user, onSignOut }: { user: User; onSignOut: () => voi
       {/* ---- pane ---------------------------------------------------------- */}
       <div style={{ flex: 1, minWidth: 0, padding: "34px 40px 60px", maxWidth: 900 }}>
         <h1 style={{ fontSize: 24, fontWeight: 600, letterSpacing: "-0.4px", marginBottom: 20 }}>
-          {[...USER_TABS, ...ADMIN_TABS].find((t) => t.id === tab)?.label}
+          {ALL_TABS.find((t) => t.id === tab)?.label}
         </h1>
         {tab === "profile" && <ProfilePane user={user} />}
         {tab === "security" && <SecurityPane user={user} />}
@@ -167,14 +175,18 @@ interface UserRow {
 
 function ProfilePane({ user }: { user: User }) {
   const [row, setRow] = useState<UserRow | null>(null);
+  const [error, setError] = useState("");
   useEffect(() => {
     api
       .get<UserRow[]>("/users")
       .then((all) => setRow(all.find((u) => u.username === user.username) ?? null))
-      .catch(() => {});
+      // Silent failure left gid and Home as bare em-dashes for no visible reason.
+      .catch((e) => setError(errorText(e)));
   }, [user.username]);
 
   return (
+    <>
+      {error && <ErrorBlock title="Couldn't read your account record" error={error} />}
     <Card>
       <FieldRow label="Username" value={user.username} mono />
       <FieldRow label="uid" value={String(user.uid)} mono />
@@ -187,6 +199,7 @@ function ProfilePane({ user }: { user: User }) {
         </Note>
       </div>
     </Card>
+    </>
   );
 }
 
@@ -221,12 +234,17 @@ const gb = (b: number) => (b / 1024 ** 3).toFixed(1);
 function HomePane() {
   const nav = useNavigate();
   const [usage, setUsage] = useState<Usage | null>(null);
+  const [error, setError] = useState("");
   useEffect(() => {
-    api.get<Usage>("/usage").then(setUsage).catch(() => {});
+    api
+      .get<Usage>("/usage")
+      .then(setUsage)
+      .catch((e) => setError(errorText(e)));
   }, []);
 
   return (
     <>
+      {error && <ErrorBlock title="Couldn't read disk usage" error={error} />}
       <Card>
         <FieldRow label="Host" value={usage?.hostname ?? "—"} mono />
         {(usage?.disks ?? []).map((d, i, all) => (
@@ -284,7 +302,7 @@ function GitPane() {
     api
       .get<{ pubkey: string }>("/settings/git")
       .then((g) => setPubkey(g.pubkey))
-      .catch((e) => setError(String(e.message ?? e)));
+      .catch((e) => setError(errorText(e)));
   }, []);
   const loadRepos = useCallback(() => {
     api
@@ -306,7 +324,7 @@ function GitPane() {
         setStatus(done);
         loadKey();
       })
-      .catch((e) => setError(String(e.message ?? e)));
+      .catch((e) => setError(errorText(e)));
   };
 
   const clone = () => {
@@ -320,13 +338,17 @@ function GitPane() {
         setCloneName("");
         loadRepos();
       })
-      .catch((e) => setError(String(e.message ?? e)));
+      .catch((e) => setError(errorText(e)));
   };
 
   return (
     <>
-      {status && <p style={{ color: "var(--ok-ink)", fontSize: 12.5, marginBottom: 12 }}>{status}</p>}
-      {error && <p style={{ color: "var(--err)", fontSize: 12.5, marginBottom: 12 }}>{error}</p>}
+      {status && (
+        <p role="status" style={{ color: "var(--ok-ink)", fontSize: 12.5, marginBottom: 12 }}>
+          {status}
+        </p>
+      )}
+      {error && <ErrorBlock error={error} />}
 
       <SectionTitle>Commit identity</SectionTitle>
       <Card style={{ padding: 18, display: "grid", gap: 12 }}>
@@ -469,7 +491,7 @@ function Repo({ name, open, onToggle }: { name: string; open: boolean; onToggle:
     api
       .get<RepoStatus>(`/repos/${encodeURIComponent(name)}/status`)
       .then(setStatus)
-      .catch((e) => setOut(String(e.message ?? e)));
+      .catch((e) => setOut(errorText(e)));
   }, [name]);
 
   useEffect(() => {
@@ -482,7 +504,7 @@ function Repo({ name, open, onToggle }: { name: string; open: boolean; onToggle:
     api
       .post<GitResult>(`/repos/${encodeURIComponent(name)}/git`, { action, ...extra })
       .then((r) => setOut((r.stdout || "") + (r.stderr ? `\n${r.stderr}` : "") || "done"))
-      .catch((e) => setOut(String(e.message ?? e)))
+      .catch((e) => setOut(errorText(e)))
       .finally(() => {
         setBusy(false);
         refresh();
@@ -626,11 +648,12 @@ function NkoyoPane() {
         setCfg(c);
         setEndpoints((c.endpoints ?? []).join("\n"));
       })
-      .catch((e) => setError(String(e.message ?? e)));
+      .catch((e) => setError(errorText(e)));
   }, []);
 
   if (!cfg) {
-    return <p style={{ color: "var(--text-dim)", fontSize: 13 }}>{error || "Loading…"}</p>;
+    // The failure used to render in muted grey, reading as a status line.
+    return error ? <ErrorBlock title="Couldn't read Nkoyo's configuration" error={error} /> : <Loading />;
   }
 
   const patch = (changes: Partial<NkoyoConfig>) => setCfg({ ...cfg, ...changes });
@@ -649,7 +672,7 @@ function NkoyoPane() {
         setEndpoints((c.endpoints ?? []).join("\n"));
         setStatus("Saved.");
       })
-      .catch((e) => setError(String(e.message ?? e)))
+      .catch((e) => setError(errorText(e)))
       .finally(() => setBusy(false));
   };
 
@@ -660,14 +683,18 @@ function NkoyoPane() {
     api
       .post<Detected[]>("/nkoyo/rescan")
       .then(setDetected)
-      .catch((e) => setError(String(e.message ?? e)))
+      .catch((e) => setError(errorText(e)))
       .finally(() => setBusy(false));
   };
 
   return (
     <>
-      {status && <p style={{ color: "var(--ok-ink)", fontSize: 12.5, marginBottom: 12 }}>{status}</p>}
-      {error && <p style={{ color: "var(--err)", fontSize: 12.5, marginBottom: 12 }}>{error}</p>}
+      {status && (
+        <p role="status" style={{ color: "var(--ok-ink)", fontSize: 12.5, marginBottom: 12 }}>
+          {status}
+        </p>
+      )}
+      {error && <ErrorBlock error={error} />}
 
       <Card style={{ padding: 18, display: "grid", gap: 14 }}>
         <Labelled label="Endpoints (one per line)">
@@ -822,10 +849,8 @@ function TokensPane() {
     api
       .get<TokenInfo[]>("/tokens")
       .then(setTokens)
-      .catch((e) => {
-        setError(String(e.message ?? e));
-        setTokens([]);
-      });
+      // Null, not [] — see catalogs.ts: a failed read is not an empty list.
+      .catch((e) => setError(errorText(e)));
   }, []);
   useEffect(load, [load]);
 
@@ -838,7 +863,7 @@ function TokensPane() {
         setCopied(false);
         load();
       })
-      .catch((e) => setError(String(e.message ?? e)));
+      .catch((e) => setError(errorText(e)));
   };
 
   const revoke = (id: string) => {
@@ -846,7 +871,7 @@ function TokensPane() {
     api
       .del(`/tokens/${encodeURIComponent(id)}`)
       .then(load)
-      .catch((e) => setError(String(e.message ?? e)));
+      .catch((e) => setError(errorText(e)));
   };
 
   return (
@@ -860,7 +885,7 @@ function TokensPane() {
         </span>
       </div>
 
-      {error && <p style={{ color: "var(--err)", fontSize: 12.5, marginBottom: 12 }}>{error}</p>}
+      {error && <ErrorBlock error={error} />}
 
       {minted && (
         <div
@@ -933,10 +958,14 @@ function TokensPane() {
             </div>
           ))}
         </Card>
+      ) : error && tokens === null ? null : tokens === null ? (
+        <Loading />
       ) : (
-        <p style={{ fontSize: 12.5, color: "var(--text-dim)" }}>
-          {tokens ? "No join tokens outstanding." : "Loading…"}
-        </p>
+        <Empty
+          title="No join tokens outstanding"
+          body="Mint one when you are ready to add an engine — it is single-use, expires in 24 hours, and is shown once."
+          action={<EmptyAction onClick={mint}>Mint join token</EmptyAction>}
+        />
       )}
     </>
   );
@@ -961,10 +990,7 @@ function RuntimePane() {
     api
       .get<EngineRow[]>("/engines")
       .then(setEngines)
-      .catch((e) => {
-        setError(String(e.message ?? e));
-        setEngines([]);
-      });
+      .catch((e) => setError(errorText(e)));
   }, []);
   useEffect(load, [load]);
 
@@ -973,12 +999,12 @@ function RuntimePane() {
     api
       .del(`/engines/${encodeURIComponent(name)}`)
       .then(load)
-      .catch((e) => setError(String(e.message ?? e)));
+      .catch((e) => setError(errorText(e)));
   };
 
   return (
     <>
-      {error && <p style={{ color: "var(--err)", fontSize: 12.5, marginBottom: 12 }}>{error}</p>}
+      {error && <ErrorBlock error={error} />}
       {engines && engines.length > 0 ? (
         <Card style={{ overflow: "hidden" }}>
           {engines.map((e) => (
@@ -1014,10 +1040,14 @@ function RuntimePane() {
             </div>
           ))}
         </Card>
+      ) : error && engines === null ? null : engines === null ? (
+        <Loading />
       ) : (
-        <p style={{ fontSize: 12.5, color: "var(--text-dim)" }}>
-          {engines ? "No engines registered." : "Loading…"}
-        </p>
+        <Empty
+          title="No engines registered"
+          body="Compute lives in engine containers that join with a single-use token. Mint one under API tokens and start an engine with it."
+          action={<EmptyAction onClick={() => nav("/settings?tab=tokens")}>Mint a join token</EmptyAction>}
+        />
       )}
       <div style={{ marginTop: 14 }}>
         <button type="button" onClick={() => nav("/engines")} style={ghost}>
@@ -1048,10 +1078,7 @@ function ApprovalsPane() {
     api
       .get<PendingEngine[]>("/engines/pending")
       .then(setPending)
-      .catch((e) => {
-        setError(String(e.message ?? e));
-        setPending([]);
-      });
+      .catch((e) => setError(errorText(e)));
   }, []);
   useEffect(load, [load]);
 
@@ -1060,12 +1087,12 @@ function ApprovalsPane() {
     const call = approve
       ? api.post(`/engines/pending/${encodeURIComponent(name)}/approve`)
       : api.del(`/engines/pending/${encodeURIComponent(name)}`);
-    call.then(load).catch((e) => setError(String(e.message ?? e)));
+    call.then(load).catch((e) => setError(errorText(e)));
   };
 
   return (
     <>
-      {error && <p style={{ color: "var(--err)", fontSize: 12.5, marginBottom: 12 }}>{error}</p>}
+      {error && <ErrorBlock error={error} />}
       {pending && pending.length > 0 ? (
         <Card style={{ overflow: "hidden" }}>
           {pending.map((p) => (
@@ -1098,10 +1125,14 @@ function ApprovalsPane() {
             </div>
           ))}
         </Card>
+      ) : error && pending === null ? null : pending === null ? (
+        <Loading />
       ) : (
-        <p style={{ fontSize: 12.5, color: "var(--text-dim)" }}>
-          {pending ? "Nothing waiting for approval." : "Loading…"}
-        </p>
+        <Empty
+          inline
+          title="Nothing waiting for approval"
+          body="Engines that arrive with a valid join token join straight away — only the ones without land here."
+        />
       )}
       <Note>
         An engine that arrives without a valid join token waits here — it keeps retrying until you

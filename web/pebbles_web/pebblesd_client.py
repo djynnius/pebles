@@ -84,6 +84,39 @@ class PebblesdClient:
     def exec_in_session(self, session_id: int, payload: dict) -> dict:
         return self._expect("POST", f"/sessions/{session_id}/exec", payload)
 
+    def exec_stream(self, session_id: int, payload: dict):
+        """Progressive exec (op sql_stream, REQ-31): yields each NDJSON line
+        from pebblesd as a dict — row batches, then the terminal done-line.
+        The connection stays open for the duration of the query."""
+        conn = _UnixHTTPConnection(self.socket_path, timeout=600.0)
+        try:
+            body = json.dumps(payload)
+            conn.request(
+                "POST",
+                f"/sessions/{session_id}/exec",
+                body=body,
+                headers={"Content-Type": "application/json"},
+            )
+            resp = conn.getresponse()
+            if resp.status != 200:
+                raw = resp.read()
+                data = json.loads(raw) if raw else {}
+                raise PebblesdError(resp.status, data.get("error", str(data)))
+            # http.client de-chunks transparently; readline gives us NDJSON.
+            while True:
+                line = resp.readline()
+                if not line:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                msg = json.loads(line)
+                yield msg
+                if msg.get("done"):
+                    break
+        finally:
+            conn.close()
+
     def list_catalogs(self) -> list:
         status, data = self._request("GET", "/catalogs")
         if status != 200:

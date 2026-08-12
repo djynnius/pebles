@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { useNavigate } from "react-router-dom";
-import { api } from "../api";
+import { api, errorText } from "../api";
 import { AccentButton, Page } from "../components/Page";
-import { StatusDot, Table, Td } from "../components/Table";
+import { Table, Td } from "../components/Table";
+import { Empty, EmptyAction, ErrorBlock, Loading } from "../components/State";
 import { duration, runColor, stamp, type RunInfo, type Workflow } from "../jobs";
 
 /*
@@ -25,10 +26,8 @@ export function Jobs() {
     api
       .get<Workflow[]>("/jobs")
       .then(setJobs)
-      .catch((e) => {
-        setError(String(e.message ?? e));
-        setJobs([]);
-      });
+      // Leave `jobs` null so a failed read renders the error, not "no jobs yet".
+      .catch((e) => setError(errorText(e)));
   }, []);
 
   const loadRuns = useCallback((name: string) => {
@@ -36,7 +35,7 @@ export function Jobs() {
     api
       .get<RunInfo[]>(`/jobs/${encodeURIComponent(name)}/runs`)
       .then((r) => setRuns((cur) => ({ ...cur, [name]: r })))
-      .catch((e) => setRuns((cur) => ({ ...cur, [name]: String(e.message ?? e) })));
+      .catch((e) => setRuns((cur) => ({ ...cur, [name]: errorText(e) })));
   }, []);
 
   const toggle = (name: string) => {
@@ -57,7 +56,7 @@ export function Jobs() {
         setOpen(name);
         loadRuns(name);
       })
-      .catch((e) => setError(String(e.message ?? e)))
+      .catch((e) => setError(errorText(e)))
       .finally(() => setBusy(""));
   };
 
@@ -107,17 +106,33 @@ export function Jobs() {
         </span>
       </div>
 
-      {error && <p style={{ color: "var(--err)", fontSize: 12.5, marginBottom: 12 }}>{error}</p>}
+      {error && <ErrorBlock error={error} />}
+      {!error && jobs === null && <Loading />}
 
       {shown.length > 0 ? (
         <Table head={["", "Job", "Schedule", "Owner", "Tasks", ""]}>
           {shown.map((job) => {
             const expanded = open === job.name;
             const history = runs[job.name];
+            // The dot is the *latest run's* state, and only once that history
+            // has been fetched. It used to be hard-coded green, which told a
+            // user with a failing job that everything was fine.
+            const latest = Array.isArray(history) ? history[0] : undefined;
             return [
               <tr key={job.name}>
                 <Td>
-                  <StatusDot tone="ok" />
+                  <span
+                    title={
+                      latest ? `Last run: ${latest.state}` : "Expand the job to read its run history"
+                    }
+                    style={{
+                      display: "inline-block",
+                      width: 8,
+                      height: 8,
+                      borderRadius: "50%",
+                      background: latest ? runColor(latest.state) : "var(--text-dim)",
+                    }}
+                  />
                 </Td>
                 <Td>
                   <button
@@ -189,13 +204,39 @@ export function Jobs() {
           })}
         </Table>
       ) : (
-        <p style={{ color: "var(--text-dim)", fontSize: 13 }}>
-          {jobs
-            ? filter.trim()
-              ? "No job matches that filter."
-              : "No jobs yet — build one and it compiles to a scheduled workflow."
-            : "Loading…"}
-        </p>
+        jobs !== null &&
+        (filter.trim() ? (
+          <Empty
+            inline
+            title="No job matches that filter"
+            body={
+              <>
+                Nothing named like “{filter.trim()}”.{" "}
+                <button
+                  type="button"
+                  onClick={() => setFilter("")}
+                  style={{
+                    border: "none",
+                    background: "transparent",
+                    padding: 0,
+                    font: "inherit",
+                    color: "var(--accent-ink)",
+                  }}
+                >
+                  Clear the filter
+                </button>
+                .
+              </>
+            }
+          />
+        ) : (
+          <Empty
+            glyph="⇄"
+            title="No jobs yet"
+            body="A job is an ordered list of steps — SQL, Python, R, shell or a notebook — that runs on your engines as you. Build one and it compiles to a scheduled workflow."
+            action={<EmptyAction onClick={() => nav("/jobbuilder")}>Build your first job</EmptyAction>}
+          />
+        ))
       )}
     </Page>
   );

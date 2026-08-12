@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, type Row } from "../api";
+import { api, errorText, type Row } from "../api";
 import {
   qualify,
   useCatalogs,
@@ -11,6 +11,7 @@ import {
 } from "../catalogs";
 import { CatalogTree, type TableRef } from "../components/CatalogTree";
 import { StatusDot } from "../components/Table";
+import { Empty, EmptyAction, ErrorBlock, Loading } from "../components/State";
 
 /*
  * /catalog — the lake browser (spec §5 "catalog").
@@ -57,7 +58,7 @@ export function Catalog() {
         )}/${encodeURIComponent(table)}`,
       )
       .then(setDetail)
-      .catch((e) => setDetailError(String(e.message ?? e)));
+      .catch((e) => setDetailError(errorText(e)));
   }, [selected]);
 
   const catalogRow = catalogs?.find((c) => c.name === selected?.catalog) ?? null;
@@ -139,9 +140,9 @@ export function Catalog() {
               }}
             />
           )}
-          {catalogs && catalogs.length === 0 && (
+          {(error || catalogs === null || catalogs.length === 0) && (
             <div style={{ padding: "14px 12px", fontSize: 11.5, color: "var(--text-dim)" }}>
-              No catalogs yet.
+              {error ? "Catalogs unavailable." : catalogs === null ? "Loading catalogs…" : "No catalogs yet."}
             </div>
           )}
         </div>
@@ -150,9 +151,16 @@ export function Catalog() {
       {/* ---- document column --------------------------------------------- */}
       <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflowY: "auto" }}>
         <div style={{ padding: "26px 32px 60px" }}>
-          {error && <p style={{ color: "var(--err)", marginBottom: 14 }}>{error}</p>}
-
-          {catalogs && catalogs.length === 0 ? (
+          {/* Order matters: error, then in-flight, then empty, then content.
+              Reading it the other way used to flash "Pick a table" while the
+              list loaded and then swap to "Your lake is empty" — a jump, and
+              an invitation to create a catalog even when the lake was simply
+              unreadable. */}
+          {error ? (
+            <ErrorBlock title="Couldn't reach your lake" error={error} />
+          ) : catalogs === null ? (
+            <Loading label="Loading catalogs…" />
+          ) : catalogs.length === 0 ? (
             <EmptyLake onCreate={() => navigate("/newcatalog")} />
           ) : !selected ? (
             <PickATable />
@@ -174,18 +182,9 @@ export function Catalog() {
                     <h1 style={{ fontSize: 25, fontWeight: 600, letterSpacing: "-0.5px" }}>
                       {selected.table}
                     </h1>
-                    <span
-                      style={{
-                        padding: "3px 9px",
-                        borderRadius: 20,
-                        background: "var(--accent-tint)",
-                        color: "var(--accent-tint-ink)",
-                        fontSize: 11,
-                        fontWeight: 600,
-                      }}
-                    >
-                      CERTIFIED
-                    </span>
+                    {/* The prototype's CERTIFIED pill was sample data: nothing
+                        in the API grades a table, and stamping every table
+                        "certified" is worse than stamping none. */}
                   </div>
                   <div
                     className="mono"
@@ -232,8 +231,10 @@ export function Catalog() {
                 }}
               >
                 <Stat label="Rows" value={detail?.row_count?.toLocaleString() ?? "—"} />
+                {/* This tile shows the catalog's data path — it was labelled
+                    "Size", which read as a byte count that never arrives. */}
                 <Stat
-                  label="Size"
+                  label="Data path"
                   value={catalogRow?.data_path ?? "—"}
                   mono
                   title={catalogRow?.data_path}
@@ -284,10 +285,10 @@ export function Catalog() {
                 })}
               </div>
 
-              {detailError && <p style={{ color: "var(--err)" }}>{detailError}</p>}
-              {!detail && !detailError && (
-                <p style={{ color: "var(--text-dim)", fontSize: 13 }}>Loading table…</p>
+              {detailError && (
+                <ErrorBlock title={`Couldn't read ${selected.table}`} error={detailError} />
               )}
+              {!detail && !detailError && <Loading label="Loading table…" />}
 
               {detail && tab === "schema" && <SchemaTab detail={detail} />}
               {detail && tab === "sample" && <SampleTab rows={detail.sample} />}
@@ -481,10 +482,9 @@ function PermissionsTab({ catalog }: { catalog: string }) {
     api
       .get<Grant[]>(`/catalogs/${encodeURIComponent(catalog)}/grants`)
       .then(setGrants)
-      .catch((e) => {
-        setError(String(e.message ?? e));
-        setGrants([]);
-      });
+      // Leave `grants` null on failure so "only the owner can read this" is
+      // never shown as if it were the answer.
+      .catch((e) => setError(errorText(e)));
 
   useEffect(() => {
     setGrants(null);
@@ -507,7 +507,7 @@ function PermissionsTab({ catalog }: { catalog: string }) {
         setChoice("");
         return reload();
       })
-      .catch((e) => setError(String(e.message ?? e)))
+      .catch((e) => setError(errorText(e)))
       .finally(() => setBusy(false));
   };
 
@@ -515,6 +515,7 @@ function PermissionsTab({ catalog }: { catalog: string }) {
 
   return (
     <div style={{ display: "grid", gap: 14 }}>
+      {error && <ErrorBlock error={error} style={{ marginBottom: 0 }} />}
       <div
         style={{
           background: "var(--surface)",
@@ -533,7 +534,10 @@ function PermissionsTab({ catalog }: { catalog: string }) {
         >
           Groups with access to {catalog}
         </div>
-        {grants === null && <div style={{ padding: 16, ...muted }}>Loading…</div>}
+        {grants === null && !error && <div style={{ padding: 16, ...muted }}>Loading…</div>}
+        {grants === null && error && (
+          <div style={{ padding: 16, ...muted }}>Grants unavailable — see the message above.</div>
+        )}
         {grants?.length === 0 && (
           <div style={{ padding: 16, ...muted }}>
             Only the owner can read this catalog. Grants target UNIX groups — there is no second
@@ -572,6 +576,11 @@ function PermissionsTab({ catalog }: { catalog: string }) {
         }}
       >
         <span style={{ fontSize: 12.5, color: "var(--text-muted)" }}>Add a group</span>
+        {groups.length === 0 && (
+          <span style={{ fontSize: 11.5, color: "var(--text-dim)" }}>
+            No groups to grant — create one on the main container first.
+          </span>
+        )}
         <select
           value={choice}
           onChange={(e) => setChoice(e.target.value)}
@@ -608,7 +617,6 @@ function PermissionsTab({ catalog }: { catalog: string }) {
         >
           {busy ? "Granting…" : "Grant"}
         </button>
-        {error && <span style={{ color: "var(--err)", fontSize: 12 }}>{error}</span>}
       </div>
     </div>
   );
@@ -735,50 +743,25 @@ function Breadcrumb({ parts }: { parts: string[] }) {
 
 function EmptyLake({ onCreate }: { onCreate: () => void }) {
   return (
-    <div
-      style={{
-        maxWidth: 460,
-        margin: "80px auto 0",
-        background: "var(--surface)",
-        border: "1px solid var(--border)",
-        borderRadius: 14,
-        padding: "34px 30px",
-        textAlign: "center",
-      }}
-    >
-      <h1 style={{ fontSize: 20, fontWeight: 600, marginBottom: 8 }}>Your lake is empty</h1>
-      <p style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 20 }}>
-        A catalog is a DuckLake namespace — Parquet on your disks, catalogued in Postgres, with
-        time travel from the first write.
-      </p>
-      <button
-        type="button"
-        onClick={onCreate}
-        style={{
-          background: "var(--accent)",
-          color: "var(--on-accent)",
-          border: "none",
-          borderRadius: 11,
-          fontWeight: 600,
-          fontSize: 13,
-          padding: "9px 18px",
-        }}
-      >
-        New catalog
-      </button>
-    </div>
+    <Empty
+      style={{ maxWidth: 460, margin: "80px auto 0" }}
+      glyph="◨"
+      title="Your lake is empty"
+      body="A catalog is a DuckLake namespace — Parquet on your disks, catalogued in Postgres, with time travel from the first write."
+      action={<EmptyAction onClick={onCreate}>New catalog</EmptyAction>}
+    />
   );
 }
 
 function PickATable() {
   return (
-    <div style={{ maxWidth: 420, margin: "90px auto 0", textAlign: "center" }}>
-      <div style={{ fontSize: 26, color: "var(--text-faint)", marginBottom: 10 }}>▦</div>
-      <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>Pick a table</div>
-      <div style={{ fontSize: 12.5, color: "var(--text-dim)" }}>
-        Expand a catalog on the left to browse its schemas and tables.
-      </div>
-    </div>
+    <Empty
+      inline
+      style={{ maxWidth: 420, margin: "90px auto 0" }}
+      glyph="▦"
+      title="Pick a table"
+      body="Expand a catalog on the left to browse its schemas and tables."
+    />
   );
 }
 

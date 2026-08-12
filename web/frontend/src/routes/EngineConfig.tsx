@@ -1,7 +1,8 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { api } from "../api";
+import { api, errorText } from "../api";
 import { Switch } from "../components/Page";
+import { Empty, EmptyAction, ErrorBlock, Loading } from "../components/State";
 import { LOST_HINT, isLost } from "../engines";
 
 /*
@@ -64,10 +65,9 @@ export function EngineConfig() {
     api
       .get<Engine[]>("/engines")
       .then(setEngines)
-      .catch((e) => {
-        setError(String(e.message ?? e));
-        setEngines([]);
-      });
+      // Null, not [] — "no engines registered" is a different screen from
+      // "the fleet could not be read".
+      .catch((e) => setError(errorText(e)));
   }, []);
 
   const engine = (engines ?? []).find((e) => e.name === wanted) ?? (engines ?? [])[0];
@@ -89,7 +89,7 @@ export function EngineConfig() {
     api
       .del(`/engines/${encodeURIComponent(engine.name)}`)
       .then(() => nav("/engines"))
-      .catch((e) => setError(String(e.message ?? e)));
+      .catch((e) => setError(errorText(e)));
   };
 
   return (
@@ -100,14 +100,31 @@ export function EngineConfig() {
         </button>
       </div>
 
-      {error && <p style={{ color: "var(--err)", fontSize: 12.5, marginBottom: 12 }}>{error}</p>}
+      {error && <ErrorBlock title="Couldn't load this engine" error={error} />}
 
       {!engine ? (
-        <p style={{ color: "var(--text-dim)", fontSize: 13 }}>
-          {engines ? "No engines registered yet." : "Loading…"}
-        </p>
+        error ? null : engines === null ? (
+          <Loading />
+        ) : (
+          <Empty
+            glyph="◍"
+            title="No engines registered yet"
+            body="There is nothing to configure until an engine joins. Mint a single-use join token and start an engine container with it."
+            action={
+              <EmptyAction onClick={() => nav("/settings?tab=tokens")}>
+                Mint a join token
+              </EmptyAction>
+            }
+          />
+        )
       ) : (
         <>
+          {/* A stale ?engine= used to silently show a different engine. */}
+          {wanted && wanted !== engine.name && (
+            <p style={{ fontSize: 12, color: "var(--warn)", marginBottom: 10 }}>
+              “{wanted}” is not registered — showing {engine.name} instead.
+            </p>
+          )}
           <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
             <h1 style={{ fontSize: 25, fontWeight: 600, letterSpacing: "-0.5px" }}>{engine.name}</h1>
             {engines && engines.length > 1 && (

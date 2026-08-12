@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { api, sse, type Row } from "../api";
+import { api, errorText, sse, type Row } from "../api";
 import { qualify, useCatalogs } from "../catalogs";
-import { CatalogTree } from "../components/CatalogTree";
+import { CatalogPanel } from "../components/CatalogTree";
 import { Workbench } from "../components/Workbench";
 import { ResultGrid } from "./Catalog";
 
@@ -51,7 +51,7 @@ const BADGE: Record<CellType, string> = { sql: "SQL", python: "PY", r: "R" };
 export function Notebook() {
   const { name = "" } = useParams();
   const nav = useNavigate();
-  const { catalogs } = useCatalogs();
+  const { catalogs, error: catalogError } = useCatalogs();
 
   const [doc, setDoc] = useState<NotebookDoc | null>(null);
   const [outs, setOuts] = useState<CellOut[]>([]);
@@ -75,7 +75,7 @@ export function Notebook() {
         setDoc({ catalog: d.catalog ?? null, cells });
         setOuts(cells.map(() => ({})));
       })
-      .catch((e) => setError(String(e.message ?? e)));
+      .catch((e) => setError(errorText(e)));
   }, [name]);
 
   useEffect(() => {
@@ -147,7 +147,7 @@ export function Notebook() {
       setDirty(false);
       setError("");
     } catch (e) {
-      setError(String((e as Error).message ?? e));
+      setError(errorText(e));
       throw e;
     } finally {
       setSaving(false);
@@ -265,21 +265,11 @@ export function Notebook() {
           </div>
         ),
         catalog: (
-          <>
-            <div style={{ padding: "8px 12px", fontSize: 11, color: "var(--text-dim)" }}>
-              Click a table to insert its name
-            </div>
-            {catalogs && catalogs.length > 0 ? (
-              <CatalogTree
-                catalogs={catalogs}
-                onPick={(r) => insertAtFocus(qualify(r.catalog, r.schema, r.table))}
-              />
-            ) : (
-              <div style={{ padding: "8px 12px", fontSize: 11.5, color: "var(--text-dim)" }}>
-                {catalogs ? "No catalogs yet." : "Loading…"}
-              </div>
-            )}
-          </>
+          <CatalogPanel
+            catalogs={catalogs}
+            error={catalogError}
+            onPick={(r) => insertAtFocus(qualify(r.catalog, r.schema, r.table))}
+          />
         ),
       }}
       tabs={{
@@ -335,7 +325,12 @@ export function Notebook() {
               </option>
             ))}
           </select>
-          <button type="button" onClick={() => void save()} style={ghost}>
+          <button
+            type="button"
+            onClick={() => void save()}
+            disabled={!doc || saving}
+            style={{ ...ghost, color: !doc || saving ? "var(--text-faint)" : "var(--text-mid)" }}
+          >
             {saving ? "Saving…" : "Save"}
           </button>
           <button

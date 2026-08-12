@@ -26,6 +26,7 @@ use pebbles_session::broker::{
 use pebbles_session::{AdmissionError, SessionMode};
 use serde_json::Value;
 use std::sync::Arc;
+use tokio_stream::StreamExt;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -548,7 +549,13 @@ async fn exec_session(
     State(state): State<AppState>,
     Path(id): Path<u64>,
     Json(payload): Json<Value>,
-) -> ApiResult<Value> {
+) -> Response {
+    // sql_stream (REQ-31): progressive rows as an NDJSON body — one JSON per
+    // line, terminal line carries "done": true. Everything else stays a single
+    // JSON response.
+    if payload.get("op").and_then(Value::as_str) == Some("sql_stream") {
+        return exec_session_stream(state, id, payload).await;
+    }
     if let Some(remote) = state.cluster.remote_of(id) {
         return forward_remote(
             &state,
@@ -557,10 +564,70 @@ async fn exec_session(
             "/exec",
             Some(&payload),
         )
-        .await;
+        .await
+        .into_response();
     }
-    let broker = broker_of(&state)?;
-    Ok(Json(broker.exec(id, payload).await.map_err(session_error)?))
+    let broker = match broker_of(&state) {
+        Ok(b) => b,
+        Err(e) => return e.into_response(),
+    };
+    match broker.exec(id, payload).await.map_err(session_error) {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// The streaming leg of exec_session: local sessions relay the broker's line
+/// channel; remote sessions relay the engine's NDJSON body bytes unparsed.
+async fn exec_session_stream(state: AppState, id: u64, payload: Value) -> Response {
+    use axum::body::Body;
+    let ndjson = [(axum::http::header::CONTENT_TYPE, "application/x-ndjson")];
+
+    if let Some(remote) = state.cluster.remote_of(id) {
+        let url = format!(
+            "{}/engine/sessions/{}/exec",
+            remote.address, remote.remote_id
+        );
+        let resp = state
+            .cluster
+            .peer_client(remote.cert_fp.as_deref())
+            .post(url)
+            .bearer_auth(&remote.secret)
+            .json(&payload)
+            .send()
+            .await;
+        return match resp {
+            Ok(resp) if resp.status().is_success() => {
+                (ndjson, Body::from_stream(resp.bytes_stream())).into_response()
+            }
+            Ok(resp) => error(
+                StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
+                format!("[{}] stream refused", remote.engine_name),
+            )
+            .into_response(),
+            Err(e) => error(StatusCode::BAD_GATEWAY, e).into_response(),
+        };
+    }
+
+    let broker = match broker_of(&state) {
+        Ok(b) => b,
+        Err(e) => return e.into_response(),
+    };
+    let (tx, rx) = tokio::sync::mpsc::channel::<Value>(16);
+    tokio::spawn(async move {
+        if let Err(err) = broker.exec_stream(id, payload, tx.clone()).await {
+            // Surface broker-level failures as a terminal line so the client
+            // never hangs waiting for "done".
+            let _ = tx
+                .send(serde_json::json!({
+                    "ok": false, "done": true, "error": err.to_string()
+                }))
+                .await;
+        }
+    });
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx)
+        .map(|v| Ok::<_, std::convert::Infallible>(format!("{v}\n")));
+    (ndjson, Body::from_stream(stream)).into_response()
 }
 
 async fn close_session(State(state): State<AppState>, Path(id): Path<u64>) -> ApiResult<Value> {

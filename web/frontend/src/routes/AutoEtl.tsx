@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { api } from "../api";
+import { api, errorText } from "../api";
 import { useCatalogs, type TreeResponse } from "../catalogs";
 import { Table, Td } from "../components/Table";
+import { ErrorBlock } from "../components/State";
 
 /*
  * /autoetl — Auto ETL (spec §5 "autoetl", REQ-46).
@@ -87,7 +88,7 @@ const num = (v: unknown): number | null => {
 
 export function AutoEtl() {
   const nav = useNavigate();
-  const { catalogs } = useCatalogs();
+  const { catalogs, error: catalogError } = useCatalogs();
 
   // ---- phase 1: source ----------------------------------------------------
   const [mode, setMode] = useState<"file" | "table">("file");
@@ -95,7 +96,9 @@ export function AutoEtl() {
   const [dir, setDir] = useState("");
   const [items, setItems] = useState<FileItem[] | null>(null);
   const [file, setFile] = useState("");
+  const [filesError, setFilesError] = useState("");
   const [tree, setTree] = useState<TreeResponse | null>(null);
+  const [treeError, setTreeError] = useState("");
   const [table, setTable] = useState("");
   const [profiling, setProfiling] = useState(false);
 
@@ -111,22 +114,24 @@ export function AutoEtl() {
 
   useEffect(() => {
     if (mode !== "file") return;
+    setItems(null);
+    setFilesError("");
     api
       .get<{ path: string; items: FileItem[] }>(`/files?path=${encodeURIComponent(dir)}`)
       .then((r) => setItems(r.items))
-      .catch(() => setItems([]));
+      // Both pickers used to swallow their failure and claim the folder or the
+      // catalog was empty; say what actually happened instead.
+      .catch((e) => setFilesError(errorText(e)));
   }, [mode, dir]);
 
   useEffect(() => {
-    if (mode !== "table" || !catalog) {
-      setTree(null);
-      return;
-    }
     setTree(null);
+    setTreeError("");
+    if (mode !== "table" || !catalog) return;
     api
       .get<TreeResponse>(`/catalogs/${encodeURIComponent(catalog)}/tree`)
       .then(setTree)
-      .catch(() => setTree({ schemas: [] }));
+      .catch((e) => setTreeError(errorText(e)));
   }, [mode, catalog]);
 
   useEffect(() => {
@@ -168,11 +173,13 @@ export function AutoEtl() {
         setTicked(marks);
         setName(r.proposal.name);
       })
-      .catch((e) => setError(String(e.message ?? e)))
+      .catch((e) => setError(errorText(e)))
       .finally(() => setProfiling(false));
   };
 
-  const steps = profile?.proposal.cleaning ?? [];
+  // Memoised: the `?? []` mints a new array each render, which made the
+  // effectiveModel memo below recompute every time (react-hooks warning).
+  const steps = useMemo(() => profile?.proposal.cleaning ?? [], [profile]);
   const approved = steps.filter((s) => ticked[s.id]);
   const model = profile?.proposal.model;
 
@@ -223,7 +230,7 @@ export function AutoEtl() {
       })
       .then(() => nav("/jobs"))
       .catch((e) => {
-        setError(String(e.message ?? e));
+        setError(errorText(e));
         setBusy(false);
       });
   };
@@ -270,6 +277,7 @@ export function AutoEtl() {
               <FileBrowser
                 dir={dir}
                 items={items}
+                error={filesError}
                 selected={file}
                 onDir={(d) => {
                   setDir(d);
@@ -285,6 +293,7 @@ export function AutoEtl() {
               <TablePicker
                 catalog={catalog}
                 tree={tree}
+                error={treeError}
                 selected={table}
                 onPick={(t) => {
                   setTable(t);
@@ -297,6 +306,11 @@ export function AutoEtl() {
           <div style={{ display: "grid", gap: 16 }}>
             <div>
               <Label>Target catalog</Label>
+              {catalogError && (
+                <div style={{ fontSize: 11.5, color: "var(--err)", marginBottom: 6 }}>
+                  {catalogError}
+                </div>
+              )}
               <select
                 value={catalog}
                 onChange={(e) => {
@@ -357,11 +371,7 @@ export function AutoEtl() {
         </div>
       </Phase>
 
-      {error && !profile && (
-        <div style={errBlock}>
-          {error}
-        </div>
-      )}
+      {error && !profile && <ErrorBlock error={error} style={{ marginTop: 14, marginBottom: 0 }} />}
 
       {/* ---- phase 2 · review --------------------------------------------- */}
       {profile && model && (
@@ -541,7 +551,7 @@ export function AutoEtl() {
 
           {/* ---- phase 3 · approve ---------------------------------------- */}
           <Phase n={3} title="Approve" last>
-            {error && <div style={{ ...errBlock, marginTop: 0, marginBottom: 14 }}>{error}</div>}
+            {error && <ErrorBlock error={error} />}
             <div
               style={{
                 display: "flex",
@@ -732,12 +742,14 @@ function Col({ name, note, fk }: { name: string; note?: string; fk?: boolean }) 
 function FileBrowser({
   dir,
   items,
+  error,
   selected,
   onDir,
   onPick,
 }: {
   dir: string;
   items: FileItem[] | null;
+  error?: string;
   selected: string;
   onDir: (d: string) => void;
   onPick: (p: string) => void;
@@ -764,7 +776,10 @@ function FileBrowser({
         {dir && (
           <Row onClick={() => onDir(up)} glyph="▸" label=".." dim />
         )}
-        {items === null && <Empty>Loading…</Empty>}
+        {error && (
+          <div style={{ padding: 12, fontSize: 11.5, color: "var(--err)" }}>{error}</div>
+        )}
+        {!error && items === null && <Empty>Loading…</Empty>}
         {items?.length === 0 && <Empty>This folder is empty.</Empty>}
         {(items ?? [])
           .slice()
@@ -801,11 +816,13 @@ function FileBrowser({
 function TablePicker({
   catalog,
   tree,
+  error,
   selected,
   onPick,
 }: {
   catalog: string;
   tree: TreeResponse | null;
+  error?: string;
   selected: string;
   onPick: (t: string) => void;
 }) {
@@ -813,7 +830,10 @@ function TablePicker({
     <div style={{ border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
       <div style={{ maxHeight: 288, overflowY: "auto" }}>
         {!catalog && <Empty>Choose a target catalog first — tables are browsed inside it.</Empty>}
-        {catalog && tree === null && <Empty>Loading tables…</Empty>}
+        {catalog && error && (
+          <div style={{ padding: 12, fontSize: 11.5, color: "var(--err)" }}>{error}</div>
+        )}
+        {catalog && !error && tree === null && <Empty>Loading tables…</Empty>}
         {catalog &&
           tree?.schemas.map((s) => (
             <div key={s.name}>
@@ -1055,16 +1075,6 @@ const kindPill: CSSProperties = {
   border: "1px solid var(--border)",
   borderRadius: 6,
   padding: "1px 6px",
-};
-
-const errBlock: CSSProperties = {
-  marginTop: 14,
-  padding: "12px 14px",
-  border: "1px solid var(--err)",
-  borderRadius: 12,
-  background: "var(--accent-tint)",
-  color: "var(--err)",
-  fontSize: 12.5,
 };
 
 const crumbBtn: CSSProperties = {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import { api, type User } from "../api";
+import { api, errorText, type User } from "../api";
+import { ErrorBlock } from "../components/State";
 import { Workbench } from "../components/Workbench";
 
 /*
@@ -41,6 +42,7 @@ export function Files({ user }: { user: User }) {
   const [filter, setFilter] = useState("");
   const [menu, setMenu] = useState<Menu | null>(null);
   const [newMenu, setNewMenu] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const upload = useRef<HTMLInputElement>(null);
 
   const load = useCallback((p: string) => {
@@ -49,10 +51,9 @@ export function Files({ user }: { user: User }) {
     api
       .get<{ path: string; items: FileItem[] }>(`/files?path=${encodeURIComponent(p)}`)
       .then((r) => setItems(r.items))
-      .catch((e) => {
-        setError(String(e.message ?? e));
-        setItems([]);
-      });
+      // `items` stays null on failure so the table shows the error rather than
+      // "This folder is empty." over a directory nobody could read.
+      .catch((e) => setError(errorText(e)));
   }, []);
 
   useEffect(() => {
@@ -78,7 +79,7 @@ export function Files({ user }: { user: User }) {
   const act = (p: Promise<unknown>) =>
     p
       .then(() => load(path))
-      .catch((e) => setError(String(e.message ?? e)));
+      .catch((e) => setError(errorText(e)));
 
   const rel = (name: string) => (path ? `${path}/${name}` : name);
 
@@ -105,10 +106,14 @@ export function Files({ user }: { user: User }) {
     body.append("dir", path);
     for (const f of Array.from(files)) body.append("file", f);
     setError("");
-    fetch("/api/files/upload", { method: "POST", body, credentials: "same-origin" })
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("upload failed"))))
+    setUploading(true);
+    // Through api.upload, not a bare fetch: that path threw away the server's
+    // {error} text ("upload failed") and skipped the central 401 handler.
+    api
+      .upload("/files/upload", body)
       .then(() => load(path))
-      .catch((e) => setError(String(e.message ?? e)));
+      .catch((e) => setError(errorText(e)))
+      .finally(() => setUploading(false));
   };
 
   const crumbs = path ? path.split("/") : [];
@@ -215,8 +220,13 @@ export function Files({ user }: { user: User }) {
                     e.target.value = "";
                   }}
                 />
-                <button type="button" onClick={() => upload.current?.click()} style={ghost}>
-                  Upload
+                <button
+                  type="button"
+                  onClick={() => upload.current?.click()}
+                  disabled={uploading}
+                  style={{ ...ghost, color: uploading ? "var(--text-faint)" : "var(--text-mid)" }}
+                >
+                  {uploading ? "Uploading…" : "Upload"}
                 </button>
                 <div style={{ position: "relative" }}>
                   <button
@@ -291,7 +301,7 @@ export function Files({ user }: { user: User }) {
               />
             </div>
 
-            {error && <p style={{ color: "var(--err)", marginBottom: 12 }}>{error}</p>}
+            {error && <ErrorBlock error={error} />}
 
             <div
               style={{
@@ -378,14 +388,16 @@ export function Files({ user }: { user: User }) {
                   {items !== null && shown.length === 0 && (
                     <tr>
                       <td colSpan={5} style={{ ...td, color: "var(--text-dim)" }}>
-                        {items.length === 0 ? "This folder is empty." : "Nothing matches the filter."}
+                        {items.length === 0
+                          ? "This folder is empty — Upload, or New folder ▾, to fill it."
+                          : "Nothing matches the filter."}
                       </td>
                     </tr>
                   )}
-                  {items === null && !error && (
+                  {items === null && (
                     <tr>
                       <td colSpan={5} style={{ ...td, color: "var(--text-dim)" }}>
-                        Loading…
+                        {error ? "Nothing to show — see the message above." : "Loading…"}
                       </td>
                     </tr>
                   )}

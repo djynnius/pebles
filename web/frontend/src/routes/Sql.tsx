@@ -8,9 +8,9 @@ import {
   type ReactNode,
 } from "react";
 import { useSearchParams } from "react-router-dom";
-import { sse, type Row, type SqlResult } from "../api";
+import { sse, type Row } from "../api";
 import { qualify, useCatalogs } from "../catalogs";
-import { CatalogTree } from "../components/CatalogTree";
+import { CatalogPanel } from "../components/CatalogTree";
 import { Workbench } from "../components/Workbench";
 import { ResultGrid, cell } from "./Catalog";
 
@@ -59,7 +59,7 @@ function loadDocs(): SqlDoc[] {
 
 export function Sql() {
   const [params, setParams] = useSearchParams();
-  const { catalogs } = useCatalogs();
+  const { catalogs, error: catalogError } = useCatalogs();
   // One read of storage seeds both pieces of state — two `loadDocs()` calls
   // would mint different ids for a first-run document and desync the tab strip.
   const seed = useRef<SqlDoc[]>(null as unknown as SqlDoc[]);
@@ -142,7 +142,13 @@ export function Sql() {
       doc.catalog ? `&catalog=${encodeURIComponent(doc.catalog)}` : ""
     }`;
     cancel.current = sse(`/sql/stream?${query}`, {
-      result: (r: SqlResult) => setRows(r.rows ?? []),
+      // Progressive rendering (REQ-31): batches paint as they arrive; the
+      // final `result` replaces with the authoritative complete set.
+      rows: (b) => setRows((prev) => [...(prev ?? []), ...b.rows]),
+      result: (r) => {
+        setRows(r.rows ?? []);
+        if (r.truncated) setError("Result truncated at 100,000 rows — refine the query.");
+      },
       error: (m) => setError(m),
       done: () => {
         setElapsed((performance.now() - started) / 1000);
@@ -179,21 +185,11 @@ export function Sql() {
       defaultPanel="catalog"
       panels={{
         catalog: (
-          <>
-            <div style={{ padding: "8px 12px", fontSize: 11, color: "var(--text-dim)" }}>
-              Click a table to insert its name
-            </div>
-            {catalogs && catalogs.length > 0 ? (
-              <CatalogTree
-                catalogs={catalogs}
-                onPick={(r) => insert(qualify(r.catalog, r.schema, r.table))}
-              />
-            ) : (
-              <div style={{ padding: "8px 12px", fontSize: 11.5, color: "var(--text-dim)" }}>
-                {catalogs ? "No catalogs yet." : "Loading…"}
-              </div>
-            )}
-          </>
+          <CatalogPanel
+            catalogs={catalogs}
+            error={catalogError}
+            onPick={(r) => insert(qualify(r.catalog, r.schema, r.table))}
+          />
         ),
       }}
       tabs={{

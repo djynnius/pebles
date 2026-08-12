@@ -389,14 +389,52 @@ def register_api(app, client: PebblesdClient) -> None:
         sql = request.args.get("q", "").strip()
         if not sql:
             return jsonify({"error": "empty query"}), 422
-        # Resolve inside the request context — the generator outlives the cookie
-        # session (REQ-31 wire shape).
-        result, error = None, None
+        catalog = request.args.get("catalog") or None
+        # Progressive streaming (REQ-31): rows relay batch-by-batch as the
+        # kernel produces them. Everything session-bound resolves HERE — the
+        # generator outlives the request context (and its cookie session), so
+        # a ping revives a reaped session and pins the id first.
+        username = user["username"]
         try:
-            result = _run_sql(user["username"], sql, request.args.get("catalog") or None)
+            _session_op(username, {"op": "ping"})
+            sid = _engine_session_id(username)
         except (OSError, RuntimeError, ValueError) as exc:
-            error = str(exc)
-        return _sse_response(result, error)
+            return _sse_response(None, str(exc))
+        payload: dict = {"op": "sql_stream", "sql": sql}
+        if catalog:
+            payload["catalog"] = catalog
+
+        def stream():
+            yield _sse("status", {"state": "running"})
+            rows: list = []
+            try:
+                for msg in client.exec_stream(sid, payload):
+                    if msg.get("rows") and not msg.get("done"):
+                        rows.extend(msg["rows"])
+                        yield _sse("rows", {"rows": msg["rows"]})
+                    if msg.get("done"):
+                        if msg.get("ok"):
+                            yield _sse(
+                                "result",
+                                {
+                                    "ok": True,
+                                    "rows": rows,
+                                    "truncated": bool(msg.get("truncated")),
+                                },
+                            )
+                        else:
+                            yield _sse(
+                                "error", {"error": msg.get("error", "query failed")}
+                            )
+            except (OSError, RuntimeError, ValueError) as exc:
+                yield _sse("error", {"error": str(exc)})
+            yield _sse("done", {})
+
+        return Response(
+            stream(),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     # ---- files -------------------------------------------------------------
 

@@ -219,7 +219,16 @@ function TabStrip({ tabs }: { tabs: WorkbenchTabs }) {
             key={t.id}
             role="tab"
             aria-selected={on}
+            // A div with only onClick is unreachable by keyboard; the close
+            // control inside rules out making the tab itself a <button>.
+            tabIndex={0}
             onClick={() => tabs.onSelect?.(t.id)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                tabs.onSelect?.(t.id);
+              }
+            }}
             style={{
               display: "flex",
               alignItems: "center",

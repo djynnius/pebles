@@ -23,6 +23,8 @@ class FakeDaemon:
 
     def exec_in_session(self, session_id, payload):
         op = payload["op"]
+        if op == "ping":
+            return {"id": None, "ok": True, "uid": 70000}
         if op == "sql":
             sql = payload["sql"]
             if sql.startswith("SUMMARIZE"):
@@ -156,6 +158,16 @@ class FakeDaemon:
             )
             return {"id": None, "ok": True, "entries": entries}
         raise AssertionError(f"unexpected op {op}")
+
+    def exec_stream(self, session_id, payload):
+        assert payload["op"] == "sql_stream"
+        if "boom" in payload["sql"]:
+            yield {"id": None, "ok": False, "done": True, "error": "kaboom"}
+            return
+        # two progressive batches, then the terminal line — the REQ-31 shape
+        yield {"id": None, "rows": [{"answer": 42}]}
+        yield {"id": None, "rows": [{"answer": 43}]}
+        yield {"id": None, "ok": True, "done": True, "truncated": False}
 
     def list_catalogs(self):
         return list(self.catalogs)
@@ -454,7 +466,14 @@ def test_api_sql_exec_and_stream():
     stream = c.get("/api/sql/stream?q=SELECT+42+AS+answer")
     assert stream.mimetype == "text/event-stream"
     body = stream.get_data(as_text=True)
-    assert "event: result" in body and '"answer": 42' in body and "event: done" in body
+    # progressive: row batches arrive as their own events BEFORE the final
+    # result (REQ-31 — real streaming, not block-then-emit)
+    assert body.index("event: rows") < body.index("event: result")
+    assert '"answer": 42' in body and '"answer": 43' in body
+    assert "event: result" in body and "event: done" in body
+
+    err = c.get("/api/sql/stream?q=SELECT+boom").get_data(as_text=True)
+    assert "event: error" in err and "kaboom" in err and "event: done" in err
 
     assert client().get("/api/sql/stream?q=SELECT+1").status_code == 401
 

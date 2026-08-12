@@ -68,11 +68,9 @@ fn valid_catalog(name: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
-/// Run one SQL request through the DuckDB CLI, attaching the named DuckLake catalog
-/// (Postgres over the local socket, peer-authenticated as this uid).
-fn run_sql(id: &Value, sql: &str, catalog: Option<&str>) -> Value {
-    let fail = |err: String| json!({"id": id, "ok": false, "error": err});
-
+/// The full CLI script for one SQL request: vendored-extension pins, memory
+/// limit, optional DuckLake attach, then the user's SQL. Err = invalid catalog.
+fn sql_script(sql: &str, catalog: Option<&str>) -> Result<String, String> {
     let mut script = format!(
         "SET autoinstall_known_extensions=false; SET autoload_known_extensions=false; \
          SET extension_directory='{EXTENSION_DIR}'; LOAD ducklake; LOAD postgres;"
@@ -87,7 +85,7 @@ fn run_sql(id: &Value, sql: &str, catalog: Option<&str>) -> Value {
     }
     if let Some(name) = catalog {
         if !valid_catalog(name) {
-            return fail(format!("invalid catalog name {name:?}"));
+            return Err(format!("invalid catalog name {name:?}"));
         }
         // On the main, peer auth over the unix socket. On a remote engine
         // (M2.5b), TCP to the main's Postgres — libpq authenticates with the
@@ -103,6 +101,18 @@ fn run_sql(id: &Value, sql: &str, catalog: Option<&str>) -> Value {
     }
     script.push('\n');
     script.push_str(sql);
+    Ok(script)
+}
+
+/// Run one SQL request through the DuckDB CLI, attaching the named DuckLake catalog
+/// (Postgres over the local socket, peer-authenticated as this uid).
+fn run_sql(id: &Value, sql: &str, catalog: Option<&str>) -> Value {
+    let fail = |err: String| json!({"id": id, "ok": false, "error": err});
+
+    let script = match sql_script(sql, catalog) {
+        Ok(s) => s,
+        Err(e) => return fail(e),
+    };
 
     let output = std::process::Command::new("duckdb")
         .args([":memory:", "-json", "-c", &script])
@@ -511,10 +521,30 @@ fn main() {
         if line.trim().is_empty() {
             continue;
         }
-        let response = match serde_json::from_str::<Value>(&line) {
-            Ok(request) => handle(&request, &mut executors),
-            Err(e) => json!({"id": null, "ok": false, "error": format!("bad request: {e}")}),
+        let request = match serde_json::from_str::<Value>(&line) {
+            Ok(request) => request,
+            Err(e) => {
+                let response =
+                    json!({"id": null, "ok": false, "error": format!("bad request: {e}")});
+                let mut out = stdout.lock();
+                if writeln!(out, "{response}")
+                    .and_then(|()| out.flush())
+                    .is_err()
+                {
+                    break;
+                }
+                continue;
+            }
         };
+        // sql_stream is the one MULTI-line op (progressive results, REQ-31):
+        // it writes its own row-batch lines and a terminal done-line.
+        if request.get("op").and_then(Value::as_str) == Some("sql_stream") {
+            if run_sql_stream(&request, &stdout).is_err() {
+                break;
+            }
+            continue;
+        }
+        let response = handle(&request, &mut executors);
         let mut out = stdout.lock();
         if writeln!(out, "{response}")
             .and_then(|()| out.flush())
@@ -523,6 +553,109 @@ fn main() {
             break;
         }
     }
+}
+
+/// Progressive SQL (REQ-31): drive the DuckDB CLI with piped stdout and relay
+/// rows as they arrive — `{"id","rows":[...]}` batch lines, then a terminal
+/// `{"id","ok",…,"done":true}`. The CLI's `-json` mode prints one row object
+/// per line inside array brackets, so batches flush every ROWS_PER_BATCH rows
+/// (or at end). A runaway result is truncated at MAX_STREAM_ROWS.
+fn run_sql_stream(request: &Value, stdout: &std::io::Stdout) -> std::io::Result<()> {
+    const ROWS_PER_BATCH: usize = 64;
+    const MAX_STREAM_ROWS: usize = 100_000;
+    let id = request.get("id").cloned().unwrap_or(Value::Null);
+    let write = |v: Value| -> std::io::Result<()> {
+        let mut out = stdout.lock();
+        writeln!(out, "{v}")?;
+        out.flush()
+    };
+    let terminal = |ok: bool, err: Option<String>, truncated: bool| {
+        let mut v = json!({"id": id, "ok": ok, "done": true, "truncated": truncated});
+        if let Some(e) = err {
+            v["error"] = Value::String(e);
+        }
+        v
+    };
+
+    let Some(sql) = request.get("sql").and_then(Value::as_str) else {
+        return write(terminal(
+            false,
+            Some("sql_stream needs a sql string".into()),
+            false,
+        ));
+    };
+    let script = match sql_script(sql, request.get("catalog").and_then(Value::as_str)) {
+        Ok(s) => s,
+        Err(e) => return write(terminal(false, Some(e), false)),
+    };
+
+    let child = std::process::Command::new("duckdb")
+        .args([":memory:", "-json", "-c", &script])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn();
+    let mut child = match child {
+        Ok(c) => c,
+        Err(e) => {
+            return write(terminal(
+                false,
+                Some(format!("cannot run duckdb: {e}")),
+                false,
+            ))
+        }
+    };
+
+    let mut batch: Vec<Value> = Vec::new();
+    let mut total = 0usize;
+    let mut truncated = false;
+    if let Some(out_pipe) = child.stdout.take() {
+        let reader = std::io::BufReader::new(out_pipe);
+        for line in reader.lines() {
+            let Ok(line) = line else { break };
+            // `-json` array framing: rows are objects, one per line, wrapped in
+            // brackets and comma-separated.
+            let row = line
+                .trim()
+                .trim_start_matches('[')
+                .trim_end_matches([',', ']']);
+            if row.is_empty() {
+                continue;
+            }
+            if let Ok(value) = serde_json::from_str::<Value>(row) {
+                batch.push(value);
+                total += 1;
+            }
+            if batch.len() >= ROWS_PER_BATCH {
+                write(json!({"id": id, "rows": std::mem::take(&mut batch)}))?;
+            }
+            if total >= MAX_STREAM_ROWS {
+                truncated = true;
+                let _ = child.kill();
+                break;
+            }
+        }
+    }
+    if !batch.is_empty() {
+        write(json!({"id": id, "rows": batch}))?;
+    }
+    let status = child.wait();
+    let ok = truncated || status.as_ref().map(|s| s.success()).unwrap_or(false);
+    let error = if ok {
+        None
+    } else {
+        let mut err = String::new();
+        if let Some(mut e) = child.stderr.take() {
+            use std::io::Read;
+            let _ = e.read_to_string(&mut err);
+            err.truncate(MAX_READ_BYTES);
+        }
+        Some(if err.trim().is_empty() {
+            "query failed".to_string()
+        } else {
+            err.trim().to_string()
+        })
+    };
+    write(terminal(ok, error, truncated))
 }
 
 #[cfg(test)]

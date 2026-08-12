@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { useNavigate } from "react-router-dom";
-import { api } from "../api";
+import { api, errorText } from "../api";
 import { AccentButton, Page } from "../components/Page";
+import { Empty, ErrorBlock, Loading } from "../components/State";
 
 /*
  * /notebooks — the notebook index (spec §5 "notebook" is the document itself;
@@ -19,15 +20,19 @@ export function Notebooks() {
   const [error, setError] = useState("");
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+  const field = useRef<HTMLInputElement>(null);
 
   const load = useCallback(() => {
+    setError("");
     api
       .get<string[]>("/notebooks")
-      .then(setNames)
+      // `names` stays null on failure: an unreadable home is not an empty one,
+      // and "No notebooks yet" would be a lie while pebblesd is restarting.
       .catch((e) => {
-        setError(String(e.message ?? e));
-        setNames([]);
-      });
+        setError(errorText(e));
+        return null;
+      })
+      .then((list) => list && setNames(list));
   }, []);
 
   useEffect(load, [load]);
@@ -43,7 +48,7 @@ export function Notebooks() {
     api
       .post(`/notebooks`, { name: n })
       .then(() => nav(`/notebooks/${encodeURIComponent(n)}`))
-      .catch((e) => setError(String(e.message ?? e)))
+      .catch((e) => setError(errorText(e)))
       .finally(() => setBusy(false));
   };
 
@@ -52,7 +57,7 @@ export function Notebooks() {
     api
       .del(`/notebooks/${encodeURIComponent(n)}`)
       .then(load)
-      .catch((e) => setError(String(e.message ?? e)));
+      .catch((e) => setError(errorText(e)));
   };
 
   return (
@@ -72,6 +77,7 @@ export function Notebooks() {
         }}
       >
         <input
+          ref={field}
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => {
@@ -98,9 +104,8 @@ export function Notebooks() {
         </AccentButton>
       </div>
 
-      {error && (
-        <p style={{ color: "var(--err)", fontSize: 12.5, marginBottom: 12 }}>{error}</p>
-      )}
+      {error && <ErrorBlock error={error} />}
+      {!error && names === null && <Loading />}
 
       {names && names.length > 0 ? (
         <div
@@ -170,9 +175,30 @@ export function Notebooks() {
           </table>
         </div>
       ) : (
-        <p style={{ color: "var(--text-dim)", fontSize: 13 }}>
-          {names ? "No notebooks yet — name one above to start." : "Loading…"}
-        </p>
+        names !== null && (
+          <Empty
+            glyph="▧"
+            title="No notebooks yet"
+            body="Notebooks are JSON documents in your own home — SQL, Python and R cells that run on your engine session as you."
+            action={
+              <button
+                type="button"
+                onClick={() => field.current?.focus()}
+                style={{
+                  background: "var(--accent)",
+                  color: "var(--on-accent)",
+                  border: "none",
+                  borderRadius: 11,
+                  fontWeight: 600,
+                  fontSize: 13,
+                  padding: "9px 18px",
+                }}
+              >
+                Name your first notebook
+              </button>
+            }
+          />
+        )
       )}
     </Page>
   );

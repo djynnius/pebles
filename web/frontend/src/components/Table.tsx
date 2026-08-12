@@ -13,9 +13,11 @@ export function Table({ head, children }: { head: string[]; children: ReactNode 
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead>
           <tr>
-            {head.map((h) => (
+            {/* keyed by index: several tables use two blank spacer headings,
+                and duplicate "" keys warn in the console */}
+            {head.map((h, i) => (
               <th
-                key={h}
+                key={i}
                 style={{
                   textAlign: "left",
                   background: "var(--surface-alt)",

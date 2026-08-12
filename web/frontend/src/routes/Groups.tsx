@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { api } from "../api";
+import { api, errorText } from "../api";
 import { Page } from "../components/Page";
 import { Table, Td } from "../components/Table";
+import { Empty, ErrorBlock, Loading } from "../components/State";
 
 interface Group {
   name: string;
@@ -16,7 +17,7 @@ export function Groups() {
     api
       .get<Group[]>("/groups")
       .then(setGroups)
-      .catch((e) => setError(String(e.message ?? e)));
+      .catch((e) => setError(errorText(e)));
   }, []);
 
   return (
@@ -24,7 +25,8 @@ export function Groups() {
       <p style={{ color: "var(--text-dim)", marginTop: -8, marginBottom: 18 }}>
         All grants target groups — a "user only" grant uses their personal primary group.
       </p>
-      {error && <p style={{ color: "var(--err)" }}>{error}</p>}
+      {error && <ErrorBlock title="Couldn't load groups" error={error} />}
+      {!error && groups === null && <Loading />}
       {groups && groups.length > 0 ? (
         <Table head={["Group", "gid", "Members"]}>
           {groups.map((g) => (
@@ -36,7 +38,13 @@ export function Groups() {
           ))}
         </Table>
       ) : (
-        <p style={{ color: "var(--text-dim)" }}>{groups ? "No team groups yet." : "Loading…"}</p>
+        groups !== null && (
+          <Empty
+            glyph="◕"
+            title="No team groups yet"
+            body="Groups are UNIX groups on the main container. Create one there and it becomes grantable on every catalog — personal primary groups already exist for each user."
+          />
+        )
       )}
     </Page>
   );

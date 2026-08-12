@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
-import { api, type User } from "../api";
+import { useNavigate } from "react-router-dom";
+import { api, errorText, type User } from "../api";
 import { NkoyoAvatar } from "../components/Avatar";
 import { Card } from "../components/Page";
+import { ErrorBlock } from "../components/State";
 
 interface Usage {
   cpus: number;
@@ -15,15 +17,27 @@ const greeting = () => {
 };
 
 export function Home({ user }: { user: User }) {
+  const nav = useNavigate();
   const [usage, setUsage] = useState<Usage | null>(null);
   const [engines, setEngines] = useState<number | null>(null);
+  const [error, setError] = useState("");
+  const [ask, setAsk] = useState("");
+
   useEffect(() => {
-    api.get<Usage>("/usage").then(setUsage).catch(() => {});
+    // Both feed the KPI row. Swallowing a failure here left four em-dashes on
+    // screen with no reason given — say why the numbers are missing instead.
+    api
+      .get<Usage>("/usage")
+      .then(setUsage)
+      .catch((e) => setError(errorText(e)));
     api
       .get<{ name: string }[]>("/engines")
       .then((e) => setEngines(e.length))
-      .catch(() => {});
+      .catch((e) => setError((cur) => cur || errorText(e)));
   }, []);
+
+  /** Hand the draft to Nkoyo rather than sending it — the model call is hers. */
+  const askNkoyo = () => nav("/nkoyo", { state: { prompt: ask.trim() } });
 
   const memUsedGb = usage
     ? ((usage.mem_total_bytes - usage.mem_available_bytes) / 1024 ** 3).toFixed(1)
@@ -46,9 +60,17 @@ export function Home({ user }: { user: User }) {
         {greeting()}, {user.username}
       </h1>
 
+      {error && (
+        <ErrorBlock
+          title="Some of this page couldn't load"
+          error={error}
+          style={{ marginBottom: 22 }}
+        />
+      )}
+
       {/* KPI row */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 12, marginBottom: 22 }}>
-        <Kpi label="Engines running" value={engines != null ? String(engines) : "—"} qualifier="registered" />
+        <Kpi label="Engines" value={engines != null ? String(engines) : "—"} qualifier="registered" />
         <Kpi label="CPUs" value={usage ? String(usage.cpus) : "—"} qualifier="this host" />
         <Kpi label="Memory in use" value={`${memUsedGb} GB`} qualifier="this host" />
         {/* the deliberately-inverted licence tile */}
@@ -74,7 +96,13 @@ export function Home({ user }: { user: User }) {
       <Card style={{ display: "flex", alignItems: "center", gap: 12, padding: 14, marginBottom: 22 }}>
         <NkoyoAvatar size={28} />
         <input
+          value={ask}
+          onChange={(e) => setAsk(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") askNkoyo();
+          }}
           placeholder="Ask Nkoyo about your data…"
+          aria-label="Ask Nkoyo about your data"
           style={{
             flex: 1,
             border: "none",
@@ -85,6 +113,8 @@ export function Home({ user }: { user: User }) {
           }}
         />
         <button
+          type="button"
+          onClick={askNkoyo}
           style={{
             background: "var(--deep-soft)",
             color: "var(--deep-text)",

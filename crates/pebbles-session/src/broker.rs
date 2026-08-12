@@ -418,6 +418,50 @@ impl Broker {
         serde_json::from_str(&reply).map_err(|e| SessionError::Kernel(format!("bad reply: {e}")))
     }
 
+    /// Send one request line and stream response lines into `tx` until the
+    /// kernel's terminal line (`"done": true`) — the multi-line contract of
+    /// the `sql_stream` op (REQ-31 progressive results). The session's io lock
+    /// is held for the duration, exactly like a long single exec.
+    pub async fn exec_stream(
+        &self,
+        id: u64,
+        payload: Value,
+        tx: tokio::sync::mpsc::Sender<Value>,
+    ) -> Result<(), SessionError> {
+        let entry = self
+            .sessions
+            .lock()
+            .unwrap()
+            .get(&id)
+            .cloned()
+            .ok_or(SessionError::NotFound(id))?;
+        let mut io = entry.io.lock().await;
+        let line =
+            serde_json::to_string(&payload).map_err(|e| SessionError::Kernel(e.to_string()))?;
+        io.stdin
+            .write_all(format!("{line}\n").as_bytes())
+            .await
+            .map_err(|e| SessionError::Kernel(e.to_string()))?;
+        loop {
+            let reply = tokio::time::timeout(EXEC_TIMEOUT, io.stdout.next_line())
+                .await
+                .map_err(|_| SessionError::Kernel("kernel timed out".into()))?
+                .map_err(|e| SessionError::Kernel(e.to_string()))?
+                .ok_or_else(|| SessionError::Kernel("kernel closed the session".into()))?;
+            let value: Value = serde_json::from_str(&reply)
+                .map_err(|e| SessionError::Kernel(format!("bad reply: {e}")))?;
+            let done = value.get("done").and_then(Value::as_bool).unwrap_or(false);
+            // A receiver that hung up still needs the kernel drained to the
+            // terminal line, or the next exec would read stale stream lines.
+            let _ = tx.send(value).await;
+            if done {
+                break;
+            }
+        }
+        *entry.last_used.lock().unwrap() = Instant::now();
+        Ok(())
+    }
+
     pub async fn close(&self, id: u64) -> Result<(), SessionError> {
         let entry = self
             .sessions

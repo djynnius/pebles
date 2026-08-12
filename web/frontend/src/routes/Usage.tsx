@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { api } from "../api";
+import { api, errorText } from "../api";
 import { Page, Card } from "../components/Page";
+import { ErrorBlock, Loading } from "../components/State";
 
 interface Disk {
   mount: string;
@@ -27,7 +28,7 @@ export function Usage() {
     api
       .get<Usage>("/usage")
       .then(setU)
-      .catch((e) => setError(String(e.message ?? e)));
+      .catch((e) => setError(errorText(e)));
   }, []);
 
   return (
@@ -35,7 +36,7 @@ export function Usage() {
       <p style={{ color: "var(--text-dim)", marginBottom: 18, marginTop: -8 }}>
         What your own hardware is doing. No credits, no metering, no invoice.
       </p>
-      {error && <p style={{ color: "var(--err)" }}>{error}</p>}
+      {error && <ErrorBlock title="Couldn't read host usage" error={error} />}
       {u ? (
         <Card style={{ overflow: "hidden" }}>
           <Row label="Host" value={<code>{u.hostname}</code>} />
@@ -56,7 +57,7 @@ export function Usage() {
           ))}
         </Card>
       ) : (
-        !error && <p style={{ color: "var(--text-dim)" }}>Loading…</p>
+        !error && <Loading />
       )}
     </Page>
   );

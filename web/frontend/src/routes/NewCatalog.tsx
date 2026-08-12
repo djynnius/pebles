@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, type User } from "../api";
+import { api, errorText, type User } from "../api";
 import type { Catalog as CatalogRow, Group } from "../catalogs";
+import { ErrorBlock } from "../components/State";
 
 /*
  * /newcatalog — Create catalog (spec §5 "newcatalog").
@@ -18,7 +19,8 @@ export function NewCatalog({ user }: { user: User }) {
   const navigate = useNavigate();
   const [name, setName] = useState("");
   const [schemas, setSchemas] = useState<string[]>(["bronze", "silver", "gold"]);
-  const [groups, setGroups] = useState<Group[]>([]);
+  const [groups, setGroups] = useState<Group[] | null>(null);
+  const [groupsError, setGroupsError] = useState("");
   const [grants, setGrants] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -27,7 +29,10 @@ export function NewCatalog({ user }: { user: User }) {
     api
       .get<Group[]>("/groups")
       .then(setGroups)
-      .catch(() => setGroups([]));
+      // Swallowed, this told the user "No groups yet" when the group list was
+      // merely unreachable — and grants are the one thing you cannot redo later
+      // without coming back here.
+      .catch((e) => setGroupsError(errorText(e)));
   }, []);
 
   const valid = VALID.test(name);
@@ -51,13 +56,28 @@ export function NewCatalog({ user }: { user: User }) {
     api
       .post<CatalogRow>("/catalogs", { name })
       .then(async () => {
+        // The catalog exists from here on. A grant that fails must not read as
+        // "creation failed" — pressing Create again would only collide.
+        const failed: string[] = [];
         for (const g of grants) {
-          await api.post(`/catalogs/${encodeURIComponent(name)}/grants`, { group: g });
+          try {
+            await api.post(`/catalogs/${encodeURIComponent(name)}/grants`, { group: g });
+          } catch {
+            failed.push(g);
+          }
+        }
+        if (failed.length > 0) {
+          setError(
+            `Catalog “${name}” was created, but these grants did not apply: ${failed.join(", ")}. ` +
+              "Add them from the catalog's Permissions tab.",
+          );
+          setBusy(false);
+          return;
         }
         navigate("/catalog");
       })
       .catch((e) => {
-        setError(String(e.message ?? e));
+        setError(errorText(e));
         setBusy(false);
       });
   };
@@ -150,7 +170,14 @@ export function NewCatalog({ user }: { user: User }) {
           </Field>
 
           <Field label="Access grants">
-            {groups.length === 0 ? (
+            {groupsError ? (
+              <div style={{ fontSize: 12, color: "var(--err)" }}>
+                Couldn't load groups — {groupsError} You can still create the catalog and grant
+                access later from its Permissions tab.
+              </div>
+            ) : groups === null ? (
+              <div style={{ fontSize: 12, color: "var(--text-dim)" }}>Loading groups…</div>
+            ) : groups.length === 0 ? (
               <div style={{ fontSize: 12, color: "var(--text-dim)" }}>
                 No groups yet. Grants target UNIX groups — create one under Groups first.
               </div>
@@ -171,7 +198,7 @@ export function NewCatalog({ user }: { user: User }) {
             )}
           </Field>
 
-          {error && <div style={{ color: "var(--err)", fontSize: 12.5 }}>{error}</div>}
+          {error && <ErrorBlock error={error} style={{ marginBottom: 0 }} />}
 
           <div style={{ display: "flex", gap: 10 }}>
             <button

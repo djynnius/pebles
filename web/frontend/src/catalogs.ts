@@ -4,7 +4,7 @@
 // permission-filtered — there is no client-side visibility logic.
 
 import { useEffect, useState } from "react";
-import { api, type Row } from "./api";
+import { api, errorText, type Row } from "./api";
 
 export interface Catalog {
   name: string;
@@ -59,7 +59,12 @@ export interface Engine {
 export const qualify = (catalog: string, schema: string, table: string) =>
   `"${catalog}"."${schema}"."${table}"`;
 
-/** Loads /api/catalogs once. `null` while in flight. */
+/**
+ * Loads /api/catalogs once. `catalogs` is `null` while in flight *and* after a
+ * failure — a failed read is not an empty lake, and callers that treated the
+ * two the same were telling users to create their first catalog while pebblesd
+ * was merely restarting (REQ-49). Check `error` before showing an empty state.
+ */
 export function useCatalogs(): { catalogs: Catalog[] | null; error: string } {
   const [catalogs, setCatalogs] = useState<Catalog[] | null>(null);
   const [error, setError] = useState("");
@@ -67,10 +72,7 @@ export function useCatalogs(): { catalogs: Catalog[] | null; error: string } {
     api
       .get<Catalog[]>("/catalogs")
       .then(setCatalogs)
-      .catch((e) => {
-        setError(String(e.message ?? e));
-        setCatalogs([]);
-      });
+      .catch((e) => setError(errorText(e)));
   }, []);
   return { catalogs, error };
 }

@@ -1,12 +1,20 @@
 import { useState } from "react";
-import { api, ApiError, type User } from "../api";
+import { api, errorText, type User } from "../api";
 import { Wordmark } from "../components/Wordmark";
 
-export function Login({ onAuthed }: { onAuthed: (u: User) => void }) {
+export function Login({
+  onAuthed,
+  expired,
+}: {
+  onAuthed: (u: User) => void;
+  /** Set when a mid-session 401 dropped us here rather than a sign-out. */
+  expired?: boolean;
+}) {
   const [step, setStep] = useState<1 | 2>(1);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -15,11 +23,15 @@ export function Login({ onAuthed }: { onAuthed: (u: User) => void }) {
       if (username.trim()) setStep(2);
       return;
     }
+    if (busy) return;
+    setBusy(true);
     try {
       const u = await api.post<User>("/login", { username, password });
       onAuthed(u);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Sign-in failed");
+      setError(errorText(err));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -59,10 +71,31 @@ export function Login({ onAuthed }: { onAuthed: (u: User) => void }) {
             Use your Pebbles username and password.
           </p>
 
+          {expired && (
+            <div
+              role="status"
+              style={{
+                marginBottom: 18,
+                padding: "9px 12px",
+                borderRadius: 10,
+                background: "var(--warn-tint)",
+                color: "var(--warn)",
+                fontSize: 12.5,
+              }}
+            >
+              You were signed out — your session expired. Sign in to pick up where you left off.
+            </div>
+          )}
+
           {step === 1 ? (
             <>
-              <label style={label}>Username</label>
+              <label htmlFor="pb-username" style={label}>
+                Username
+              </label>
               <input
+                id="pb-username"
+                name="username"
+                autoComplete="username"
                 className="mono"
                 autoFocus
                 value={username}
@@ -94,28 +127,53 @@ export function Login({ onAuthed }: { onAuthed: (u: User) => void }) {
                 <span className="mono" style={{ fontSize: 13 }}>
                   {username}
                 </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStep(1);
+                    setPassword("");
+                    setError("");
+                  }}
+                  style={{
+                    marginLeft: "auto",
+                    border: "none",
+                    background: "transparent",
+                    color: "var(--accent-ink)",
+                    fontSize: 12,
+                    padding: 0,
+                  }}
+                >
+                  Not you?
+                </button>
               </div>
-              <label style={label}>Password</label>
+              <label htmlFor="pb-password" style={label}>
+                Password
+              </label>
               <input
+                id="pb-password"
+                name="password"
+                autoComplete="current-password"
                 type="password"
                 autoFocus
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 style={input}
               />
-              <button type="submit" style={cta}>
-                Sign in
+              <button type="submit" disabled={busy} style={busy ? { ...cta, ...ctaBusy } : cta}>
+                {busy ? "Signing in…" : "Sign in"}
               </button>
             </>
           )}
 
           {error && (
             <div
+              role="alert"
               style={{
                 marginTop: 14,
                 padding: "9px 12px",
                 borderRadius: 10,
                 background: "var(--accent-tint)",
+                border: "1px solid var(--err)",
                 color: "var(--err)",
                 fontSize: 13,
               }}
@@ -158,4 +216,9 @@ const cta: React.CSSProperties = {
   color: "var(--on-accent)",
   fontWeight: 600,
   fontSize: 14,
+};
+const ctaBusy: React.CSSProperties = {
+  background: "var(--track)",
+  color: "var(--text-dim)",
+  cursor: "not-allowed",
 };

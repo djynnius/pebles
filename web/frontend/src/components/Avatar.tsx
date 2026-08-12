@@ -22,7 +22,7 @@ export function NkoyoAvatar({ size = 32 }: { size?: number }) {
           borderRadius: "50%",
           overflow: "hidden",
           border: "2px solid var(--surface)",
-          background: "#f4ecdf",
+          background: "var(--avatar-bg)",
           display: "grid",
           placeItems: "center",
         }}
@@ -30,7 +30,7 @@ export function NkoyoAvatar({ size = 32 }: { size?: number }) {
         <svg viewBox="0 0 64 64" width="100%" height="100%" aria-hidden>
           {/* profile silhouette facing left, afro */}
           <path
-            fill="#33342c"
+            fill="var(--avatar-ink)"
             d="M44 58c0-9-5-13-12-15 6-1 11-6 11-14 0-4-2-7-2-9 2-1 3-3 3-6 0-6-6-11-15-11-11 0-19 7-19 18 0 6 2 10 5 13-2 2-3 5-3 9v15h31z"
           />
         </svg>
