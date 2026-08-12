@@ -115,6 +115,9 @@ jobs:
           - runtime: podman
             ctr: sudo podman
             image: localhost/pebbles:it
+          - runtime: incus # duo on the incus bridge: engine join under the idmap profile
+            ctr: sudo incus
+            image: pebbles-it
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -126,6 +129,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - run: docker pull "${{ needs.build.outputs.ref }}"
       - name: Prepare image for ${{ matrix.runtime }}
+        if: matrix.runtime != 'incus'
         run: |
           if [ "${{ matrix.runtime }}" = podman ]; then
             docker save "${{ needs.build.outputs.ref }}" | sudo podman load
@@ -133,5 +137,21 @@ jobs:
           else
             docker tag "${{ needs.build.outputs.ref }}" pebbles:it
           fi
+      - name: Prepare incus (convert + import the pulled image)
+        if: matrix.runtime == 'incus'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends incus skopeo umoci xz-utils dnsmasq-base
+          echo "root:70000:5000" | sudo tee -a /etc/subuid /etc/subgid
+          sudo systemctl restart incus
+          sudo incus admin init --minimal
+          sudo image/lxc/oci-to-incus.sh "${{ needs.build.outputs.ref }}" dist/incus x86_64 it
+          sudo incus image import dist/incus/metadata.tar.xz dist/incus/rootfs.tar.xz \
+            --alias pebbles-it
+          sudo incus profile create pebbles
+          printf 'config:\n  raw.idmap: |-\n    both 70000-74999 70000-74999\n' \
+            | sudo incus profile edit pebbles
       - name: main+engine topology (${{ matrix.runtime }})
-        run: CTR_CMD="${{ matrix.ctr }}" scripts/smoke/main-plus-engine.sh "${{ matrix.image }}"
+        run: |
+          RUNTIME=${{ matrix.runtime }} CTR_CMD="${{ matrix.ctr }}" \
+            scripts/smoke/main-plus-engine.sh "${{ matrix.image }}"
