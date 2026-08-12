@@ -7,6 +7,13 @@ All notable changes to Pebbles are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **React document screens (SPA at `/app`)**: **Notebooks** — index plus a
+  workbench editor with SQL/Python/R cells, per-cell and run-all execution
+  through the user's engine session, a table-of-contents panel, and the
+  catalog tree at hand; **Dashboards** — index cards with sparklines plus the
+  widget grid: stat/table/bars tiles, drag-reorder, per-tile SQL drawer,
+  resize, full-screen, and print-to-PDF. Widget layout persists client-side;
+  the document keeps only title/SQL/kind.
 - **React data-core screens (SPA at `/app`)**: **Catalog** — the flagship view:
   engine-aware tree (catalog › schema › table), stat tiles (rows, snapshot,
   owner), Schema/Sample/Snapshots/Lineage/Permissions tabs, and one-click
