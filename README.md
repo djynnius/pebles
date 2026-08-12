@@ -1,4 +1,4 @@
-# pe{b}les
+# p{b|es
 
 **Pebbles** is a self-hosted data platform — a data lake with time travel, multi-user
 notebooks, drag-and-drop pipelines, dashboards, git integration, and a local AI

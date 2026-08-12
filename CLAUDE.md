@@ -52,7 +52,7 @@ Each document is the source of truth for a different concern. When they conflict
 ## Fixed conventions
 
 - **Vocabulary**: the UI says **Lake** and **Engine** — never "cluster", never "credits"; "DuckDB" appears only in detail views. The LXC backend is called **Incus** in code/docs/deploy. Naming is `catalog / schema / table`.
-- **Design system**: Monokai dual theme via CSS custom properties on `[data-pb-theme]`, accent pink `#F92672`, IBM Plex Sans/Mono, wordmark `pe{b}les` in Cascadia Code. No hard-coded colors in components.
+- **Design system**: Monokai dual theme via CSS custom properties on `[data-pb-theme]`, accent pink `#F92672`, IBM Plex Sans/Mono, wordmark `p{b|es` in Cascadia Code (`p` green #A6E22E, `{`/`|` foreground, `b` orange #FD971F, `es` accent pink). No hard-coded colors in components (the wordmark's brand colors are the one sanctioned exception).
 - **Responsive rules**: hard gate below 700px viewport (not a mobile product); at <1280px workbench rail panels overlay with a scrim, at ≥1280px they push and dock.
 
 ## Hard-won implementation landmines (spec §9 — do not reintroduce)

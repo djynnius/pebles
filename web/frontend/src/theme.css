@@ -128,6 +128,15 @@
   --tile-5: #ff77ac;
 }
 
+/* Brand — the wordmark's per-character colours. These are fixed Monokai brand
+   values, identical in both themes: the mark always reads as itself, and it
+   renders on the dark rail/panels even under Daylight (where --ok/--warn are
+   darkened for contrast on paper and would be the wrong pink-green-orange). */
+:root {
+  --brand-p: #a6e22e;
+  --brand-b: #fd971f;
+}
+
 * {
   margin: 0;
   padding: 0;

@@ -7,6 +7,10 @@ All notable changes to Pebbles are documented here. The format follows
 ## [Unreleased]
 
 ### Changed
+- **New brand: the wordmark is now `p{b|es`** (green `p`, orange `b`, pink
+  `es`, foreground brace and pipe) with a matching `{b|` favicon on the dark
+  rounded square — ported from the updated prototype into the SPA, the docs,
+  and the README.
 - **The React workbench is now the UI.** Root `/` (and every non-API path)
   serves the SPA; `/app/*` links 301 to their new home. The server-rendered
   Jinja UI is deleted — all 23 templates and their routes — leaving the web

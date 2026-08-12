@@ -2,7 +2,7 @@
 
 Extracted verbatim from `ui_ux.html`, an 811 KB self-extracting HTML bundle. The app is a **React + inline-SVG** single-page design prototype (no external d3 at runtime — charts are hand-built SVG/geometry). The bundle stores the app as a JSON-encoded template string; the runtime is a small proprietary templating layer (`DCLogic` / `x-dc` / `sc-camel-*` / `sc-if` / `sc-for` directives) that compiles to React. All visuals are inline-styled with CSS custom properties resolved from two theme blocks.
 
-Product identity: **"Your lake, your engines, your hardware."** A self-hosted data platform (catalog / notebooks / SQL / jobs / engines) with a local AI assistant named **Nkoyo**. Wordmark: `pe{b}les` with the braces in accent pink. Version string throughout: `v0.4.1 · self-hosted`.
+Product identity: **"Your lake, your engines, your hardware."** A self-hosted data platform (catalog / notebooks / SQL / jobs / engines) with a local AI assistant named **Nkoyo**. Wordmark: `p{b|es` — `p` green `#A6E22E`, `{` and `|` foreground, `b` orange `#FD971F`, `es` accent pink `#F92672`. Version string throughout: `v0.4.1 · self-hosted`.
 
 > Fidelity note: colours and dimensions below are exact (copied from source). The two referenced external scripts (`text/javascript`, `application/javascript`, ~38 KB total) are the React runtime + template compiler — framework, not app content. The entire UI lives in the decoded template.
 
@@ -130,7 +130,7 @@ Root authed shell: `display:flex; min-height:100vh; width:100%; font-family:'IBM
 
 ### Sidebar (left rail) — dark, sticky
 - `width` bound to `sbWidth`: **236px expanded / 62px collapsed**. `transition:width .18s ease`. `background:var(--deep); color:var(--deep-muted); position:sticky; top:0; height:100vh;` `flex-direction:column`.
-- **Header:** wordmark `pe{b}les` (18px, Cascadia stack) + collapse chevron `«` (24×24, radius 6). Collapsed state shows a `»` expand button centered (26×26).
+- **Header:** wordmark `p{b|es` (18px, Cascadia stack, per-character brand colors) + collapse chevron `«` (24×24, radius 6). Collapsed state shows a `»` expand button centered (26×26).
 - **New button:** accent pill `+` `New`, radius 11, `background:var(--accent); color:var(--on-accent); font-weight:600; font-size:13px`. Hover `--accent-hover`.
 - **Nav list:** groups with uppercase eyebrows (`Workspace`, `Analysis`, `Data engineering`, `Infrastructure`, `Admin`) hidden when collapsed. Each nav row: `padding:8px 10px 8px 8px; radius:10px; font-size:13.5px`.
   - **Active-dot marker:** a reserved 5×5 dot slot at the row start (`width:5px; height:5px; border-radius:50%; flex-shrink:0`). Its color is `--accent` when active, else `transparent` (slot always reserved so text never shifts). Active row also gets `background:var(--nav-active-bg)` and `color:var(--deep-text)`; inactive `color:var(--deep-muted)`, hover `background:var(--nav-hover-bg)`. Dot/label/group are hidden entirely when collapsed (`navJustify` becomes `center`).
@@ -250,7 +250,7 @@ Plus auth/gate pseudo-routes: **login** (2-step), **mobile gate** (narrow).
 - **Nav/UI glyphs are Unicode characters**, not an icon font or (mostly) SVG — e.g. Home `⌂`, Files `▤`, Catalog `◨`, Notebooks `▧`, SQL `›_`, Dashboards `▦`, Jobs `⇄`, Ingestion `⇥`, Engines `◍`, Hosts `▥`, Users `◔`, Groups `◕`, Usage `◑`, Settings `⚙`; table `▤`, folder `▸`/`📁`, search `⌕`, close `✕`, refresh `⟳`, collapse `«`/`»`, drag handle `⠿`, send `→`. Nkoyo's sidebar mark is a Cascadia `N` in `--accent`.
 - **The workbench icon rail uses inline SVG** (16×16 viewBox, `stroke=currentColor; stroke-width:1.5; stroke-linecap/linejoin:round`): folder (Files), 3-line/4-shape (ToC headings vs widgets), speech-chart (Dashboards), database cylinder (Catalog).
 - **Charts are inline SVG**: dashboard map `<svg viewBox="0 0 900 520">` of `<path>` tiles; line chart `<svg viewBox="0 0 600 380">` area+polyline+`<circle>` dots; bar charts are flex `<div>` columns with `%` heights.
-- **Wordmark `pe{b}les`**: text with the two `{ }` braces in `var(--accent)`. **Favicon** is an inline SVG data-URI: rounded-rect `#272822` bg, glyph `{b}` where `{`/`}` are `#F92672` and `b` is `#F8F8F2`, font Cascadia/JetBrains Mono 34px/700. The bundler thumbnail/splash shows the same wordmark on `#1E1F1C`.
+- **Wordmark `p{b|es`**: per-character colors — `p` `#A6E22E`, `{` and `|` foreground (`#F8F8F2` on dark), `b` `#FD971F`, `es` `#F92672`; Cascadia stack, 700, tight negative letter-spacing (≈ -0.04em). **Favicon** is an inline SVG data-URI: rounded-rect `#272822` bg (rx 14), glyph `{b|` where `{`/`|` are `#F8F8F2` and `b` is `#FD971F`, font Cascadia/JetBrains Mono 34px/700. The bundler thumbnail/splash shows the full `p{b|es` wordmark on `#1E1F1C`.
 
 ---
 
