@@ -6,6 +6,21 @@ All notable changes to Pebbles are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **M2.3b — Auto ETL (REQ-46)**: drop a raw dataset → profile → propose →
+  approve → load, exactly as the PRD words it. Profiling is DuckDB
+  `SUMMARIZE` through the user's own session (read-only — nothing mutates
+  before Approve); proposals are transparent rules, not a model, so Auto ETL
+  behaves identically air-gapped: snake_case renames, TRY_CAST for
+  ISO-date-shaped text, drop-column for mostly-null, optional null-row
+  filters and dedupe — each step carrying a confidence, with low-confidence
+  steps arriving **unticked**. Star schema falls out of cardinality
+  (dimensions + measures + a staging→dims→fact task graph); datasets without
+  dimension candidates load as a single cleaned table. Approve saves the plan
+  as a workflow owned by the approver (runs via Jobs like any other), can
+  trigger it immediately, and can commit the generated SQL to a repo. New
+  screen at `/autoetl` — the last prototype route is live.
+
 ### Changed
 - **New brand: the wordmark is now `p{b|es`** (green `p`, orange `b`, pink
   `es`, foreground brace and pipe) with a matching `{b|` favicon on the dark

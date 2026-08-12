@@ -26,7 +26,7 @@ import { Ingest } from "./routes/Ingest";
 import { Nkoyo } from "./routes/Nkoyo";
 import { Settings } from "./routes/Settings";
 import { EngineConfig } from "./routes/EngineConfig";
-import { Placeholder } from "./routes/Placeholder";
+import { AutoEtl } from "./routes/AutoEtl";
 
 type Auth = "loading" | "anon" | User;
 
@@ -67,7 +67,7 @@ export function App() {
         <Route path="/jobbuilder" element={<JobBuilder />} />
         <Route path="/jobs/:name/runs/:runId" element={<JobRun />} />
         <Route path="/ingest" element={<Ingest />} />
-        <Route path="/autoetl" element={<Placeholder title="Auto ETL" eyebrow="Data engineering" />} />
+        <Route path="/autoetl" element={<AutoEtl />} />
         <Route path="/engines" element={<Engines />} />
         <Route path="/engineconfig" element={<EngineConfig />} />
         <Route path="/hosts" element={<Hosts />} />

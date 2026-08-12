@@ -25,6 +25,53 @@ class FakeDaemon:
         op = payload["op"]
         if op == "sql":
             sql = payload["sql"]
+            if sql.startswith("SUMMARIZE"):
+                return {
+                    "id": None,
+                    "ok": True,
+                    "rows": [
+                        {
+                            "column_name": "Claim ID",
+                            "column_type": "BIGINT",
+                            "min": "1",
+                            "max": "999",
+                            "approx_unique": 1000,
+                            "null_percentage": 0.0,
+                        },
+                        {
+                            "column_name": "state",
+                            "column_type": "VARCHAR",
+                            "min": "AK",
+                            "max": "WY",
+                            "approx_unique": 51,
+                            "null_percentage": 0.0,
+                        },
+                        {
+                            "column_name": "filed_date",
+                            "column_type": "VARCHAR",
+                            "min": "2024-01-01",
+                            "max": "2025-12-31",
+                            "approx_unique": 700,
+                            "null_percentage": 2.5,
+                        },
+                        {
+                            "column_name": "amount",
+                            "column_type": "DOUBLE",
+                            "min": "1.5",
+                            "max": "9000.0",
+                            "approx_unique": 950,
+                            "null_percentage": 0.0,
+                        },
+                        {
+                            "column_name": "legacy_code",
+                            "column_type": "VARCHAR",
+                            "min": "A",
+                            "max": "Z",
+                            "approx_unique": 3,
+                            "null_percentage": 88.0,
+                        },
+                    ],
+                }
             if "information_schema.schemata" in sql:
                 return {
                     "id": None,
@@ -599,6 +646,121 @@ def test_api_cluster_and_admin_endpoints():
     assert c.post(
         "/api/engines/cancel-reservation", json={"engine": "worker-1"}
     ).status_code == 200
+
+
+def test_autoetl_propose_rules():
+    from pebbles_web.autoetl import build_tasks, propose
+
+    columns = [
+        {"column_name": "Claim ID", "column_type": "BIGINT", "approx_unique": 1000,
+         "null_percentage": 0.0, "min": "1", "max": "999"},
+        {"column_name": "state", "column_type": "VARCHAR", "approx_unique": 51,
+         "null_percentage": 0.0, "min": "AK", "max": "WY"},
+        {"column_name": "filed_date", "column_type": "VARCHAR", "approx_unique": 700,
+         "null_percentage": 2.5, "min": "2024-01-01", "max": "2025-12-31"},
+        {"column_name": "amount", "column_type": "DOUBLE", "approx_unique": 950,
+         "null_percentage": 0.0, "min": "1.5", "max": "9000.0"},
+        {"column_name": "legacy_code", "column_type": "VARCHAR", "approx_unique": 3,
+         "null_percentage": 88.0, "min": "A", "max": "Z"},
+    ]
+    p = propose(columns, 10_000, {"kind": "file", "path": "claims 2025.csv"})
+    steps = {s["id"]: s for s in p["cleaning"]}
+
+    # rename "Claim ID" → claim_id, high confidence, ticked
+    assert steps["rename_claim_id"]["ticked"] and steps["rename_claim_id"]["to"] == "claim_id"
+    # ISO date strings cast confidently
+    assert steps["cast_filed_date"]["to_type"] == "DATE" and steps["cast_filed_date"]["ticked"]
+    # mostly-null column proposed for dropping, but UNTICKED (low confidence)
+    assert steps["drop_col_legacy_code"]["confidence"] < 0.8
+    assert not steps["drop_col_legacy_code"]["ticked"]
+    # small null fraction → optional row filter, unticked
+    assert not steps["drop_nulls_filed_date"]["ticked"]
+    # dedupe always offered, never pre-ticked
+    assert not steps["dedupe"]["ticked"]
+
+    model = p["model"]
+    assert p["name"] == "claims_2025"
+    assert model["kind"] == "star"
+    assert {"column": "state", "table": "dim_state"} in model["dims"]
+    assert "amount" in model["measures"] and "claim_id" in model["measures"]
+
+    # approve only the ticked steps → deterministic SQL plan
+    approved = [s for s in p["cleaning"] if s["ticked"]]
+    tasks = build_tasks("claims_2025", {"kind": "file", "path": "claims 2025.csv"},
+                        approved, model, "claims")
+    ids = [t["id"] for t in tasks]
+    assert ids[0] == "stage" and "dim_state" in ids and ids[-1] == "fact"
+    stage_sql = tasks[0]["payload"]
+    assert "read_csv_auto('claims 2025.csv')" in stage_sql
+    assert 'TRY_CAST("filed_date" AS DATE)' in stage_sql
+    assert '"Claim ID" AS "claim_id"' in stage_sql
+    assert "DISTINCT" not in stage_sql  # dedupe wasn't approved
+    fact = next(t for t in tasks if t["id"] == "fact")
+    assert fact["depends_on"] == ["dim_state"]
+    assert 'LEFT JOIN "dim_state"' in fact["payload"]
+    assert all(t["catalog"] == "claims" for t in tasks)
+
+
+def test_autoetl_rejects_unsafe_sources():
+    from pebbles_web.autoetl import source_expr
+
+    # leading ".." collapses against the home (same containment policy as the
+    # files API) — the path never escapes, it just resolves inside the home
+    assert source_expr({"kind": "file", "path": "../etc/passwd.csv"}) == (
+        "read_csv_auto('etc/passwd.csv')"
+    )
+    assert source_expr({"kind": "file", "path": "x'); DROP TABLE t; --.csv"}) is None
+    assert source_expr({"kind": "file", "path": "notes.exe"}) is None
+    assert source_expr({"kind": "table", "name": "claims; DROP"}) is None
+    assert source_expr({"kind": "table", "name": "claims_t"}) == "claims_t"
+    assert source_expr({"kind": "file", "path": "data/claims.parquet"}) == (
+        "read_parquet('data/claims.parquet')"
+    )
+
+
+def test_api_autoetl_profile_and_approve():
+    c = api_signed_in()
+    prof = c.post(
+        "/api/autoetl/profile",
+        json={"source": {"kind": "file", "path": "claims.csv"}, "catalog": "claims"},
+    )
+    assert prof.status_code == 200
+    body = prof.get_json()
+    assert body["row_count"] == 1234  # count(*) AS n via the fake
+    assert any(col["column_name"] == "state" for col in body["columns"])
+    proposal = body["proposal"]
+    assert proposal["model"]["kind"] == "star"
+
+    bad = c.post(
+        "/api/autoetl/profile",
+        json={"source": {"kind": "file", "path": "x'); attack--.csv"}},
+    )
+    assert bad.status_code == 422
+
+    approved = [s for s in proposal["cleaning"] if s["ticked"]]
+    ok = c.post(
+        "/api/autoetl/approve",
+        json={
+            "name": proposal["name"],
+            "catalog": "claims",
+            "source": {"kind": "file", "path": "claims.csv"},
+            "steps": approved,
+            "model": proposal["model"],
+            "run": True,
+        },
+    )
+    assert ok.status_code == 200
+    out = ok.get_json()
+    assert out["workflow"]["username"] == "maya"  # loads run as the approver
+    assert out["run"] == {"triggered": proposal["name"]}
+    task_ids = [t["id"] for t in out["workflow"]["tasks"]]
+    assert task_ids[0] == "stage" and task_ids[-1] == "fact"
+
+    # nothing loads on a bad plan
+    assert c.post(
+        "/api/autoetl/approve",
+        json={"name": "x!", "catalog": "claims", "source": {}, "steps": [], "model": {}},
+    ).status_code == 422
 
 
 def test_api_settings_git_identity_and_keys():

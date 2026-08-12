@@ -16,6 +16,7 @@ import re
 
 from flask import Response, jsonify, request, session
 
+from pebbles_web import autoetl
 from pebbles_web.pebblesd_client import PebblesdClient, PebblesdError
 
 #: home-relative document names (notebooks, dashboards, repos)
@@ -751,6 +752,81 @@ def register_api(app, client: PebblesdClient) -> None:
     @authed
     def api_nkoyo_rescan(user):  # pyright: ignore[reportUnusedFunction]
         return jsonify(client.nkoyo_rescan())
+
+    # ---- Auto ETL (REQ-46) --------------------------------------------------
+
+    @app.post("/api/autoetl/profile")
+    @authed
+    def api_autoetl_profile(user):  # pyright: ignore[reportUnusedFunction]
+        """Profile a raw source (read-only) and propose a plan. Nothing loads."""
+        body = request.get_json(silent=True) or {}
+        source = body.get("source") or {}
+        catalog = body.get("catalog") or None
+        frm = autoetl.source_expr(source)
+        if frm is None:
+            return jsonify({"error": "unsupported or unsafe source"}), 422
+        username = user["username"]
+        prof = _run_sql(username, f"SUMMARIZE SELECT * FROM {frm}", catalog)
+        if not prof.get("ok"):
+            return jsonify({"error": prof.get("error", "profiling failed")}), 502
+        columns = prof.get("rows") or []
+        counted = _run_sql(username, f"SELECT count(*) AS n FROM {frm}", catalog)
+        row_count = (counted.get("rows") or [{}])[0].get("n") if counted.get("ok") else None
+        proposal = autoetl.propose(columns, int(row_count or 0), source)
+        return jsonify(
+            {
+                "source": source,
+                "row_count": row_count,
+                "columns": columns,
+                "proposal": proposal,
+            }
+        )
+
+    @app.post("/api/autoetl/approve")
+    @authed
+    def api_autoetl_approve(user):  # pyright: ignore[reportUnusedFunction]
+        """The user approved: compose the workflow, save it, optionally run
+        and/or commit the plan to a repo. This is the ONLY path that loads."""
+        body = request.get_json(silent=True) or {}
+        name = (body.get("name") or "").strip()
+        catalog = (body.get("catalog") or "").strip()
+        if not DOC_NAME.match(name) or not IDENT.match(catalog):
+            return jsonify({"error": "invalid name or catalog"}), 422
+        steps = [s for s in body.get("steps", []) if isinstance(s, dict)]
+        tasks = autoetl.build_tasks(
+            name, body.get("source") or {}, steps, body.get("model") or {}, catalog
+        )
+        if tasks is None:
+            return jsonify({"error": "invalid source, model, or identifiers"}), 422
+        workflow = {
+            "name": name,
+            "username": user["username"],  # loads run as the approver (REQ-41/45)
+            "schedule": body.get("schedule") or None,
+            "tasks": tasks,
+        }
+        saved = client.save_workflow(workflow)
+        result: dict = {"workflow": saved}
+        if body.get("run"):
+            result["run"] = client.trigger_workflow(name)
+        repo = (body.get("repo") or "").strip()
+        if repo and DOC_NAME.match(repo):
+            sql_text = "\n\n".join(
+                f"-- task: {t['id']}\n{t['payload']}" for t in tasks
+            )
+            path = f"repos/{repo}/autoetl/{name}.sql"
+            _session_op(user["username"], {"op": "mkdir", "path": f"repos/{repo}/autoetl"})
+            wrote = _session_op(
+                user["username"], {"op": "write", "path": path, "content": sql_text}
+            )
+            if wrote.get("ok"):
+                _git(user["username"], ["add", "--", f"autoetl/{name}.sql"], cwd=f"repos/{repo}")
+                committed = _git(
+                    user["username"],
+                    ["commit", "-m", f"Auto ETL: {name}"],
+                    cwd=f"repos/{repo}",
+                )
+                result["committed"] = bool(committed.get("ok"))
+        return jsonify(result)
 
     # ---- settings (git identity & keys) -----------------------------------------
 
