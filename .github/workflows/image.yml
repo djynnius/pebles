@@ -101,6 +101,9 @@ jobs:
         run: |
           docker buildx imagetools create -t "$IMAGE:edge" \
             "$IMAGE:edge-amd64" "$IMAGE:edge-arm64"
+          # Immutable per-commit tag: release.yml PROMOTES this exact manifest
+          # to the version tag — never rebuilds (implementation plan §7).
+          docker buildx imagetools create -t "$IMAGE:sha-${GITHUB_SHA::7}" "$IMAGE:edge"
       - name: Size budget gate (uncompressed, amd64)
         run: |
           docker pull "$IMAGE:edge-amd64"

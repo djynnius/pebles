@@ -191,21 +191,25 @@ Priorities: **P0** = MVP, cannot ship without · **P1** = v1.0 release · **P2**
 
 ## 6. Release phasing
 
-**Phase 0 — Foundation (internal).**
+**Phase 0 — Foundation (internal). ✅ Complete.**
 Unified image; role at setup; `pebblesd` + Flask skeleton with the privilege boundary;
 UNIX identity provisioning; single-container install serving one shared engine; SQL
 editor against a DuckLake catalog.
-*Exit: Ade installs one container and Maya runs a query, each as themselves.*
+*Exit: Ade installs one container and Maya runs a query, each as themselves — encoded
+as `scripts/smoke/install-to-first-query.sh`, green on Docker, rootful Podman, and Incus.*
 
-**Phase 1 — MVP (all P0).**
+**Phase 1 — MVP (all P0). ✅ Complete.**
 Engine registration with single-use tokens; access assignment; shared + dedicated
 sessions with draining; notebooks (Python/SQL); dashboards; jobs on hidden Airflow; git
 clone/commit/push with Source-control panel; full admin screens; empty/error states.
 *Exit: the four personas complete their §4 needs without touching a terminal (except Ade's install).*
 
-**Phase 2 — v1.0 (P1).**
+**Phase 2 — v1.0 (P1). ✅ Complete — awaiting the v1.0.0 tag.**
 Nkoyo + Auto ETL; R kernel; repo-ref workflow tasks; pending-approval registration;
-SFTP/Files parity; health-restart loops; backups; upgrade path; NFR-04/05/08.
+SFTP/Files parity; health-restart loops; backups; upgrade path; NFR-04/05/08 — plus
+NFR-02's cluster TLS, Postgres-over-TCP for remote catalogs, and true progressive
+result streaming (REQ-31). The UI is the React workbench (all 21 prototype routes);
+the CI matrix proves every runtime × topology cell including Incus main+engine.
 
 **Phase 3 — fast-follow (P2 / deferred).**
 Automatic engine placement; dedicated-contention notifications beyond the basic wait

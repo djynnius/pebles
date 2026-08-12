@@ -1,0 +1,166 @@
+# Release engineering (M2.5, implementation plan §7): a version tag PROMOTES the
+# already-tested digest — the bytes that went through the 7-cell Integration
+# matrix are the bytes that ship. Nothing is rebuilt here. The release carries
+# the Incus artifacts (both arches) and a third-party notices manifest as assets,
+# with notes cut from the CHANGELOG.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  promote:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        run: echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+      - name: Promote the tested digest (never rebuild)
+        run: |
+          SRC="$IMAGE:sha-${GITHUB_SHA::7}"
+          if ! docker buildx imagetools inspect "$SRC" >/dev/null 2>&1; then
+            echo "::error::$SRC not found — the tagged commit must have a green Image run" \
+                 " (its merge job pushes the sha tag). Tag a commit that main's CI built."
+            exit 1
+          fi
+          docker buildx imagetools create \
+            -t "$IMAGE:${GITHUB_REF_NAME}" \
+            -t "$IMAGE:latest" \
+            "$SRC"
+          echo "promoted $SRC -> $IMAGE:${GITHUB_REF_NAME} (+ latest)"
+
+  incus-artifacts:
+    needs: promote
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            duck_arch: x86_64
+            runner: ubuntu-24.04
+          - arch: arm64
+            duck_arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/free-disk
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Convert the promoted digest to an Incus artifact
+        run: |
+          sudo apt-get update && sudo apt-get install -y skopeo umoci
+          docker pull --platform "linux/${{ matrix.arch }}" "$IMAGE:${GITHUB_REF_NAME}"
+          image/lxc/oci-to-incus.sh "$IMAGE:${GITHUB_REF_NAME}" \
+            "dist/incus-${{ matrix.arch }}" "${{ matrix.duck_arch }}" "${GITHUB_REF_NAME}"
+          cd "dist/incus-${{ matrix.arch }}"
+          mv rootfs.tar.xz "pebbles-${GITHUB_REF_NAME}-incus-${{ matrix.arch }}.rootfs.tar.xz"
+          mv metadata.tar.xz "pebbles-${GITHUB_REF_NAME}-incus-${{ matrix.arch }}.metadata.tar.xz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: incus-${{ matrix.arch }}
+          path: dist/incus-${{ matrix.arch }}/*.tar.xz
+          retention-days: 3
+
+  notices:
+    needs: promote
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Harvest the third-party notices manifest from the shipped image
+        run: |
+          docker pull --platform linux/amd64 "$IMAGE:${GITHUB_REF_NAME}"
+          {
+            echo "Pebbles ${GITHUB_REF_NAME} — third-party components"
+            echo "Generated from the shipped image on $(date -u +%Y-%m-%d)."
+            echo "Each component is invoked as a separate process and retains its own license."
+            echo
+            echo "== Debian packages (dpkg) =="
+            docker run --rm --entrypoint sh "$IMAGE:${GITHUB_REF_NAME}" -c \
+              "dpkg-query -W -f '\${Package} \${Version}\n' | sort"
+            echo
+            echo "== Python: web tier venv =="
+            docker run --rm --entrypoint sh "$IMAGE:${GITHUB_REF_NAME}" -c \
+              "/opt/pebbles/web/.venv/bin/pip list --format=freeze 2>/dev/null || true"
+            echo
+            echo "== Python: airflow venv =="
+            docker run --rm --entrypoint sh "$IMAGE:${GITHUB_REF_NAME}" -c \
+              "/opt/pebbles/airflow/.venv/bin/pip list --format=freeze 2>/dev/null || true"
+            echo
+            echo "== Conda (miniforge pebbles env: python/R/jupyter stack) =="
+            docker run --rm --entrypoint sh "$IMAGE:${GITHUB_REF_NAME}" -c \
+              "/opt/conda/bin/conda list -n pebbles 2>/dev/null | grep -v '^#' || true"
+            echo
+            echo "== Engines =="
+            docker run --rm --entrypoint sh "$IMAGE:${GITHUB_REF_NAME}" -c \
+              "duckdb --version 2>/dev/null; /usr/lib/postgresql/*/bin/postgres --version 2>/dev/null || postgres --version 2>/dev/null || true"
+            echo
+            echo "Full license texts live in the image under /usr/share/doc/<package>/copyright"
+            echo "(Debian) and each Python/conda package's dist-info/site-packages metadata."
+          } > "THIRD-PARTY-NOTICES-${GITHUB_REF_NAME}.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: notices
+          path: THIRD-PARTY-NOTICES-*.txt
+          retention-days: 3
+
+  release:
+    needs: [promote, incus-artifacts, notices]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Cut release notes from the CHANGELOG
+        run: |
+          # The section for this version (## [X.Y.Z]), else fall back to
+          # [Unreleased] — the cut-the-changelog commit normally lands first.
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v ver="$VERSION" '
+            $0 ~ "^## \\[" ver "\\]" {grab=1; next}
+            grab && /^## \[/ {exit}
+            grab {print}
+          ' CHANGELOG.md > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            awk '/^## \[Unreleased\]/{grab=1; next} grab && /^## \[/{exit} grab{print}' \
+              CHANGELOG.md > notes.md
+          fi
+          {
+            echo
+            echo "---"
+            echo "**Images** (multi-arch amd64+arm64): \`docker pull $IMAGE:${GITHUB_REF_NAME}\`"
+            echo "**Incus**: import the attached \`metadata\`/\`rootfs\` tarballs (see HOWTO.md)."
+            echo "The digest shipped here is byte-identical to the one that passed the"
+            echo "7-cell Integration matrix (docker / rootful podman / incus, both topologies)."
+          } >> notes.md
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Pebbles $GITHUB_REF_NAME" \
+            --notes-file notes.md \
+            assets/*

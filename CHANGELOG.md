@@ -28,6 +28,15 @@ All notable changes to Pebbles are documented here. The format follows
     `host=<main>` (derived from the registration URL; libpq picks up
     `.pgpass` automatically). Multi-host installs need homes visible on
     engines, same class of requirement as the lake path (REQ-26).
+  - **`release.yml` — the release pipeline**: pushing a `v*` tag **promotes**
+    the already-tested per-commit digest (`sha-<commit>`, now stamped by every
+    Image run) to the version tag and `latest` — never rebuilds, so the bytes
+    that passed the 7-cell matrix are the bytes that ship. The GitHub Release
+    carries the Incus artifacts for both architectures and a third-party
+    notices manifest harvested from the shipped image itself (dpkg, both
+    Python venvs, the conda stack, engine versions), with notes cut from this
+    changelog. PRD and implementation plan synced: Phases 0–2 complete,
+    M2.4/M2.5 ✅ — versioning starts at the v1.0.0 tag.
   - **Real progressive SSE streaming (REQ-31, completed)**: query results now
     stream row-batch by row-batch as the engine produces them — kernel
     (`sql_stream` op reading the DuckDB CLI's stdout incrementally, 64-row
