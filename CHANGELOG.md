@@ -6,8 +6,15 @@ All notable changes to Pebbles are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-08-12
+
+The first release. Everything below — from the Phase 0 scaffold to release
+engineering — ships as one multi-arch image (`ghcr.io/djynnius/pebles:v1.0.0`),
+byte-identical to the digest that passed the 7-cell Integration matrix
+(docker / rootful podman / incus × single-box / main+engine).
+
 ### Added
-- **M2.5 — Release engineering (in progress)**:
+- **M2.5 — Release engineering**:
   - **TLS on the cluster API (NFR-02)**: main↔engine traffic is now encrypted.
     Each container self-signs a sticky certificate at first boot (config
     volume, survives upgrades so pins stay valid) and serves its cluster port
@@ -71,7 +78,7 @@ All notable changes to Pebbles are documented here. The format follows
   `available` again — no re-join — and a new cross-engine session answers.
   The Integration workflow gained the matching incus `main-plus-engine` cell
   (same convert+import preparation as the incus smoke cell).
-- **M2.4 — Ops hardening (in progress)**:
+- **M2.4 — Ops hardening**:
   - **NFR-08 completed on the main's side** (both gaps surfaced by the smoke
     audit): through-main handles to remote sessions now **persist across a
     main restart** (remote.json; address/secret re-resolve from the engine
