@@ -89,8 +89,14 @@ fn run_sql(id: &Value, sql: &str, catalog: Option<&str>) -> Value {
         if !valid_catalog(name) {
             return fail(format!("invalid catalog name {name:?}"));
         }
+        // On the main, peer auth over the unix socket. On a remote engine
+        // (M2.5b), TCP to the main's Postgres — libpq authenticates with the
+        // scram credential pebblesd provisioned into this user's ~/.pgpass.
+        let host =
+            std::env::var("PEBBLES_CATALOG_HOST").unwrap_or_else(|_| "/run/postgresql".to_string());
+        let port = std::env::var("PEBBLES_CATALOG_PORT").unwrap_or_else(|_| "5432".to_string());
         script.push_str(&format!(
-            " ATTACH 'ducklake:postgres:dbname=ducklake_{name} host=/run/postgresql' \
+            " ATTACH 'ducklake:postgres:dbname=ducklake_{name} host={host} port={port}' \
              AS {name} (DATA_PATH '{}/{name}'); USE {name};",
             lake_root()
         ));

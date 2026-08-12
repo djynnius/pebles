@@ -316,6 +316,13 @@ impl Broker {
                 "PEBBLES_SESSION_MEMORY_BYTES",
                 req.memory_limit_bytes.to_string(),
             )
+            // On remote engines the kernel attaches the catalog over TCP to the
+            // main's Postgres (M2.5b); unset on the main → local socket + peer.
+            .envs(
+                ["PEBBLES_CATALOG_HOST", "PEBBLES_CATALOG_PORT"]
+                    .iter()
+                    .filter_map(|k| std::env::var(k).ok().map(|v| (*k, v))),
+            )
             .current_dir(&req.home)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

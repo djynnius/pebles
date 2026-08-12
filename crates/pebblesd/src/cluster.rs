@@ -690,6 +690,20 @@ pub async fn engine_boot(config_dir: PathBuf, cluster: std::sync::Arc<Cluster>) 
     let my_cert_fp = crate::tls::ensure_cert(&config_dir)
         .ok()
         .and_then(|(cert, _)| crate::tls::fingerprint_pem(&cert));
+
+    // M2.5b: session kernels on this engine attach DuckLake catalogs over TCP
+    // to the main's Postgres. Derive the host from the main URL (explicit env
+    // wins); the broker forwards it into every kernel it spawns.
+    if std::env::var_os("PEBBLES_CATALOG_HOST").is_none() {
+        if let Some(host) = main
+            .trim_start_matches("https://")
+            .split([':', '/'])
+            .next()
+            .filter(|h| !h.is_empty())
+        {
+            std::env::set_var("PEBBLES_CATALOG_HOST", host);
+        }
+    }
     // No token → the pending-approval flow (REQ-06): keep knocking until an
     // admin approves or rejects on the main. Registered engines don't need
     // one — they prove themselves with their id + secret.

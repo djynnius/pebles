@@ -184,6 +184,12 @@ async fn create_user(
         if let Err(err) = pebbles_identity::host::persist_users(&config_dir) {
             tracing::error!(%err, "persisting account snapshot failed");
         }
+        // M2.5b: catalog TCP credential (~/.pgpass) for remote-engine attaches.
+        // Best-effort — postgres may still be starting on first boot; the
+        // grant/catalog hooks re-try it lazily.
+        if let Err(err) = crate::catalog::ensure_pg_password(&user.username) {
+            tracing::warn!(%err, "pg password provisioning deferred");
+        }
         Ok::<_, IdentityError>(user)
     })
     .await

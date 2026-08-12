@@ -190,8 +190,12 @@ fn network() -> Option<ServiceSpec> {
     })
 }
 
-/// Postgres for the DuckLake catalog (spec §3 Storage). Unix socket only — nothing
-/// outside the container ever talks to it. Data lives in the config volume so
+/// Postgres for the DuckLake catalog (spec §3 Storage). Local access is the
+/// unix socket with peer auth; TCP is open for REMOTE ENGINES' sessions
+/// (M2.5b) with scram required — every Pebbles user's role gets a generated
+/// password living only in their own ~/.pgpass (0600), so the filesystem
+/// stays the permission system and pg CONNECT grants keep enforcing catalog
+/// visibility (REQ-13) across hosts. Data lives in the config volume so
 /// "upgrade = pull new image, same volume" (REQ-09) covers the catalog.
 fn postgres(cfg: &Config) -> Option<ServiceSpec> {
     let bindir = pg_bindir()?;
@@ -205,7 +209,7 @@ fn postgres(cfg: &Config) -> Option<ServiceSpec> {
         }
     }
 
-    let pre = if datadir.join("PG_VERSION").exists() {
+    let mut pre = if datadir.join("PG_VERSION").exists() {
         vec![]
     } else {
         vec![Exec {
@@ -214,7 +218,7 @@ fn postgres(cfg: &Config) -> Option<ServiceSpec> {
                 "-D".into(),
                 datadir.display().to_string(),
                 "--auth-local=peer".into(),
-                "--auth-host=reject".into(),
+                "--auth-host=scram-sha-256".into(),
                 // Pin the cluster to UTF-8 explicitly. initdb otherwise derives the
                 // encoding from the ambient locale, and on Incus the OCI→system-container
                 // conversion strips all environment — so pebblesd-as-init runs in the C
@@ -229,6 +233,24 @@ fn postgres(cfg: &Config) -> Option<ServiceSpec> {
             run_as: Some((uid, gid)),
         }]
     };
+    // Older volumes were initdb'ed with --auth-host=reject; upgrade pg_hba
+    // idempotently so remote engines can scram in (REQ-09: same volume, new
+    // image, no manual steps).
+    pre.push(Exec {
+        program: "/bin/sh".into(),
+        args: vec![
+            "-c".into(),
+            format!(
+                "grep -q 'scram-sha-256' {hba} || \
+                 sed -i 's/^host\\(.*\\)reject$/host\\1scram-sha-256/' {hba}; \
+                 grep -Eq '^host +all +all +0\\.0\\.0\\.0/0' {hba} || \
+                 printf 'host all all 0.0.0.0/0 scram-sha-256\\nhost all all ::0/0 scram-sha-256\\n' >> {hba}",
+                hba = datadir.join("pg_hba.conf").display()
+            ),
+        ],
+        envs: vec![],
+        run_as: Some((uid, gid)),
+    });
 
     Some(ServiceSpec {
         name: "postgres".into(),
@@ -241,7 +263,10 @@ fn postgres(cfg: &Config) -> Option<ServiceSpec> {
                 "-k".into(),
                 PG_SOCKET_DIR.into(),
                 "-c".into(),
-                "listen_addresses=".into(),
+                // TCP for remote engines (scram, M2.5b); local stays peer.
+                "listen_addresses=*".into(),
+                "-c".into(),
+                "password_encryption=scram-sha-256".into(),
             ],
             envs: vec![],
             run_as: Some((uid, gid)),

@@ -78,6 +78,10 @@ pub fn create_catalog(name: &str, owner: &ProvisionedUser) -> Result<CatalogInfo
          THEN CREATE ROLE \"{owner_name}\" LOGIN; END IF; END $$;",
         owner_name = owner.username
     ))?;
+    // M2.5b: the owner may attach this catalog from a remote engine over TCP.
+    if let Err(err) = ensure_pg_password(&owner.username) {
+        tracing::warn!(user = %owner.username, %err, "pg password sync failed");
+    }
     psql(&format!(
         "CREATE DATABASE \"{database}\" OWNER \"{}\";",
         owner.username
@@ -151,7 +155,45 @@ pub fn grant_catalog(
 /// demand, then role membership). Called at grant time and on membership adds.
 pub fn sync_member(group: &str, username: &str) -> Result<(), CatalogError> {
     ensure_role(username, true)?;
+    if let Err(err) = ensure_pg_password(username) {
+        tracing::warn!(user = %username, %err, "pg password sync failed (remote attach)");
+    }
     psql(&format!("GRANT \"{group}\" TO \"{username}\";"))?;
+    Ok(())
+}
+
+/// M2.5b: give the user's Postgres role a scram password living ONLY in their
+/// own ~/.pgpass (0600) — remote engines' kernels attach the catalog over TCP
+/// with it (libpq reads .pgpass automatically), while local sessions keep peer
+/// auth over the socket. Idempotent: an existing .pgpass entry is the record
+/// that role + file are already in sync.
+pub fn ensure_pg_password(username: &str) -> Result<(), CatalogError> {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(user) = pebbles_identity::host::list_users()
+        .ok()
+        .and_then(|users| users.into_iter().find(|u| u.username == username))
+    else {
+        return Ok(()); // not a host account (e.g. dev run) — nothing to wire
+    };
+    let pgpass = std::path::Path::new(&user.home).join(".pgpass");
+    if let Ok(existing) = std::fs::read_to_string(&pgpass) {
+        if existing
+            .lines()
+            .any(|l| l.split(':').nth(3) == Some(username))
+        {
+            return Ok(());
+        }
+    }
+    let password = crate::cluster::random_hex(24);
+    ensure_role(username, true)?;
+    psql(&format!("ALTER ROLE \"{username}\" PASSWORD '{password}';"))?;
+    let line = format!("*:*:*:{username}:{password}\n");
+    let mut content = std::fs::read_to_string(&pgpass).unwrap_or_default();
+    content.push_str(&line);
+    std::fs::write(&pgpass, content)?;
+    std::fs::set_permissions(&pgpass, std::fs::Permissions::from_mode(0o600))?;
+    std::os::unix::fs::chown(&pgpass, Some(user.uid), Some(user.gid))?;
+    tracing::info!(user = %username, "catalog TCP credential provisioned (~/.pgpass)");
     Ok(())
 }
 

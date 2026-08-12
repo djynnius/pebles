@@ -17,6 +17,17 @@ All notable changes to Pebbles are documented here. The format follows
     connection requires the exact pinned cert. No CA and deliberately none:
     nothing depends on the public PKI (air-gap, NFR-03). Bearer secrets keep
     doing authentication; a plain-http PEBBLES_MAIN is upgraded loudly.
+  - **Postgres-over-TCP for remote engines**: DuckLake catalogs are now
+    attachable from sessions on OTHER hosts. The catalog Postgres listens on
+    TCP with **scram required** (local stays peer-over-socket; old volumes'
+    pg_hba upgrades idempotently at boot); every user's role gets a generated
+    password living only in their own `~/.pgpass` (0600) — provisioned at
+    user creation, catalog creation, and grant time — so the filesystem
+    remains the permission system and pg CONNECT grants keep enforcing
+    catalog visibility across hosts. Engine kernels attach with
+    `host=<main>` (derived from the registration URL; libpq picks up
+    `.pgpass` automatically). Multi-host installs need homes visible on
+    engines, same class of requirement as the lake path (REQ-26).
   - **ESLint 9 flat config**: `npm run lint` works again (typescript-eslint
     recommended + react-hooks), wired into the frontend dev loop.
 - **M2.4d — incus joins the main+engine matrix, plus an NFR-08
