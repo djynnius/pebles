@@ -138,7 +138,7 @@ case "$RUNTIME" in
   incus)
     launch_incus "$ENGINE" \
       -c environment.PEBBLES_ROLE=engine \
-      -c "environment.PEBBLES_MAIN=http://$main_ip:7443" \
+      -c "environment.PEBBLES_MAIN=https://$main_ip:7443" \
       -c "environment.PEBBLES_JOIN_TOKEN=$token" \
       -c environment.PEBBLES_ENGINE_NAME=worker-1
     ;;
@@ -146,7 +146,7 @@ case "$RUNTIME" in
     ctr run -d --name "$ENGINE" --network "$NET" \
       -v "$HOMES":/home -v "$LAKE":/var/lib/pebbles/lake \
       -e PEBBLES_ROLE=engine \
-      -e PEBBLES_MAIN="http://$main_ip:7443" \
+      -e PEBBLES_MAIN="https://$main_ip:7443" \
       -e PEBBLES_JOIN_TOKEN="$token" \
       -e PEBBLES_ENGINE_NAME=worker-1 "$IMAGE" >/dev/null
     ;;
@@ -165,7 +165,7 @@ expect '"state":"available"' "engine available" "$engines"
 
 echo "==> the used token cannot register a second engine (single-use)"
 code="$(ctr_exec "$MAIN" curl -s -o /dev/null -w '%{http_code}' \
-  "http://$main_ip:7443/cluster/register" -H 'Content-Type: application/json' \
+  -k "https://$main_ip:7443/cluster/register" -H 'Content-Type: application/json' \
   -d "{\"token\":\"$token\",\"name\":\"evil\",\"address\":\"http://x:1\",\"resources\":{\"cpus\":1,\"memory_bytes\":1},\"existing_users\":[],\"lake_ok\":true}")"
 [ "$code" = "401" ] || { echo "FAIL: reused token expected 401, got $code" >&2; exit 1; }
 
@@ -228,14 +228,14 @@ case "$RUNTIME" in
   incus)
     launch_incus "$ENGINE2" \
       -c environment.PEBBLES_ROLE=engine \
-      -c "environment.PEBBLES_MAIN=http://$main_ip:7443" \
+      -c "environment.PEBBLES_MAIN=https://$main_ip:7443" \
       -c environment.PEBBLES_ENGINE_NAME=worker-2
     ;;
   *)
     ctr run -d --name "$ENGINE2" --network "$NET" \
       -v "$HOMES":/home -v "$LAKE":/var/lib/pebbles/lake \
       -e PEBBLES_ROLE=engine \
-      -e PEBBLES_MAIN="http://$main_ip:7443" \
+      -e PEBBLES_MAIN="https://$main_ip:7443" \
       -e PEBBLES_ENGINE_NAME=worker-2 "$IMAGE" >/dev/null
     ;;
 esac
@@ -278,8 +278,8 @@ expect '"answer":42' "survivor answers before the failure" "$pre"
 secret="$(ctr_exec "$ENGINE" sed -n 's/.*"secret": *"\([^"]*\)".*/\1/p' \
   /var/lib/pebbles/cluster/engine.json)"
 [ -n "$secret" ] || { echo "FAIL: engine has no sticky cluster secret" >&2; exit 1; }
-eng() { ctr_exec "$ENGINE" curl -fsS --max-time 30 -H "Authorization: Bearer $secret" "$@"; }
-rid="$(eng http://127.0.0.1:7443/engine/sessions | grep -o '{[^}]*}' \
+eng() { ctr_exec "$ENGINE" curl -fsSk --max-time 30 -H "Authorization: Bearer $secret" "$@"; }
+rid="$(eng https://127.0.0.1:7443/engine/sessions | grep -o '{[^}]*}' \
   | grep "\"pid\":$surv_pid" | sed -n 's/.*"id":\([0-9]*\).*/\1/p' | head -1)"
 [ -n "$rid" ] || { echo "FAIL: survivor not listed on the engine's own API" >&2; exit 1; }
 
@@ -291,15 +291,15 @@ ctr_exec "$ENGINE" sh -c "kill -0 $surv_pid" \
   || { echo "FAIL: survivor process died with the main (NFR-08)" >&2; exit 1; }
 alive="$(eng -H 'Content-Type: application/json' \
   -d '{"id":91,"op":"sql","sql":"SELECT 6*7 AS answer;"}' \
-  "http://127.0.0.1:7443/engine/sessions/$rid/exec")"
+  "https://127.0.0.1:7443/engine/sessions/$rid/exec")"
 expect '"answer":42' "survivor answers with the main down (NFR-08)" "$alive"
 
 echo "==> nothing new starts: without the main's credential the engine refuses"
 # Session creation exists ONLY behind the cluster secret the main holds; with
 # the main down, an unauthenticated request must fail cleanly (401).
-newcode="$(ctr_exec "$ENGINE" curl -s -o /dev/null -w '%{http_code}' \
+newcode="$(ctr_exec "$ENGINE" curl -sk -o /dev/null -w '%{http_code}' \
   -H 'Content-Type: application/json' -d '{"username":"maya"}' \
-  http://127.0.0.1:7443/engine/sessions)"
+  https://127.0.0.1:7443/engine/sessions)"
 [ "$newcode" = "401" ] \
   || { echo "FAIL: engine must refuse unauthenticated session creation, got $newcode" >&2; exit 1; }
 

@@ -3,9 +3,9 @@
 //! (refused on drift), and receive the identity snapshot plus a bearer secret for
 //! ongoing main↔engine calls.
 //!
-//! Transport is plain HTTP with bearer auth in M1.1 — authentication without
-//! encryption. TLS (mTLS per NFR-02) is scheduled before v1.0; until then the
-//! cluster port belongs on a trusted network segment.
+//! Transport is TLS with bearer auth (NFR-02): each side self-signs a sticky
+//! certificate and peers pin its SHA-256 fingerprint trust-on-first-use (see
+//! tls.rs) — fingerprints are exchanged in-band at registration.
 
 use pebbles_api::{EngineResources, IdentitySnapshot, RegisterEngineRequest};
 use serde::{Deserialize, Serialize};
@@ -33,6 +33,9 @@ pub struct EngineRecord {
     pub secret: String,
     pub resources: EngineResources,
     pub registered_at: u64,
+    /// Pinned SHA-256 fingerprint of the engine's cluster TLS cert (NFR-02).
+    #[serde(default)]
+    pub cert_fp: Option<String>,
 }
 
 /// The engine side's own membership (sticky in its config volume).
@@ -42,6 +45,9 @@ pub struct EngineSelf {
     pub engine_id: String,
     pub secret: String,
     pub name: String,
+    /// Pinned SHA-256 fingerprint of the main's cluster TLS cert (NFR-02).
+    #[serde(default)]
+    pub main_cert_fp: Option<String>,
 }
 
 /// An engine that contacted the main without a valid token (REQ-06): held for
@@ -74,6 +80,8 @@ pub struct RemoteRef {
     pub address: String,
     pub secret: String,
     pub remote_id: u64,
+    /// The engine's pinned cert fingerprint, for the TLS client (NFR-02).
+    pub cert_fp: Option<String>,
 }
 
 /// The disk shape of the remote map (NFR-08: through-main session handles must
@@ -100,7 +108,11 @@ pub struct Cluster {
     pub engine_self: RwLock<Option<EngineSelf>>,
     remote: Mutex<std::collections::HashMap<u64, RemoteRef>>,
     next_remote: AtomicU64,
+    /// Plain client for NON-cluster calls (Ollama probes). Cluster traffic
+    /// goes through `peer_client` (TLS + pinning, NFR-02).
     pub http: reqwest::Client,
+    /// Pinned TLS clients, one per peer fingerprint ("" = trust-on-first-use).
+    peer_clients: Mutex<std::collections::HashMap<String, reqwest::Client>>,
     /// REQ-22: the health loop's cache — engine name → last observation.
     pub health: Mutex<std::collections::HashMap<String, EngineHealth>>,
 }
@@ -167,6 +179,7 @@ impl Cluster {
                         address: engine.address.clone(),
                         secret: engine.secret.clone(),
                         remote_id: p.remote_id,
+                        cert_fp: engine.cert_fp.clone(),
                     },
                 );
             }
@@ -185,8 +198,20 @@ impl Cluster {
             remote: Mutex::new(remote),
             next_remote: AtomicU64::new(max_id),
             http: reqwest::Client::new(),
+            peer_clients: Mutex::new(std::collections::HashMap::new()),
             health: Mutex::new(std::collections::HashMap::new()),
         })
+    }
+
+    /// The HTTPS client for a cluster peer: pinned to `cert_fp` when we hold a
+    /// pin, trust-on-first-use otherwise (NFR-02). Cached per fingerprint.
+    pub fn peer_client(&self, cert_fp: Option<&str>) -> reqwest::Client {
+        let key = cert_fp.unwrap_or("").to_string();
+        let mut clients = self.peer_clients.lock().unwrap();
+        clients
+            .entry(key)
+            .or_insert_with(|| crate::tls::pinned_client(cert_fp.map(str::to_string)))
+            .clone()
     }
 
     fn persist_remote(&self, remote: &std::collections::HashMap<u64, RemoteRef>) {
@@ -386,6 +411,7 @@ impl Cluster {
             secret: random_hex(24),
             resources: req.resources.clone(),
             registered_at: now(),
+            cert_fp: req.cert_fp.clone(),
         };
         let mut engines = self.engines.lock().unwrap();
         engines.retain(|e| e.name != record.name); // re-registration replaces
@@ -407,6 +433,9 @@ impl Cluster {
         record.name = req.name.clone();
         record.address = req.address.trim_end_matches('/').to_string();
         record.resources = req.resources.clone();
+        if req.cert_fp.is_some() {
+            record.cert_fp = req.cert_fp.clone();
+        }
         let refreshed = record.clone();
         write_json(&self.dir.join("engines.json"), &*engines);
         Some(refreshed)
@@ -505,6 +534,7 @@ impl Cluster {
                 address: engine.address.clone(),
                 secret: engine.secret.clone(),
                 remote_id,
+                cert_fp: engine.cert_fp.clone(),
             },
         );
         self.persist_remote(&remote);
@@ -536,7 +566,7 @@ impl Cluster {
         for engine in self.list_engines() {
             let url = format!("{}/engine/sync-accounts", engine.address);
             match self
-                .http
+                .peer_client(engine.cert_fp.as_deref())
                 .post(&url)
                 .bearer_auth(&engine.secret)
                 .json(&snapshot)
@@ -592,7 +622,7 @@ pub async fn health_loop(cluster: std::sync::Arc<Cluster>) {
         cluster.prune_health(&engines);
         for engine in engines {
             let observed = match cluster
-                .http
+                .peer_client(engine.cert_fp.as_deref())
                 .get(format!("{}/engine/state", engine.address))
                 .bearer_auth(&engine.secret)
                 .timeout(std::time::Duration::from_secs(3))
@@ -636,12 +666,30 @@ pub async fn engine_boot(config_dir: PathBuf, cluster: std::sync::Arc<Cluster>) 
         .ok()
         .or_else(|| sticky.as_ref().map(|s| s.main.clone()))
     {
-        Some(m) => m.trim_end_matches('/').to_string(),
+        // The cluster API is TLS-only (NFR-02): a plain-http main URL from an
+        // older config or a habit-typed env is upgraded, loudly.
+        Some(m) => {
+            let m = m.trim_end_matches('/');
+            if let Some(rest) = m.strip_prefix("http://") {
+                tracing::warn!(
+                    "PEBBLES_MAIN is http:// — the cluster API is TLS-only, using https://"
+                );
+                format!("https://{rest}")
+            } else if m.starts_with("https://") {
+                m.to_string()
+            } else {
+                format!("https://{m}")
+            }
+        }
         None => {
             tracing::error!("engine role without registration: set PEBBLES_MAIN");
             return;
         }
     };
+    // Our own cert fingerprint, self-reported so the main can pin us.
+    let my_cert_fp = crate::tls::ensure_cert(&config_dir)
+        .ok()
+        .and_then(|(cert, _)| crate::tls::fingerprint_pem(&cert));
     // No token → the pending-approval flow (REQ-06): keep knocking until an
     // admin approves or rejects on the main. Registered engines don't need
     // one — they prove themselves with their id + secret.
@@ -686,10 +734,13 @@ pub async fn engine_boot(config_dir: PathBuf, cluster: std::sync::Arc<Cluster>) 
             lake_ok,
             engine_id: me.as_ref().map(|s| s.engine_id.clone()),
             secret: me.as_ref().map(|s| s.secret.clone()),
+            cert_fp: my_cert_fp.clone(),
         };
 
+        // Pinned to the main's cert once known; trust-on-first-use before.
+        let main_fp = me.as_ref().and_then(|s| s.main_cert_fp.clone());
         match cluster
-            .http
+            .peer_client(main_fp.as_deref())
             .post(format!("{main}/cluster/register"))
             .json(&request)
             .send()
@@ -715,6 +766,9 @@ pub async fn engine_boot(config_dir: PathBuf, cluster: std::sync::Arc<Cluster>) 
                             engine_id: granted.engine_id,
                             secret: granted.secret,
                             name: name.clone(),
+                            // Pin the main's cert (keep an existing pin if the
+                            // response omitted one).
+                            main_cert_fp: granted.main_cert_fp.or(main_fp.clone()),
                         });
                         if fresh {
                             tracing::info!(engine = %name, main = %main, "registered with the main");
@@ -777,7 +831,7 @@ fn advertise_address(main: &str) -> String {
         })
         .map(|a| a.ip().to_string())
         .unwrap_or_else(|_| "127.0.0.1".to_string());
-    format!("http://{ip}:{port}")
+    format!("https://{ip}:{port}")
 }
 
 fn total_memory_bytes() -> u64 {
@@ -819,6 +873,7 @@ mod tests {
             lake_ok: true,
             engine_id: None,
             secret: None,
+            cert_fp: None,
         }
     }
 
@@ -933,13 +988,14 @@ mod tests {
         let engine = EngineRecord {
             id: "e1".into(),
             name: "gpu-1".into(),
-            address: "http://10.0.0.7:7443".into(),
+            address: "https://10.0.0.7:7443".into(),
             secret: "s".into(),
             resources: EngineResources {
                 cpus: 4,
                 memory_bytes: 1,
             },
             registered_at: 0,
+            cert_fp: None,
         };
         let local = c.map_remote(&engine, 1);
         assert!(local > REMOTE_ID_BASE);

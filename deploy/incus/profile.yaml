@@ -27,8 +27,8 @@ devices:
     listen: tcp:0.0.0.0:8080
     connect: tcp:127.0.0.1:8080
   # Multi-host clusters ALSO need the cluster API (port 7443) forwarded, on the
-  # main AND on every engine (the main calls engines back). It is bearer-authed
-  # but plain HTTP until the pre-v1.0 TLS work — expose it on a trusted segment
-  # only, and set PEBBLES_ADVERTISE_ADDR on engines behind NAT:
+  # main AND on every engine (the main calls engines back). It speaks TLS with
+  # bearer auth (NFR-02) — self-signed certs, fingerprint-pinned between the
+  # daemons trust-on-first-use. Set PEBBLES_ADVERTISE_ADDR on engines behind NAT:
   #   incus config device add <name> cluster proxy \
   #       listen=tcp:0.0.0.0:7443 connect=tcp:127.0.0.1:7443

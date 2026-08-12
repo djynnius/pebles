@@ -35,6 +35,9 @@ pub struct AppState {
     pub default_session_memory: u64,
     pub config_dir: std::path::PathBuf,
     pub cluster: Arc<Cluster>,
+    /// This container's own cluster-TLS cert fingerprint (NFR-02) — handed to
+    /// engines at registration so they can pin us.
+    pub cluster_cert_fp: Option<String>,
 }
 
 fn health_routes(role: Role) -> Router<AppState> {
@@ -103,7 +106,7 @@ pub fn router(role: Role, state: AppState) -> Router {
     .with_state(state)
 }
 
-/// The inter-host cluster API (TCP; bearer-authenticated, TLS pre-v1.0).
+/// The inter-host cluster API (TLS, NFR-02; bearer-authenticated).
 pub fn cluster_router(role: Role, state: AppState) -> Router {
     match role {
         Role::Main => health_routes(role)
@@ -312,7 +315,7 @@ async fn reservation_status(
             .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("no engine {name:?}")))?;
         let resp = state
             .cluster
-            .http
+            .peer_client(engine.cert_fp.as_deref())
             .get(format!("{}/engine/sessions/reservation", engine.address))
             .bearer_auth(&engine.secret)
             .send()
@@ -339,7 +342,7 @@ async fn cancel_reservation(
             .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("no engine {name:?}")))?;
         let resp = state
             .cluster
-            .http
+            .peer_client(engine.cert_fp.as_deref())
             .delete(format!("{}/engine/sessions/reservation", engine.address))
             .bearer_auth(&engine.secret)
             .send()
@@ -408,7 +411,7 @@ async fn open_session(
         };
         let resp = state
             .cluster
-            .http
+            .peer_client(engine.cert_fp.as_deref())
             .post(format!("{}/engine/sessions", engine.address))
             .bearer_auth(&engine.secret)
             .json(&forward)
@@ -513,7 +516,7 @@ async fn forward_remote(
     );
     let mut call = state
         .cluster
-        .http
+        .peer_client(remote.cert_fp.as_deref())
         .request(method, url)
         .bearer_auth(&remote.secret);
     if let Some(body) = body {
@@ -652,6 +655,7 @@ async fn register_engine(
                 engine_id: record.id,
                 secret: record.secret,
                 identity,
+                main_cert_fp: state.cluster_cert_fp.clone(),
             }));
         }
         tracing::warn!(
@@ -683,6 +687,7 @@ async fn register_engine(
         engine_id: record.id,
         secret: record.secret,
         identity,
+        main_cert_fp: state.cluster_cert_fp.clone(),
     }))
 }
 
@@ -1230,7 +1235,7 @@ async fn list_engines(State(state): State<AppState>) -> ApiResult<Vec<EngineDesc
             None => {
                 let probe = state
                     .cluster
-                    .http
+                    .peer_client(record.cert_fp.as_deref())
                     .get(format!("{}/engine/state", record.address))
                     .bearer_auth(&record.secret)
                     .timeout(std::time::Duration::from_secs(2))

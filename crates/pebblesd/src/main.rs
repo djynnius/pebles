@@ -15,9 +15,10 @@ mod migrations;
 mod nkoyo;
 mod services;
 mod supervisor;
+mod tls;
 mod wizard;
 
-/// The inter-host cluster API port (TCP; plain HTTP + bearer in M1.1, TLS pre-v1.0).
+/// The inter-host cluster API port (TLS + bearer, NFR-02; fingerprint-pinned).
 pub fn cluster_port() -> u16 {
     std::env::var("PEBBLES_CLUSTER_PORT")
         .ok()
@@ -105,16 +106,25 @@ async fn main() -> anyhow::Result<()> {
         // REQ-22: probe registered engines every 10s; flag lost ones.
         tokio::spawn(cluster::health_loop(clu.clone()));
     }
-    let state = session_state(&cfg, clu.clone());
+
+    // Cluster TLS identity (NFR-02): sticky self-signed cert, peers pin its
+    // fingerprint. The cluster port serves HTTPS only.
+    let (cert_pem, key_pem) = tls::ensure_cert(&cfg.config_dir)?;
+    let cluster_cert_fp = tls::fingerprint_pem(&cert_pem);
+    let state = session_state(&cfg, clu.clone(), cluster_cert_fp.clone());
 
     // Inter-host cluster API: registration inbound on the main, session serving
     // inbound on engines (implementation plan §9b M1.1).
-    let cluster_addr = format!("0.0.0.0:{}", cluster_port());
-    let cluster_tcp = tokio::net::TcpListener::bind(&cluster_addr).await?;
-    tracing::info!(addr = %cluster_addr, "cluster API listening");
+    let cluster_addr: std::net::SocketAddr = format!("0.0.0.0:{}", cluster_port()).parse()?;
+    let tls_config = tls::server_config(cert_pem, key_pem).await?;
+    tracing::info!(addr = %cluster_addr, fp = %cluster_cert_fp.as_deref().unwrap_or("?"),
+        "cluster API listening (TLS)");
     let cluster_router = api::cluster_router(cfg.role, state.clone());
     tokio::spawn(async move {
-        if let Err(err) = axum::serve(cluster_tcp, cluster_router).await {
+        if let Err(err) = axum_server::bind_rustls(cluster_addr, tls_config)
+            .serve(cluster_router.into_make_service())
+            .await
+        {
             tracing::error!(%err, "cluster API server exited");
         }
     });
@@ -299,7 +309,11 @@ async fn halt_signal() {
 /// Session serving on this container: the main doubles as an engine by default
 /// (REQ-04, `PEBBLES_SERVE_SESSIONS=false` turns it off); engine-role containers
 /// serve sessions unconditionally — that is their job.
-fn session_state(cfg: &config::Config, clu: std::sync::Arc<cluster::Cluster>) -> api::AppState {
+fn session_state(
+    cfg: &config::Config,
+    clu: std::sync::Arc<cluster::Cluster>,
+    cluster_cert_fp: Option<String>,
+) -> api::AppState {
     fn env_u64(key: &str, default: u64) -> u64 {
         std::env::var(key)
             .ok()
@@ -344,6 +358,7 @@ fn session_state(cfg: &config::Config, clu: std::sync::Arc<cluster::Cluster>) ->
         default_session_memory,
         config_dir: cfg.config_dir.clone(),
         cluster: clu,
+        cluster_cert_fp,
     }
 }
 

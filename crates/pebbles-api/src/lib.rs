@@ -160,6 +160,10 @@ pub struct RegisterEngineRequest {
     pub engine_id: Option<String>,
     #[serde(default)]
     pub secret: Option<String>,
+    /// SHA-256 fingerprint of the engine's cluster TLS certificate (NFR-02):
+    /// the main pins outbound connections to it after registration.
+    #[serde(default)]
+    pub cert_fp: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -265,10 +269,13 @@ pub struct UsageInfo {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct RegisterEngineResponse {
     pub engine_id: String,
-    /// Bearer secret for main↔engine calls. Plain HTTP in M1.1 — TLS hardening is
-    /// scheduled before v1.0 (NFR-02).
+    /// Bearer secret for main↔engine calls, carried over cluster TLS (NFR-02).
     pub secret: String,
     pub identity: IdentitySnapshot,
+    /// SHA-256 fingerprint of the main's cluster TLS certificate: the engine
+    /// pins its future connections to it (trust-on-first-use at registration).
+    #[serde(default)]
+    pub main_cert_fp: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

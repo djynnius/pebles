@@ -8,6 +8,10 @@ description = "The Pebbles daemon: PID-1 supervisor, role bootstrap, privileged 
 [dependencies]
 anyhow = { workspace = true }
 axum = { workspace = true }
+axum-server = { workspace = true }
+rcgen = { workspace = true }
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
 libc = { workspace = true }
 pebbles-api = { workspace = true }
 pebbles-identity = { workspace = true }

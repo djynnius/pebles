@@ -7,6 +7,18 @@ All notable changes to Pebbles are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **M2.5 — Release engineering (in progress)**:
+  - **TLS on the cluster API (NFR-02)**: main↔engine traffic is now encrypted.
+    Each container self-signs a sticky certificate at first boot (config
+    volume, survives upgrades so pins stay valid) and serves its cluster port
+    HTTPS-only; peers authenticate by **SHA-256 fingerprint pinning** with
+    trust-on-first-use — fingerprints ride in-band at registration (the
+    engine's in the request, the main's in the response) and every later
+    connection requires the exact pinned cert. No CA and deliberately none:
+    nothing depends on the public PKI (air-gap, NFR-03). Bearer secrets keep
+    doing authentication; a plain-http PEBBLES_MAIN is upgraded loudly.
+  - **ESLint 9 flat config**: `npm run lint` works again (typescript-eslint
+    recommended + react-hooks), wired into the frontend dev loop.
 - **M2.4d — incus joins the main+engine matrix, plus an NFR-08
   degraded-but-alive proof**: `scripts/smoke/main-plus-engine.sh` now runs
   under incus (`RUNTIME=incus CTR_CMD="sudo incus"`) — two unprivileged system
