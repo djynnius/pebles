@@ -1,5 +1,9 @@
 # p{b|es
 
+<p align="center">
+  <img src="docs/pebles-hero.jpg" alt="The p{b|es wordmark laid out in river pebbles in a forest stream" width="720">
+</p>
+
 **Pebbles** is a self-hosted data platform — a data lake with time travel, multi-user
 notebooks, drag-and-drop pipelines, dashboards, git integration, and a local AI
 assistant — that turns hardware you already own into a Databricks alternative.
@@ -40,6 +44,39 @@ local-models assistant) chats and acts with per-turn tool approvals; and the
 with time travel, SQL editor, notebooks, dashboards, files, jobs, and settings,
 all served at `/` as a single-page app over the JSON API. Auto ETL is next. See
 `HOWTO.md` to run what exists.
+
+## Get the image
+
+One image serves all three runtimes; CI builds it for **amd64 and arm64** and
+the same tag resolves to the right architecture automatically. `:edge` tracks
+the latest green commit on `main` (versioned tags arrive with v1.0.0).
+
+```sh
+docker login ghcr.io    # needed while the package is private
+```
+
+**Docker**
+```sh
+docker pull ghcr.io/djynnius/pebles:edge
+```
+
+**Podman** (rootful — required; rootless breaks the uid model and is refused)
+```sh
+sudo podman pull ghcr.io/djynnius/pebles:edge
+```
+
+**LXC (Incus)** — Incus consumes a converted artifact of the same image, built
+by CI. Download `pebbles-incus-amd64` (or `-arm64`) from the latest
+[Image workflow run](../../actions/workflows/image.yml), then:
+
+```sh
+echo "root:70000:5000" | sudo tee -a /etc/subuid /etc/subgid   # uid range delegation
+sudo systemctl restart incus
+incus image import metadata.tar.xz rootfs.tar.xz --alias pebbles
+```
+
+Or convert locally from the OCI image: `image/lxc/oci-to-incus.sh`.
+See `HOWTO.md` for booting, first login, and the Incus profile (idmap + ports).
 
 ## Documents
 
