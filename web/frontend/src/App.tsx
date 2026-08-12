@@ -11,6 +11,10 @@ import { Usage } from "./routes/Usage";
 import { Users } from "./routes/Users";
 import { Groups } from "./routes/Groups";
 import { Hosts } from "./routes/Hosts";
+import { Catalog } from "./routes/Catalog";
+import { NewCatalog } from "./routes/NewCatalog";
+import { Files } from "./routes/Files";
+import { Sql } from "./routes/Sql";
 import { Placeholder } from "./routes/Placeholder";
 
 type Auth = "loading" | "anon" | User;
@@ -40,11 +44,11 @@ export function App() {
       <Route element={<AppShell user={user} onSignOut={signOut} />}>
         <Route path="/" element={<Home user={user} />} />
         <Route path="/nkoyo" element={<Placeholder title="Nkoyo" />} />
-        <Route path="/files" element={<Placeholder title="Files" eyebrow="Workspace" />} />
-        <Route path="/catalog" element={<Placeholder title="Catalog" eyebrow="Workspace" />} />
-        <Route path="/newcatalog" element={<Placeholder title="Create catalog" eyebrow="Workspace" />} />
+        <Route path="/files" element={<Files user={user} />} />
+        <Route path="/catalog" element={<Catalog />} />
+        <Route path="/newcatalog" element={<NewCatalog user={user} />} />
         <Route path="/notebooks" element={<Placeholder title="Notebooks" eyebrow="Analysis" />} />
-        <Route path="/sql" element={<Placeholder title="SQL editor" eyebrow="Analysis" />} />
+        <Route path="/sql" element={<Sql />} />
         <Route path="/dashboards" element={<Placeholder title="Dashboards" eyebrow="Analysis" />} />
         <Route path="/dashboards/:name" element={<Placeholder title="Dashboard" eyebrow="Analysis" />} />
         <Route path="/jobs" element={<Placeholder title="Jobs" eyebrow="Data engineering" />} />

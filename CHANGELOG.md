@@ -7,6 +7,15 @@ All notable changes to Pebbles are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **React data-core screens (SPA at `/app`)**: **Catalog** — the flagship view:
+  engine-aware tree (catalog › schema › table), stat tiles (rows, snapshot,
+  owner), Schema/Sample/Snapshots/Lineage/Permissions tabs, and one-click
+  **time travel** that opens the SQL editor on `AT (VERSION => …)`; **SQL
+  editor** — document tabs, syntax-highlighted editor, ⌘/Ctrl+Enter, SSE-run
+  results with CSV download; **Files** — full home browser with upload,
+  rename, delete, new-folder, downloads, and a right-click context menu;
+  **New catalog** — form with a live "Equivalent SQL" card. All four run
+  against the real API as the signed-in user.
 - **React workbench foundations**: the complete JSON API the SPA needs
   (`web/pebbles_web/api.py`) — every screen's data now has an `/api/*` route:
   catalogs (list/create/grants plus exec-driven **browse**: schema tree, column
