@@ -311,10 +311,14 @@ wait_main_healthy
 back=""
 for _ in $(seq 1 30); do
   back="$(pd http://pebblesd/engines 2>/dev/null || true)"
-  grep -q '"name":"worker-1".*"state":"available"' <<<"$back" && break
+  # The survivor session is still open, so the engine truthfully reports
+  # "in use" (sessions:1) — that IS recovery. "available" appears only if the
+  # survivor happened to idle out. Either serving state proves NFR-08; what
+  # must NOT appear is lost/stopped.
+  grep -Eq '"name":"worker-1".*"state":"(available|in use)"' <<<"$back" && break
   sleep 2
 done
-expect '"name":"worker-1".*"state":"available"' "engine available after the main returns" "$back"
+expect '"name":"worker-1".*"state":"\(available\|in use\)"' "engine serving after the main returns" "$back"
 ctr_exec "$ENGINE" sh -c "kill -0 $surv_pid" \
   || { echo "FAIL: survivor did not outlive the outage" >&2; exit 1; }
 post="$(pd -H 'Content-Type: application/json' \
