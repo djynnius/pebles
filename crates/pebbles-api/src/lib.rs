@@ -151,6 +151,15 @@ pub struct RegisterEngineRequest {
     pub existing_users: Vec<(u32, String)>,
     /// Whether the lake root is reachable on the engine (REQ-26).
     pub lake_ok: bool,
+    /// Set on RE-registration (NFR-08/REQ-14 reconcile): an engine that already
+    /// holds an identity proves it with its id + secret instead of a token; the
+    /// main refreshes its record and returns the current snapshot. A main that
+    /// doesn't recognize the pair (replaced volume) falls back to the token /
+    /// pending-approval path.
+    #[serde(default)]
+    pub engine_id: Option<String>,
+    #[serde(default)]
+    pub secret: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

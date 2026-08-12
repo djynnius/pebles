@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { Page } from "../components/Page";
 import { Table, Td, StatusDot } from "../components/Table";
+import { LOST_HINT, isLost } from "../engines";
 
 interface Engine {
   name: string;
@@ -45,11 +46,20 @@ export function Hosts() {
           .map((e) => (
             <tr key={e.name}>
               <Td>
-                <StatusDot tone={e.state === "stopped" ? "dim" : "ok"} />
+                <StatusDot
+                  tone={isLost(e.state) ? "err" : e.state === "stopped" ? "dim" : "ok"}
+                />
               </Td>
               <Td mono>{e.name}</Td>
               <Td>Engine</Td>
-              <Td>{e.state}</Td>
+              <Td>
+                <span
+                  style={isLost(e.state) ? { color: "var(--err)" } : undefined}
+                  title={isLost(e.state) ? LOST_HINT : undefined}
+                >
+                  {e.state}
+                </span>
+              </Td>
               <Td>{e.resources.cpus}</Td>
             </tr>
           ))}

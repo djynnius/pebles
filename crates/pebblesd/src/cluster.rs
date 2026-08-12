@@ -76,6 +76,16 @@ pub struct RemoteRef {
     pub remote_id: u64,
 }
 
+/// The disk shape of the remote map (NFR-08: through-main session handles must
+/// survive a main restart). Address/secret are NOT persisted — they resolve
+/// from the engine record at load, so a rotated secret invalidates stale refs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedRemote {
+    local_id: u64,
+    engine_name: String,
+    remote_id: u64,
+}
+
 /// Remote-session ids live above this offset so they can never collide with the
 /// local broker's counter.
 pub const REMOTE_ID_BASE: u64 = 1_000_000;
@@ -135,10 +145,36 @@ impl Cluster {
         let dir = config_dir.join("cluster");
         let _ = std::fs::create_dir_all(&dir);
         let tokens = read_json(&dir.join("tokens.json")).unwrap_or_default();
-        let engines = read_json(&dir.join("engines.json")).unwrap_or_default();
+        let engines: Vec<EngineRecord> = read_json(&dir.join("engines.json")).unwrap_or_default();
         let pending = read_json(&dir.join("pending.json")).unwrap_or_default();
         let grants = read_json(&dir.join("grants.json")).unwrap_or_default();
         let engine_self = read_json(&dir.join("engine.json"));
+
+        // Restore through-main handles to sessions that survived our restart
+        // (NFR-08): address/secret come from the live engine record; refs to
+        // engines we no longer know are dropped.
+        let persisted: Vec<PersistedRemote> =
+            read_json(&dir.join("remote.json")).unwrap_or_default();
+        let mut remote = std::collections::HashMap::new();
+        let mut max_id = REMOTE_ID_BASE;
+        for p in persisted {
+            if let Some(engine) = engines.iter().find(|e| e.name == p.engine_name) {
+                max_id = max_id.max(p.local_id);
+                remote.insert(
+                    p.local_id,
+                    RemoteRef {
+                        engine_name: engine.name.clone(),
+                        address: engine.address.clone(),
+                        secret: engine.secret.clone(),
+                        remote_id: p.remote_id,
+                    },
+                );
+            }
+        }
+        if !remote.is_empty() {
+            tracing::info!(sessions = remote.len(), "restored remote session handles");
+        }
+
         std::sync::Arc::new(Self {
             dir,
             tokens: Mutex::new(tokens),
@@ -146,11 +182,23 @@ impl Cluster {
             pending: Mutex::new(pending),
             grants: Mutex::new(grants),
             engine_self: RwLock::new(engine_self),
-            remote: Mutex::new(std::collections::HashMap::new()),
-            next_remote: AtomicU64::new(REMOTE_ID_BASE),
+            remote: Mutex::new(remote),
+            next_remote: AtomicU64::new(max_id),
             http: reqwest::Client::new(),
             health: Mutex::new(std::collections::HashMap::new()),
         })
+    }
+
+    fn persist_remote(&self, remote: &std::collections::HashMap<u64, RemoteRef>) {
+        let persisted: Vec<PersistedRemote> = remote
+            .iter()
+            .map(|(local_id, r)| PersistedRemote {
+                local_id: *local_id,
+                engine_name: r.engine_name.clone(),
+                remote_id: r.remote_id,
+            })
+            .collect();
+        write_json(&self.dir.join("remote.json"), &persisted);
     }
 
     /// The health cache's verdict for an engine: `(state, sessions)`, where a
@@ -346,6 +394,24 @@ impl Cluster {
         record
     }
 
+    /// NFR-08/REQ-14 reconcile: an engine proving its existing id + secret gets
+    /// its record refreshed (address may change under DHCP) and keeps its
+    /// secret. None = this main doesn't know the pair (replaced volume, revoked
+    /// engine) — the caller falls back to the token/pending path.
+    pub fn reregister(&self, req: &RegisterEngineRequest) -> Option<EngineRecord> {
+        let (id, secret) = (req.engine_id.as_ref()?, req.secret.as_ref()?);
+        let mut engines = self.engines.lock().unwrap();
+        let record = engines
+            .iter_mut()
+            .find(|e| &e.id == id && &e.secret == secret)?;
+        record.name = req.name.clone();
+        record.address = req.address.trim_end_matches('/').to_string();
+        record.resources = req.resources.clone();
+        let refreshed = record.clone();
+        write_json(&self.dir.join("engines.json"), &*engines);
+        Some(refreshed)
+    }
+
     /// Tokenless contact (REQ-06): record/refresh the pending request. Returns
     /// true when an admin has approved it — the caller then completes
     /// registration and consumes the approval.
@@ -431,7 +497,8 @@ impl Cluster {
 
     pub fn map_remote(&self, engine: &EngineRecord, remote_id: u64) -> u64 {
         let local = self.next_remote.fetch_add(1, Ordering::SeqCst) + 1;
-        self.remote.lock().unwrap().insert(
+        let mut remote = self.remote.lock().unwrap();
+        remote.insert(
             local,
             RemoteRef {
                 engine_name: engine.name.clone(),
@@ -440,6 +507,7 @@ impl Cluster {
                 remote_id,
             },
         );
+        self.persist_remote(&remote);
         local
     }
 
@@ -448,7 +516,9 @@ impl Cluster {
     }
 
     pub fn unmap_remote(&self, local_id: u64) {
-        self.remote.lock().unwrap().remove(&local_id);
+        let mut remote = self.remote.lock().unwrap();
+        remote.remove(&local_id);
+        self.persist_remote(&remote);
     }
 
     /// Push the current identity snapshot to every engine (REQ-14); best-effort,
@@ -552,55 +622,72 @@ pub async fn health_loop(cluster: std::sync::Arc<Cluster>) {
     }
 }
 
+/// How often a registered engine reconciles with its main (NFR-08/REQ-14):
+/// refreshes its record (address may change), re-applies the identity
+/// snapshot (accounts created while it was down arrive here), and re-enters
+/// the pending queue automatically if the main was replaced.
+const RECONCILE_INTERVAL_SECS: u64 = 60;
+
 pub async fn engine_boot(config_dir: PathBuf, cluster: std::sync::Arc<Cluster>) {
-    if cluster.engine_self.read().unwrap().is_some() {
-        tracing::info!("engine already registered (sticky)");
-        return;
-    }
-    let Ok(main) = std::env::var("PEBBLES_MAIN") else {
-        tracing::error!("engine role without registration: set PEBBLES_MAIN");
-        return;
+    // Sticky identity: the stored main URL outlives the env (which is only
+    // guaranteed on first boot).
+    let sticky = cluster.engine_self.read().unwrap().clone();
+    let main = match std::env::var("PEBBLES_MAIN")
+        .ok()
+        .or_else(|| sticky.as_ref().map(|s| s.main.clone()))
+    {
+        Some(m) => m.trim_end_matches('/').to_string(),
+        None => {
+            tracing::error!("engine role without registration: set PEBBLES_MAIN");
+            return;
+        }
     };
     // No token → the pending-approval flow (REQ-06): keep knocking until an
-    // admin approves or rejects on the main.
+    // admin approves or rejects on the main. Registered engines don't need
+    // one — they prove themselves with their id + secret.
     let token = std::env::var("PEBBLES_JOIN_TOKEN").unwrap_or_default();
-    if token.is_empty() {
+    if token.is_empty() && sticky.is_none() {
         tracing::warn!("no join token: requesting registration as PENDING APPROVAL");
-    }
-    let main = main.trim_end_matches('/').to_string();
-
-    let lake_root = crate::catalog::lake_root();
-    let lake_ok = lake_root.exists();
-    if !lake_ok {
-        // REQ-26: fail loudly — an engine that can't see the lake is useless.
-        tracing::error!(lake = %lake_root.display(), "LAKE PATH NOT REACHABLE on this engine");
     }
 
     let name = std::env::var("PEBBLES_ENGINE_NAME")
         .ok()
+        .or_else(|| sticky.as_ref().map(|s| s.name.clone()))
         .or_else(|| std::fs::read_to_string("/etc/hostname").ok())
         .map(|s| s.trim().to_string())
         .unwrap_or_else(|| format!("engine-{}", random_hex(2)));
-    let address = advertise_address(&main);
-    let request = RegisterEngineRequest {
-        token,
-        name: name.clone(),
-        address,
-        resources: EngineResources {
-            cpus: std::thread::available_parallelism()
-                .map(|n| n.get() as u32)
-                .unwrap_or(1),
-            memory_bytes: total_memory_bytes(),
-        },
-        existing_users: pebbles_identity::host::list_users()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|u| (u.uid, u.username))
-            .collect(),
-        lake_ok,
-    };
 
     loop {
+        // Rebuilt every attempt: users, lake reachability, address, and our
+        // current identity all drift over time.
+        let lake_root = crate::catalog::lake_root();
+        let lake_ok = lake_root.exists();
+        if !lake_ok {
+            // REQ-26: fail loudly — an engine that can't see the lake is useless.
+            tracing::error!(lake = %lake_root.display(), "LAKE PATH NOT REACHABLE on this engine");
+        }
+        let me = cluster.engine_self.read().unwrap().clone();
+        let registered = me.is_some();
+        let request = RegisterEngineRequest {
+            token: token.clone(),
+            name: name.clone(),
+            address: advertise_address(&main),
+            resources: EngineResources {
+                cpus: std::thread::available_parallelism()
+                    .map(|n| n.get() as u32)
+                    .unwrap_or(1),
+                memory_bytes: total_memory_bytes(),
+            },
+            existing_users: pebbles_identity::host::list_users()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|u| (u.uid, u.username))
+                .collect(),
+            lake_ok,
+            engine_id: me.as_ref().map(|s| s.engine_id.clone()),
+            secret: me.as_ref().map(|s| s.secret.clone()),
+        };
+
         match cluster
             .http
             .post(format!("{main}/cluster/register"))
@@ -617,17 +704,21 @@ pub async fn engine_boot(config_dir: PathBuf, cluster: std::sync::Arc<Cluster>) 
                             &granted.identity.shadow,
                             &granted.identity.group,
                         ) {
+                            Ok(0) => {}
                             Ok(n) => tracing::info!(accounts = n, "identity snapshot applied"),
                             Err(err) => tracing::error!(%err, "applying identity snapshot failed"),
                         }
+                        let fresh =
+                            !registered || me.as_ref().is_some_and(|s| s.secret != granted.secret);
                         cluster.save_engine_self(EngineSelf {
                             main: main.clone(),
                             engine_id: granted.engine_id,
                             secret: granted.secret,
                             name: name.clone(),
                         });
-                        tracing::info!(engine = %name, main = %main, "registered with the main");
-                        return;
+                        if fresh {
+                            tracing::info!(engine = %name, main = %main, "registered with the main");
+                        }
                     }
                     Err(err) => tracing::error!(%err, "malformed registration response"),
                 }
@@ -639,15 +730,29 @@ pub async fn engine_boot(config_dir: PathBuf, cluster: std::sync::Arc<Cluster>) 
                 let status = resp.status();
                 let body = resp.text().await.unwrap_or_default();
                 tracing::error!(%status, body, "registration refused");
-                if status == reqwest::StatusCode::UNAUTHORIZED
-                    || status == reqwest::StatusCode::CONFLICT
+                if !registered
+                    && (status == reqwest::StatusCode::UNAUTHORIZED
+                        || status == reqwest::StatusCode::CONFLICT)
                 {
                     return; // bad/used token or uid drift: retrying won't help
                 }
+                // Registered engines keep reconciling: a replaced main routes
+                // us into its pending queue via the tokenless path above.
             }
-            Err(err) => tracing::warn!(%err, "main unreachable; retrying"),
+            Err(err) => {
+                if registered {
+                    tracing::debug!(%err, "main unreachable; will reconcile again");
+                } else {
+                    tracing::warn!(%err, "main unreachable; retrying");
+                }
+            }
         }
-        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        let sleep = if cluster.engine_self.read().unwrap().is_some() {
+            RECONCILE_INTERVAL_SECS
+        } else {
+            10
+        };
+        tokio::time::sleep(std::time::Duration::from_secs(sleep)).await;
     }
 }
 
@@ -699,6 +804,73 @@ mod tests {
         let c = Cluster::load(dir.path());
         std::mem::forget(dir); // keep the backing dir alive for the test
         c
+    }
+
+    fn register_req(name: &str) -> RegisterEngineRequest {
+        RegisterEngineRequest {
+            token: "t".into(),
+            name: name.into(),
+            address: "http://10.0.0.7:7443".into(),
+            resources: EngineResources {
+                cpus: 4,
+                memory_bytes: 0,
+            },
+            existing_users: vec![],
+            lake_ok: true,
+            engine_id: None,
+            secret: None,
+        }
+    }
+
+    #[test]
+    fn reregistration_requires_the_exact_id_and_secret() {
+        let c = cluster();
+        let record = c.register_engine(&register_req("w1"));
+
+        // right pair: record refreshed (new address), same secret
+        let mut req = register_req("w1");
+        req.address = "http://10.0.0.9:7443/".into();
+        req.engine_id = Some(record.id.clone());
+        req.secret = Some(record.secret.clone());
+        let refreshed = c.reregister(&req).expect("known engine reconciles");
+        assert_eq!(refreshed.secret, record.secret);
+        assert_eq!(refreshed.address, "http://10.0.0.9:7443");
+
+        // wrong secret: refused — falls back to the token/pending path
+        let mut bad = register_req("w1");
+        bad.engine_id = Some(record.id.clone());
+        bad.secret = Some("stolen".into());
+        assert!(c.reregister(&bad).is_none());
+
+        // a replaced main knows nothing: refused
+        let fresh = cluster();
+        let mut req = register_req("w1");
+        req.engine_id = Some(record.id);
+        req.secret = Some(record.secret);
+        assert!(fresh.reregister(&req).is_none());
+    }
+
+    #[test]
+    fn remote_session_handles_survive_a_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = Cluster::load(dir.path());
+        let record = c.register_engine(&register_req("w1"));
+        let local = c.map_remote(&record, 7);
+        assert!(local > REMOTE_ID_BASE);
+
+        // a fresh Cluster over the same dir (main restarted) still routes it
+        let reloaded = Cluster::load(dir.path());
+        let r = reloaded.remote_of(local).expect("handle survived restart");
+        assert_eq!(r.remote_id, 7);
+        assert_eq!(r.engine_name, "w1");
+        // new ids never collide with restored ones
+        let record2 = reloaded.engine_by_name("w1").unwrap();
+        assert!(reloaded.map_remote(&record2, 8) > local);
+
+        // unmap persists too
+        reloaded.unmap_remote(local);
+        let again = Cluster::load(dir.path());
+        assert!(again.remote_of(local).is_none());
     }
 
     #[test]

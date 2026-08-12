@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { Page, AccentButton } from "../components/Page";
 import { Table, Td, StatusDot } from "../components/Table";
+import { LOST_HINT, engineTone, isLost } from "../engines";
 
 interface Engine {
   name: string;
@@ -10,13 +11,6 @@ interface Engine {
   resources: { cpus: number; memory_bytes: number };
   access?: string;
   sessions: number;
-}
-
-function tone(state: string): "ok" | "warn" | "err" | "dim" {
-  if (state.startsWith("available") || state.startsWith("in use")) return "ok";
-  if (state.startsWith("draining")) return "warn";
-  if (state === "stopped") return "dim";
-  return "dim";
 }
 
 export function Engines() {
@@ -37,10 +31,17 @@ export function Engines() {
           {engines.map((e) => (
             <tr key={e.name}>
               <Td>
-                <StatusDot tone={tone(e.state)} />
+                <StatusDot tone={engineTone(e.state)} />
               </Td>
               <Td>{e.name}</Td>
-              <Td>{e.state}</Td>
+              <Td>
+                <span
+                  style={isLost(e.state) ? { color: "var(--err)" } : undefined}
+                  title={isLost(e.state) ? LOST_HINT : undefined}
+                >
+                  {e.state}
+                </span>
+              </Td>
               <Td>{e.sessions}</Td>
               <Td>{e.resources.cpus}</Td>
               <Td mono>{e.access ?? "everyone"}</Td>

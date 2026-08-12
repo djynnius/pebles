@@ -8,6 +8,7 @@ import {
   JOB_NAME,
   TASK_TYPES,
   loadPrefs,
+  refOk,
   savePrefs,
   type JobPrefs,
   type Workflow,
@@ -34,7 +35,22 @@ const blankTask = (n: number): WorkflowTask => ({
   catalog: null,
   depends_on: [],
   retries: 0,
+  repo: null,
+  ref: null,
 });
+
+/** The payload means different things once a task is pinned to a repo. */
+const payloadLabel = (task: WorkflowTask): string => {
+  if (task.repo) return "Path in repo";
+  return task.task_type === "sql" ? "SQL" : "Payload";
+};
+
+const payloadPlaceholder = (task: WorkflowTask): string => {
+  if (task.repo) return "pipelines/report.sql";
+  if (task.task_type === "sql") return "INSERT INTO gold.claims_monthly SELECT …";
+  if (task.task_type === "notebook") return "notebooks/monthly_refresh.json";
+  return "the script body to run";
+};
 
 export function JobBuilder() {
   const nav = useNavigate();
@@ -48,6 +64,7 @@ export function JobBuilder() {
   const [prefs, setPrefs] = useState<JobPrefs>(DEFAULT_PREFS);
   const [tasks, setTasks] = useState<WorkflowTask[]>([blankTask(1)]);
   const [engines, setEngines] = useState<EngineRow[]>([]);
+  const [repos, setRepos] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(!editing);
@@ -57,6 +74,12 @@ export function JobBuilder() {
       .get<EngineRow[]>("/engines")
       .then(setEngines)
       .catch(() => setEngines([]));
+    // The repo list is the user's own ~/repos (REQ-37) — no repos is normal, so
+    // a failure here is silent and the tasks simply stay inline.
+    api
+      .get<string[]>("/repos")
+      .then(setRepos)
+      .catch(() => setRepos([]));
   }, []);
 
   // Editing loads the saved workflow out of the list — there is no single-job
@@ -76,7 +99,12 @@ export function JobBuilder() {
         if (found.schedule) setSchedule(found.schedule);
         setTasks(
           found.tasks.length > 0
-            ? found.tasks.map((t) => ({ ...t, depends_on: t.depends_on ?? [] }))
+            ? found.tasks.map((t) => ({
+                ...t,
+                depends_on: t.depends_on ?? [],
+                repo: t.repo ?? null,
+                ref: t.ref ?? null,
+              }))
             : [blankTask(1)],
         );
         setPrefs(loadPrefs(found.name));
@@ -116,6 +144,10 @@ export function JobBuilder() {
     tasks.every((t) => t.id.trim().length > 0) &&
     new Set(tasks.map((t) => t.id.trim())).size === tasks.length;
 
+  /** A ref only exists with a repo, and only the server-legal shape is offered. */
+  const refBad = (t: WorkflowTask) =>
+    Boolean(t.repo) && Boolean(t.ref?.trim()) && !refOk(t.ref!.trim());
+
   const save = () => {
     if (!nameOk) {
       setError("Names start with a lower-case letter, then letters, digits, dash or underscore.");
@@ -125,20 +157,36 @@ export function JobBuilder() {
       setError("Every task needs a unique, non-empty id.");
       return;
     }
+    const badRef = tasks.find(refBad);
+    if (badRef) {
+      setError(
+        `${badRef.id}: a ref is letters, digits, dot, underscore, slash or dash — ` +
+          "at most 128 of them, and it cannot start with “-”.",
+      );
+      return;
+    }
     setBusy(true);
     setError("");
     const body = {
       name,
       schedule: manual ? null : schedule.trim() || null,
-      tasks: tasks.map((t) => ({
-        id: t.id.trim(),
-        task_type: t.task_type,
-        payload: t.payload,
-        engine: t.engine || null,
-        catalog: t.catalog || null,
-        depends_on: t.depends_on ?? [],
-        retries: Number(t.retries ?? 0) || 0,
-      })),
+      tasks: tasks.map((t) => {
+        // repo/ref only travel when they mean something: a ref without a repo
+        // is meaningless and pebblesd rejects it outright.
+        const repo = t.repo || null;
+        const ref = repo ? t.ref?.trim() || null : null;
+        return {
+          id: t.id.trim(),
+          task_type: t.task_type,
+          payload: t.payload,
+          engine: t.engine || null,
+          catalog: t.catalog || null,
+          depends_on: t.depends_on ?? [],
+          retries: Number(t.retries ?? 0) || 0,
+          ...(repo ? { repo } : {}),
+          ...(ref ? { ref } : {}),
+        };
+      }),
     };
     api
       .post("/jobs", body)
@@ -357,20 +405,69 @@ export function JobBuilder() {
               </Field>
             </div>
 
+            {/* REQ-37: pin the step to a file in a repo instead of pasting code. */}
+            <div
+              style={{
+                marginTop: 14,
+                display: "grid",
+                gridTemplateColumns: task.repo
+                  ? "repeat(auto-fit, minmax(180px, 1fr))"
+                  : "minmax(0, 1fr)",
+                gap: 14,
+              }}
+            >
+              <Field
+                label="Run from repo"
+                hint={
+                  task.repo
+                    ? "The payload below is a path inside this repo."
+                    : "Or leave it inline and paste the code below."
+                }
+              >
+                <select
+                  value={task.repo ?? ""}
+                  onChange={(e) =>
+                    patch(i, {
+                      repo: e.target.value || null,
+                      // dropping the repo drops the ref with it
+                      ref: e.target.value ? task.ref ?? null : null,
+                    })
+                  }
+                  style={input}
+                >
+                  <option value="">(inline)</option>
+                  {repos.map((r) => (
+                    <option key={r} value={r}>
+                      {r}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              {task.repo && (
+                <Field label="Ref" hint="Branch, tag or sha. The run log records the resolved sha.">
+                  <input
+                    value={task.ref ?? ""}
+                    onChange={(e) => patch(i, { ref: e.target.value })}
+                    placeholder="HEAD"
+                    spellCheck={false}
+                    className="mono"
+                    style={{
+                      ...input,
+                      borderColor: refBad(task) ? "var(--err)" : "var(--border)",
+                    }}
+                  />
+                </Field>
+              )}
+            </div>
+
             <div style={{ marginTop: 14 }}>
-              <Field label="Payload">
+              <Field label={payloadLabel(task)}>
                 <textarea
                   value={task.payload}
                   onChange={(e) => patch(i, { payload: e.target.value })}
-                  rows={5}
+                  rows={task.repo ? 2 : 5}
                   spellCheck={false}
-                  placeholder={
-                    task.task_type === "sql"
-                      ? "INSERT INTO gold.claims_monthly SELECT …"
-                      : task.task_type === "notebook"
-                        ? "notebooks/monthly_refresh.json"
-                        : "the script body to run"
-                  }
+                  placeholder={payloadPlaceholder(task)}
                   className="mono"
                   style={{ ...input, resize: "vertical", lineHeight: 1.6, fontSize: 12.5 }}
                 />

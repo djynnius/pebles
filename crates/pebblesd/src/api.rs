@@ -601,6 +601,31 @@ async fn revoke_token(State(state): State<AppState>, Path(id): Path<String>) -> 
     }
 }
 
+/// The current identity snapshot, refreshed from live accounts first (REQ-14).
+async fn identity_snapshot(
+    config_dir: std::path::PathBuf,
+) -> Result<IdentitySnapshot, (StatusCode, Json<ApiError>)> {
+    tokio::task::spawn_blocking(move || {
+        // Make sure the snapshot reflects live accounts before handing it over.
+        let _ = pebbles_identity::host::persist_users(&config_dir);
+        pebbles_identity::host::read_snapshot(&config_dir)
+    })
+    .await
+    .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))
+    .map(|snap| {
+        snap.map(|(passwd, shadow, group)| IdentitySnapshot {
+            passwd,
+            shadow,
+            group,
+        })
+        .unwrap_or(IdentitySnapshot {
+            passwd: String::new(),
+            shadow: String::new(),
+            group: String::new(),
+        })
+    })
+}
+
 async fn register_engine(
     State(state): State<AppState>,
     Json(req): Json<RegisterEngineRequest>,
@@ -616,6 +641,23 @@ async fn register_engine(
             StatusCode::CONFLICT,
             format!("uid audit failed, registration refused: {conflict}"),
         ));
+    }
+    // Reconcile (NFR-08/REQ-14): a known engine proves itself with id + secret
+    // — record refreshed, same secret, current identity snapshot returned. An
+    // unknown pair falls through to the token / pending-approval path below.
+    if req.engine_id.is_some() {
+        if let Some(record) = state.cluster.reregister(&req) {
+            let identity = identity_snapshot(state.config_dir.clone()).await?;
+            return Ok(Json(RegisterEngineResponse {
+                engine_id: record.id,
+                secret: record.secret,
+                identity,
+            }));
+        }
+        tracing::warn!(
+            engine = %req.name,
+            "re-registration with unknown id/secret — treating as a new engine"
+        );
     }
     if req.token.is_empty() {
         // Tokenless contact (REQ-06): pending until an admin approves; the
@@ -633,24 +675,7 @@ async fn register_engine(
             "invalid, used, or expired join token",
         ));
     }
-    let config_dir = state.config_dir.clone();
-    let identity = tokio::task::spawn_blocking(move || {
-        // Make sure the snapshot reflects live accounts before handing it over.
-        let _ = pebbles_identity::host::persist_users(&config_dir);
-        pebbles_identity::host::read_snapshot(&config_dir)
-    })
-    .await
-    .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?
-    .map(|(passwd, shadow, group)| IdentitySnapshot {
-        passwd,
-        shadow,
-        group,
-    })
-    .unwrap_or(IdentitySnapshot {
-        passwd: String::new(),
-        shadow: String::new(),
-        group: String::new(),
-    });
+    let identity = identity_snapshot(state.config_dir.clone()).await?;
 
     let record = state.cluster.register_engine(&req);
     tracing::info!(engine = %record.name, address = %record.address, "engine registered");

@@ -7,7 +7,32 @@ All notable changes to Pebbles are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **M2.4d — incus joins the main+engine matrix, plus an NFR-08
+  degraded-but-alive proof**: `scripts/smoke/main-plus-engine.sh` now runs
+  under incus (`RUNTIME=incus CTR_CMD="sudo incus"`) — two unprivileged system
+  containers on the incus bridge, the reserved uid range identity-mapped by
+  the `pebbles` profile, homes and lake shared as host-directory `disk`
+  devices attached to both containers (pre-owned by uid 70000, so no
+  `shift=true` dependency). Every duo cell (docker, rootful podman, incus)
+  now ends with the NFR-08 phase: an open engine session survives a graceful
+  main stop and still answers SQL directly on the engine's bearer-authed
+  cluster API, unauthenticated session creation is refused while the main is
+  down (nothing new starts), and when the main returns the engine shows
+  `available` again — no re-join — and a new cross-engine session answers.
+  The Integration workflow gained the matching incus `main-plus-engine` cell
+  (same convert+import preparation as the incus smoke cell).
 - **M2.4 — Ops hardening (in progress)**:
+  - **NFR-08 completed on the main's side** (both gaps surfaced by the smoke
+    audit): through-main handles to remote sessions now **persist across a
+    main restart** (remote.json; address/secret re-resolve from the engine
+    record on load, so a rotated secret invalidates stale refs), and engines
+    now run a **60s reconcile loop** instead of registering once — the record
+    refreshes (DHCP address drift), the identity snapshot re-applies (users
+    created while an engine was down arrive on reconnect, closing the REQ-14
+    replication gap), and an engine facing a *replaced* main automatically
+    lands in its pending-approval queue by proving-or-failing its id+secret.
+    Re-registration keeps the same secret; an unknown pair falls back to the
+    token/pending path.
   - **Repo-ref workflow tasks (REQ-37)**: a task can now name a `repo` and a
     `ref` — the payload becomes a path inside `~/repos/<repo>`, resolved to a
     commit sha at run time (logged for reproducibility) and read via

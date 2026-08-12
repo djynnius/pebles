@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import { Switch } from "../components/Page";
+import { LOST_HINT, isLost } from "../engines";
 
 /*
  * /engineconfig — one engine's detail (spec §5 "engineconfig"). Everything the
@@ -134,7 +135,12 @@ export function EngineConfig() {
 
           <div style={{ ...card, marginTop: 20, overflow: "hidden" }}>
             <Row label="Address" value={engine.address} mono />
-            <Row label="State" value={engine.state} />
+            <Row
+              label="State"
+              value={engine.state}
+              color={isLost(engine.state) ? "var(--err)" : undefined}
+              title={isLost(engine.state) ? LOST_HINT : undefined}
+            />
             <Row label="Sessions" value={String(engine.sessions)} />
             <Row label="CPUs" value={String(engine.resources.cpus)} />
             <Row
@@ -208,11 +214,15 @@ function Row({
   value,
   mono,
   last,
+  color,
+  title,
 }: {
   label: string;
   value: string;
   mono?: boolean;
   last?: boolean;
+  color?: string;
+  title?: string;
 }) {
   return (
     <div
@@ -225,7 +235,11 @@ function Row({
       }}
     >
       <span style={{ width: 180, color: "var(--text-muted)" }}>{label}</span>
-      <span className={mono ? "mono" : undefined} style={{ fontSize: mono ? 12.5 : 13 }}>
+      <span
+        className={mono ? "mono" : undefined}
+        title={title}
+        style={{ fontSize: mono ? 12.5 : 13, color }}
+      >
         {value}
       </span>
     </div>

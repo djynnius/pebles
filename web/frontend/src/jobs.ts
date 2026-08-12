@@ -13,6 +13,13 @@ export interface WorkflowTask {
   mode?: string | null;
   depends_on?: string[];
   retries?: number | null;
+  /**
+   * REQ-37: a repo name under the user's ~/repos. When set, `payload` is a
+   * PATH inside that repo rather than the code itself.
+   */
+  repo?: string | null;
+  /** Branch, tag or sha the path is read at (default HEAD); needs `repo`. */
+  ref?: string | null;
 }
 
 export interface Workflow {
@@ -43,6 +50,17 @@ export const TASK_TYPES = ["sql", "python", "r", "shell", "notebook"] as const;
 
 /** pebblesd's `valid_name` for workflows, mirrored so the form refuses early. */
 export const JOB_NAME = /^[a-z][a-z0-9_-]{0,47}$/;
+
+/**
+ * A plausible git rev (REQ-37), mirroring pebblesd's check: no quotes that
+ * could escape the generated DAG, no leading '-' that git would read as a flag.
+ * The repo name needs no mirror — it comes from a select of the user's repos.
+ */
+export const GIT_REF = /^[A-Za-z0-9._/-]{1,128}$/;
+
+export function refOk(ref: string): boolean {
+  return GIT_REF.test(ref) && !ref.startsWith("-");
+}
 
 /** Bar/dot colour for a run or task state (spec §5 "run"). */
 export function runColor(state: string): string {
