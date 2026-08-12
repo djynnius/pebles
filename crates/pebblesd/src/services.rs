@@ -215,6 +215,15 @@ fn postgres(cfg: &Config) -> Option<ServiceSpec> {
                 datadir.display().to_string(),
                 "--auth-local=peer".into(),
                 "--auth-host=reject".into(),
+                // Pin the cluster to UTF-8 explicitly. initdb otherwise derives the
+                // encoding from the ambient locale, and on Incus the OCI→system-container
+                // conversion strips all environment — so pebblesd-as-init runs in the C
+                // locale and initdb would create a SQL_ASCII cluster. psycopg2 then picks
+                // an ASCII client codec and the first non-ASCII byte (an em dash in a
+                // generated DAG's text) crashes Airflow's bulk_write_to_db. C.UTF-8 is
+                // always present in glibc, so this never fails to find the locale.
+                "--encoding=UTF8".into(),
+                "--locale=C.UTF-8".into(),
             ],
             envs: vec![],
             run_as: Some((uid, gid)),

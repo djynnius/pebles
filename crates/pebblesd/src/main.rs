@@ -59,6 +59,19 @@ async fn main() -> anyhow::Result<()> {
             "/opt/conda/envs/pebbles/bin:/opt/conda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         );
     }
+    // Same env-stripping story: Incus gives its init NO locale, so the whole
+    // supervised tree would run in the C (ASCII) locale — Postgres initdb creates a
+    // SQL_ASCII cluster and Python (Airflow) treats non-ASCII as an error. Restore a
+    // UTF-8 locale (only if the runtime didn't set one; Docker/Podman may). C.UTF-8
+    // is always compiled into glibc, so it needs no locale-gen.
+    for key in ["LANG", "LC_ALL"] {
+        if std::env::var_os(key).is_none() {
+            std::env::set_var(key, "C.UTF-8");
+        }
+    }
+    if std::env::var_os("PYTHONUTF8").is_none() {
+        std::env::set_var("PYTHONUTF8", "1");
+    }
     tracing_subscriber::fmt().with_target(false).init();
     #[cfg(target_os = "linux")]
     ensure_init_mounts();
