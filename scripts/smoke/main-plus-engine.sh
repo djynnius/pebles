@@ -278,7 +278,7 @@ expect '"answer":42' "survivor answers before the failure" "$pre"
 secret="$(ctr_exec "$ENGINE" sed -n 's/.*"secret": *"\([^"]*\)".*/\1/p' \
   /var/lib/pebbles/cluster/engine.json)"
 [ -n "$secret" ] || { echo "FAIL: engine has no sticky cluster secret" >&2; exit 1; }
-eng() { ctr_exec "$ENGINE" curl -fsSk --max-time 30 -H "Authorization: Bearer $secret" "$@"; }
+eng() { ctr_exec "$ENGINE" curl -fsSk --http1.1 --max-time 30 -H "Authorization: Bearer $secret" "$@"; }
 rid="$(eng https://127.0.0.1:7443/engine/sessions | grep -o '{[^}]*}' \
   | grep "\"pid\":$surv_pid" | sed -n 's/.*"id":\([0-9]*\).*/\1/p' | head -1)"
 [ -n "$rid" ] || { echo "FAIL: survivor not listed on the engine's own API" >&2; exit 1; }
@@ -297,9 +297,12 @@ expect '"answer":42' "survivor answers with the main down (NFR-08)" "$alive"
 echo "==> nothing new starts: without the main's credential the engine refuses"
 # Session creation exists ONLY behind the cluster secret the main holds; with
 # the main down, an unauthenticated request must fail cleanly (401).
-newcode="$(ctr_exec "$ENGINE" curl -sk -o /dev/null -w '%{http_code}' \
+# --http1.1 + tolerated exit: the TLS port negotiates h2 via ALPN, and curl can
+# exit 92 on an abrupt h2 stream teardown AFTER receiving the status — the
+# %{http_code} it already wrote is the whole assertion.
+newcode="$(ctr_exec "$ENGINE" curl -sk --http1.1 -o /dev/null -w '%{http_code}' \
   -H 'Content-Type: application/json' -d '{"username":"maya"}' \
-  https://127.0.0.1:7443/engine/sessions)"
+  https://127.0.0.1:7443/engine/sessions || true)"
 [ "$newcode" = "401" ] \
   || { echo "FAIL: engine must refuse unauthenticated session creation, got $newcode" >&2; exit 1; }
 
