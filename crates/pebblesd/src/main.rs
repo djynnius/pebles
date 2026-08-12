@@ -75,6 +75,8 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_target(false).init();
     #[cfg(target_os = "linux")]
     ensure_init_mounts();
+    #[cfg(target_os = "linux")]
+    tokio::spawn(reap_orphans());
 
     let cfg = config::Config::load(wizard::prompt_role)?;
     tracing::info!(role = %cfg.role, config = %cfg.config_dir.display(), "pebblesd starting");
@@ -131,26 +133,54 @@ async fn main() -> anyhow::Result<()> {
 /// — concretely, Airflow's LocalExecutor scheduler crash-loops at startup and no
 /// workflow ever triggers, while everything else (Postgres falls back to sysv shm
 /// at initdb probe time) appears healthy.
+///
+/// /run is the same story: Podman gives containers a tmpfs there, Incus leaves it
+/// to the init — and a rootfs-backed /run keeps stale state (postgres socket files,
+/// pid files) across unclean restarts. Docker neither mounts it nor grants
+/// CAP_SYS_ADMIN, so the attempt fails with EPERM there — expected, and harmless:
+/// that is the behavior Docker deployments have always had.
+///
+/// Deliberately NOT mounted: /tmp (tmpfs would put DuckDB spill files in RAM — a
+/// data platform wants them on disk), /dev/pts and /proc and /sys (Incus mounts
+/// all three for every system container, exactly like Docker/Podman do).
 #[cfg(target_os = "linux")]
 fn ensure_init_mounts() {
     if std::process::id() != 1 {
         return; // not the init — whoever booted us owns the mount table
     }
     let mounts = std::fs::read_to_string("/proc/self/mounts").unwrap_or_default();
-    if mounts
-        .lines()
-        .any(|l| l.split_whitespace().nth(1) == Some("/dev/shm"))
-    {
-        return; // the runtime already mounted it (Docker/Podman)
+    let mounted = |target: &str| {
+        mounts
+            .lines()
+            .any(|l| l.split_whitespace().nth(1) == Some(target))
+    };
+    if !mounted("/dev/shm") {
+        match mount_tmpfs("/dev/shm", "mode=1777") {
+            Ok(()) => tracing::info!("mounted tmpfs on /dev/shm (init duty on Incus/LXC)"),
+            Err(err) => tracing::error!(
+                %err,
+                "mounting /dev/shm failed; Python multiprocessing (Airflow) will break"
+            ),
+        }
     }
-    if let Err(err) = std::fs::create_dir_all("/dev/shm") {
-        tracing::error!(%err, "cannot create /dev/shm mountpoint");
-        return;
+    if !mounted("/run") {
+        match mount_tmpfs("/run", "mode=755") {
+            Ok(()) => tracing::info!("mounted tmpfs on /run (init duty on Incus/LXC)"),
+            Err(err) if err.raw_os_error() == Some(libc::EPERM) => {
+                tracing::info!("runtime denies mount(2); keeping the image's /run (Docker)")
+            }
+            Err(err) => tracing::error!(%err, "mounting tmpfs on /run failed"),
+        }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn mount_tmpfs(target: &str, options: &str) -> std::io::Result<()> {
+    std::fs::create_dir_all(target)?;
     let src = std::ffi::CString::new("tmpfs").expect("cstr");
-    let target = std::ffi::CString::new("/dev/shm").expect("cstr");
+    let target = std::ffi::CString::new(target).expect("cstr");
     let fstype = std::ffi::CString::new("tmpfs").expect("cstr");
-    let data = std::ffi::CString::new("mode=1777").expect("cstr");
+    let data = std::ffi::CString::new(options).expect("cstr");
     // SAFETY: plain mount(2) with valid, NUL-terminated arguments.
     let rc = unsafe {
         libc::mount(
@@ -162,13 +192,88 @@ fn ensure_init_mounts() {
         )
     };
     if rc == 0 {
-        tracing::info!("mounted tmpfs on /dev/shm (init duty on Incus/LXC)");
+        Ok(())
     } else {
-        tracing::error!(
-            err = %std::io::Error::last_os_error(),
-            "mounting /dev/shm failed; Python multiprocessing (Airflow) will break"
-        );
+        Err(std::io::Error::last_os_error())
     }
+}
+
+/// PID-1 duty: reap orphaned zombies. Tokio reaps pebblesd's OWN children
+/// (supervised services, session kernels, CLI helpers) within milliseconds of
+/// SIGCHLD — but as init, pebblesd also inherits every orphaned descendant: a
+/// SIGKILLed sshd's session shells, a crashed Airflow scheduler's LocalExecutor
+/// workers, a dead postmaster's backends. Nothing ever waits on those, so they
+/// would sit in the process table as zombies for the container's lifetime.
+///
+/// A naive `waitpid(-1)` loop is WRONG here: it steals exit notifications from
+/// tokio::process and std::process (their own waitpid gets ECHILD and the exit
+/// status is lost). Instead: scan /proc for zombies whose parent is pid 1 and
+/// reap a pid only after it has stayed zombie — same pid AND same starttime —
+/// across two consecutive sweeps. Our in-process reapers collect their children
+/// promptly, so anything zombie for a full sweep interval is an orphan nobody
+/// else will ever wait on.
+#[cfg(target_os = "linux")]
+async fn reap_orphans() {
+    if std::process::id() != 1 {
+        return; // not the init — orphans don't reparent to us
+    }
+    let mut pending: std::collections::HashSet<(u32, u64)> = std::collections::HashSet::new();
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        let current = zombie_orphans();
+        for &(pid, starttime) in pending.intersection(&current) {
+            // Re-check right before reaping: the (pid, starttime) pair must still
+            // be a zombie child of ours — closes the already-tiny window where a
+            // slow in-process reaper caught up and the pid got recycled.
+            if zombie_stat(pid) != Some((b'Z', 1, starttime)) {
+                continue;
+            }
+            let mut status: libc::c_int = 0;
+            // SAFETY: WNOHANG waitpid on a specific pid; never blocks, and a pid
+            // that is no longer our zombie child just returns 0/ECHILD.
+            let rc = unsafe { libc::waitpid(pid as i32, &mut status, libc::WNOHANG) };
+            if rc == pid as i32 {
+                tracing::info!(pid, "reaped orphaned zombie (init duty)");
+            }
+        }
+        pending = current;
+    }
+}
+
+/// All current zombies that have been reparented to us: (pid, starttime) pairs —
+/// starttime disambiguates pid reuse across sweeps.
+#[cfg(target_os = "linux")]
+fn zombie_orphans() -> std::collections::HashSet<(u32, u64)> {
+    let mut set = std::collections::HashSet::new();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return set;
+    };
+    for entry in entries.flatten() {
+        let Some(pid) = entry.file_name().to_str().and_then(|s| s.parse().ok()) else {
+            continue;
+        };
+        if let Some((b'Z', 1, starttime)) = zombie_stat(pid) {
+            set.insert((pid, starttime));
+        }
+    }
+    set
+}
+
+#[cfg(target_os = "linux")]
+fn zombie_stat(pid: u32) -> Option<(u8, i32, u64)> {
+    stat_fields(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)
+}
+
+/// (state, ppid, starttime) from /proc/<pid>/stat content. The comm field may
+/// itself contain spaces and parentheses, so parse from the LAST ')'.
+#[cfg(any(target_os = "linux", test))]
+fn stat_fields(stat: &str) -> Option<(u8, i32, u64)> {
+    let rest = stat.rsplit_once(')')?.1;
+    let mut fields = rest.split_whitespace();
+    let state = *fields.next()?.as_bytes().first()?; // field 3
+    let ppid = fields.next()?.parse().ok()?; // field 4
+    let starttime = fields.nth(17)?.parse().ok()?; // field 22
+    Some((state, ppid, starttime))
 }
 
 /// LXC/Incus ask a system container's init to shut down with SIGPWR (the
@@ -232,5 +337,33 @@ fn session_state(cfg: &config::Config, clu: std::sync::Arc<cluster::Cluster>) ->
         default_session_memory,
         config_dir: cfg.config_dir.clone(),
         cluster: clu,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stat_fields;
+
+    // Real-shaped /proc/<pid>/stat line: pid (comm) state ppid … starttime(22) …
+    const ZOMBIE: &str = "742 (airflow worker) Z 1 740 740 0 -1 4227116 0 0 0 0 1 2 3 4 \
+                          20 0 1 0 98765 0 0 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 1 0 0 0 0 0";
+
+    #[test]
+    fn stat_parser_reads_state_ppid_and_starttime() {
+        assert_eq!(stat_fields(ZOMBIE), Some((b'Z', 1, 98765)));
+    }
+
+    #[test]
+    fn stat_parser_survives_hostile_comm_names() {
+        // comm may contain spaces AND parentheses; only the LAST ')' ends it.
+        let stat = "99 (a) evil (comm)) R 42 99 99 0 -1 0 0 0 0 0 0 0 0 0 \
+                    20 0 1 0 12345 0 0 0";
+        assert_eq!(stat_fields(stat), Some((b'R', 42, 12345)));
+    }
+
+    #[test]
+    fn stat_parser_rejects_truncated_lines() {
+        assert_eq!(stat_fields("742 (x) Z 1 740"), None);
+        assert_eq!(stat_fields(""), None);
     }
 }

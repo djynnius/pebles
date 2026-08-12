@@ -307,6 +307,11 @@ impl Broker {
             .env("HOME", &req.home)
             .env("USER", &req.username)
             .env("LOGNAME", &req.username)
+            // env_clear() above also dropped the locale: without it R (and any
+            // non-Python tool the session runs) falls back to the C/ASCII locale
+            // and mangles non-ASCII data. C.UTF-8 is always compiled into glibc.
+            .env("LANG", "C.UTF-8")
+            .env("LC_ALL", "C.UTF-8")
             .env(
                 "PEBBLES_SESSION_MEMORY_BYTES",
                 req.memory_limit_bytes.to_string(),

@@ -3,9 +3,8 @@
 //! backoff, and graceful SIGTERM fan-out on shutdown.
 //!
 //! Note on zombies: every supervised process is a direct child, which tokio reaps.
-//! Re-parented grandchildren (a crashed service's workers) are not reaped yet; the
-//! proper subreaper strategy lands with the session broker in M0.4, which must own
-//! wait() semantics anyway.
+//! Re-parented grandchildren (a crashed service's workers) fall to pebblesd-as-init
+//! and are collected by the orphan reaper in `main.rs` (`reap_orphans`).
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};

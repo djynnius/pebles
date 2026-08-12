@@ -28,7 +28,11 @@ echo "==> unpacking rootfs"
 $SUDO umoci unpack --image "${WORK}/oci:pebbles" "${WORK}/bundle"
 
 echo "==> packaging rootfs.tar.xz"
-$SUDO tar -C "${WORK}/bundle/rootfs" --numeric-owner -cJf "${OUTDIR}/rootfs.tar.xz" .
+# --numeric-owner: the ADR-001 uid-consistency invariant rides on numeric ids.
+# --xattrs/--acls: mode bits (setuid, sticky) and hardlinks survive tar by
+# default, but xattrs — file capabilities (security.capability), ACLs — do NOT
+# unless asked for. GNU tar only; this script already runs on CI Linux.
+$SUDO tar -C "${WORK}/bundle/rootfs" --numeric-owner --xattrs --acls -cJf "${OUTDIR}/rootfs.tar.xz" .
 [ -n "$SUDO" ] && $SUDO chown "$(id -u):$(id -g)" "${OUTDIR}/rootfs.tar.xz"
 
 echo "==> packaging metadata.tar.xz"

@@ -231,6 +231,13 @@ fn airflow_env(config_dir: &Path) -> Vec<(String, String)> {
     vec![
         ("HOME".into(), home.display().to_string()),
         ("AIRFLOW_HOME".into(), home.display().to_string()),
+        // `airflow_cli` runs this env after env_clear(): restore the UTF-8 locale
+        // there too (the supervised scheduler inherits pebblesd's C.UTF-8 anyway).
+        // Same landmine as initdb-on-Incus: a C/ASCII locale turns the first
+        // non-ASCII byte into a crash deep inside Airflow.
+        ("LANG".into(), "C.UTF-8".into()),
+        ("LC_ALL".into(), "C.UTF-8".into()),
+        ("PYTHONUTF8".into(), "1".into()),
         ("AIRFLOW__CORE__FERNET_KEY".into(), fernet),
         (
             "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN".into(),
@@ -323,9 +330,22 @@ pub const WAIT_PG_SH: &str = "for i in $(seq 1 120); do \
     echo 'postgres never came up' >&2; exit 1";
 
 /// Idempotent, RACE-PROOF role + database provisioning, run AS the postgres user.
-/// Three services run this concurrently at boot: attempt the create, ignore the
-/// duplicate error, then verify existence — never check-then-create.
-pub const PROVISION_SH: &str = r#"psql -h /run/postgresql -d postgres -c "CREATE ROLE \"pebbles-airflow\" LOGIN" 2>/dev/null; psql -h /run/postgresql -d postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='pebbles-airflow'" | grep -q 1 || exit 1; psql -h /run/postgresql -d postgres -c "CREATE DATABASE airflow OWNER \"pebbles-airflow\"" 2>/dev/null; psql -h /run/postgresql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='airflow'" | grep -q 1"#;
+/// Attempt the create, ignore the duplicate error, then verify existence — never
+/// check-then-create. The whole thing RETRIES: the socket existing (WAIT_PG_SH)
+/// does not mean postgres accepts connections yet — after an unclean shutdown it
+/// answers "the database system is starting up" through crash recovery, and a
+/// single-shot pre-step failure would disable the Airflow service for the whole
+/// boot (supervisor pre-steps don't restart).
+pub const PROVISION_SH: &str = r#"for i in $(seq 1 90); do
+  psql -h /run/postgresql -d postgres -c "CREATE ROLE \"pebbles-airflow\" LOGIN" 2>/dev/null
+  psql -h /run/postgresql -d postgres -c "CREATE DATABASE airflow OWNER \"pebbles-airflow\"" 2>/dev/null
+  psql -h /run/postgresql -d postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='pebbles-airflow'" 2>/dev/null | grep -q 1 \
+    && psql -h /run/postgresql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='airflow'" 2>/dev/null | grep -q 1 \
+    && exit 0
+  sleep 2
+done
+echo 'airflow provisioning never succeeded: postgres never accepted the role/database' >&2
+exit 1"#;
 
 /// `airflow db migrate` with retries (concurrent first-boot services and a
 /// just-created database make one-shot migration brittle).

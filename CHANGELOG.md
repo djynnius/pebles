@@ -6,6 +6,28 @@ All notable changes to Pebbles are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- **Init-duty hardening sweep (Incus/LXC audit)** — preventive follow-up to the
+  three env/mount incus failures, closing what the OCI→Incus conversion and
+  pebblesd-as-PID-1 still left latent:
+  - **Orphan zombie reaping**: pebblesd (PID 1) now reaps re-parented orphans
+    (a killed sshd's shells, a crashed scheduler's LocalExecutor workers) via a
+    /proc sweep that only `waitpid`s processes zombie across two consecutive
+    scans — never stealing exit statuses from tokio/std process reapers.
+  - **/run as tmpfs**: mounted at boot when the runtime didn't provide one
+    (Incus; Podman already does, Docker denies mount(2) and keeps its old
+    behavior), so stale postgres socket/pid files can't survive unclean stops.
+  - **Airflow provisioning retries**: the Postgres role/database pre-step now
+    retries for up to 3 minutes instead of permanently disabling Jobs when the
+    socket exists but postgres is still in crash recovery ("starting up").
+  - **UTF-8 locale for env-cleared spawns**: session kernels (`LANG`/`LC_ALL`,
+    so R and shell tools don't run ASCII-only) and the Airflow CLI env
+    (`LANG`/`LC_ALL`/`PYTHONUTF8`) — the supervised tree already inherited it.
+  - **OCI→Incus conversion keeps xattrs/ACLs**: `tar --xattrs --acls` so file
+    capabilities survive the repack (mode bits and hardlinks already did).
+  - **deploy/incus/profile.yaml** documents forwarding the cluster API port
+    (7443) for multi-host installs — the profile only proxied 8080.
+
 ### Added
 - **React ops screens (SPA at `/app`)** — the port is feature-complete except
   Auto ETL: **Jobs** (expandable run history, run-now, edit), **Job builder**
