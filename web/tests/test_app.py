@@ -275,6 +275,15 @@ def client(daemon=None):
     return app.test_client()
 
 
+def api_signed_in(daemon=None):
+    c = client(daemon)
+    c.post("/api/login", json={"username": "maya", "password": "pebbles-demo-1"})
+    return c
+
+
+# ---- health & SPA serving ----------------------------------------------------
+
+
 def test_healthz_aggregates_pebblesd_over_the_socket():
     resp = client().get("/healthz")
     assert resp.status_code == 200
@@ -292,35 +301,32 @@ def test_healthz_degrades_to_503_when_pebblesd_is_unreachable():
     assert "no socket" in body["pebblesd"]["error"]
 
 
-def test_index_requires_login():
-    resp = client().get("/")
-    assert resp.status_code == 302
-    assert "/login" in resp.headers["Location"]
-
-
-def test_wrong_password_is_rejected_on_the_login_page():
-    resp = client().post("/login", data={"username": "maya", "password": "nope"})
-    assert resp.status_code == 401
-    assert "Invalid username or password" in resp.get_data(as_text=True)
-
-
-def test_login_and_signed_in_shell():
+def test_spa_owns_root_and_every_deep_link():
     c = client()
-    resp = c.post("/login", data={"username": "maya", "password": "pebbles-demo-1"})
-    assert resp.status_code == 302
+    # 200 when the React bundle is built, 503 with guidance otherwise — never 404,
+    # and never a redirect: the SPA handles auth client-side.
+    for path in ("/", "/catalog", "/sql", "/jobs", "/settings", "/nkoyo"):
+        assert c.get(path).status_code in (200, 503), path
 
-    shell = c.get("/")
-    assert shell.status_code == 200
-    body = shell.get_data(as_text=True)
-    assert "maya" in body and "70000" in body and "data-pb-theme" in body
 
-    c.get("/logout")
-    assert c.get("/").status_code == 302
+def test_legacy_app_prefix_redirects_home():
+    c = client()
+    resp = c.get("/app/catalog")
+    assert resp.status_code == 301
+    assert resp.headers["Location"].endswith("/catalog")
+
+
+def test_unknown_api_path_is_a_json_404_not_the_spa():
+    resp = api_signed_in().get("/api/definitely-not-a-thing")
+    assert resp.status_code == 404
+    assert resp.get_json()["error"] == "no such endpoint"
+
+
+# ---- auth ---------------------------------------------------------------------
 
 
 def test_json_api_auth_and_data():
     c = client()
-    # unauthenticated
     assert c.get("/api/me").status_code == 401
     assert c.get("/api/usage").status_code == 401
 
@@ -347,329 +353,13 @@ def test_json_api_auth_and_data():
     assert c.get("/api/me").status_code == 401
 
 
-def test_spa_route_serves_or_reports_missing_bundle():
-    # 200 when the React bundle is built, 503 with guidance otherwise — never 404.
-    assert client().get("/app").status_code in (200, 503)
+def test_api_endpoints_require_auth():
+    c = client()
+    for path in ("/api/catalogs", "/api/files", "/api/notebooks", "/api/jobs", "/api/tokens"):
+        assert c.get(path).status_code == 401, path
 
 
-def test_login_page_serves_the_design_shell():
-    resp = client().get("/login")
-    assert resp.status_code == 200
-    assert "data-pb-theme" in resp.get_data(as_text=True)
-
-
-def signed_in(daemon=None):
-    c = client(daemon)
-    c.post("/login", data={"username": "maya", "password": "pebbles-demo-1"})
-    return c
-
-
-def test_sql_editor_requires_login_and_serves_when_signed_in():
-    assert client().get("/sql").status_code == 302
-    resp = signed_in().get("/sql")
-    assert resp.status_code == 200
-    assert "Run" in resp.get_data(as_text=True)
-
-
-def test_sql_stream_streams_result_rows_over_sse():
-    resp = signed_in().get("/sql/stream?q=SELECT+42+AS+answer")
-    assert resp.status_code == 200
-    assert resp.mimetype == "text/event-stream"
-    body = resp.get_data(as_text=True)
-    assert "event: result" in body
-    assert '"answer": 42' in body
-    assert "event: done" in body
-
-
-def test_sql_stream_rejects_empty_query_and_anonymous_users():
-    assert client().get("/sql/stream?q=SELECT+1").status_code == 401
-    assert signed_in().get("/sql/stream?q=").status_code == 422
-
-
-def test_engines_page_lists_the_fleet_with_states():
-    assert client().get("/engines").status_code == 302
-    c = signed_in()
-    page = c.get("/engines")
-    assert page.status_code == 200
-    body = page.get_data(as_text=True)
-    assert "worker-1" in body and "draining (reserved for tomas)" in body
-    assert "Cancel reservation" in body  # draining rows are cancellable (REQ-19)
-    assert c.post("/engines/cancel-reservation", data={"engine": "worker-1"}).status_code == 302
-
-
-def test_users_page_lists_and_creates():
-    assert client().get("/users").status_code == 302
-    c = signed_in()
-    page = c.get("/users").get_data(as_text=True)
-    assert "maya" in page and "70000" in page
-    assert c.post(
-        "/users", data={"username": "ade", "password": "pebbles-demo-3"}
-    ).status_code == 302
-
-
-def test_groups_page_lists_members_and_handles_actions():
-    c = signed_in()
-    page = c.get("/groups").get_data(as_text=True)
-    assert "analysts" in page and "tomas" in page
-    assert c.post("/groups", data={"action": "create", "name": "science"}).status_code == 302
-    assert c.post(
-        "/groups", data={"action": "add-member", "group": "analysts", "username": "maya"}
-    ).status_code == 302
-    assert c.post(
-        "/groups", data={"action": "grant-catalog", "catalog": "claims", "group": "analysts"}
-    ).status_code == 302
-
-
-def test_notebook_create_edit_save_and_run_cells():
-    c = signed_in()
-    assert c.get("/notebooks").status_code == 200
-
-    resp = c.post("/notebooks", data={"name": "claims-eda"})
-    assert resp.status_code == 302
-
-    editor = c.get("/notebooks/claims-eda")
-    assert editor.status_code == 200
-    body = editor.get_data(as_text=True)
-    assert "claims-eda.json" in body and 'class="rail"' in body
-
-    saved = c.post(
-        "/notebooks/claims-eda/save",
-        json={
-            "catalog": "claims",
-            "cells": [
-                {"type": "sql", "source": "SELECT 42 AS answer;"},
-                {"type": "python", "source": "x = 41\nx + 1"},
-                {"type": "r", "source": "x <- 41\nx + 1"},
-            ],
-        },
-    )
-    assert saved.status_code == 200
-
-    sql_stream = c.get("/notebooks/claims-eda/cells/0/stream").get_data(as_text=True)
-    assert "event: result" in sql_stream and '"answer": 42' in sql_stream
-
-    py_stream = c.get("/notebooks/claims-eda/cells/1/stream").get_data(as_text=True)
-    assert "event: result" in py_stream and '"stdout": "42' in py_stream
-
-    r_stream = c.get("/notebooks/claims-eda/cells/2/stream").get_data(as_text=True)
-    assert "event: result" in r_stream and '"stdout": "42' in r_stream
-
-    missing = c.get("/notebooks/claims-eda/cells/9/stream").get_data(as_text=True)
-    assert "no such cell" in missing
-
-    listing = c.get("/notebooks").get_data(as_text=True)
-    assert "claims-eda" in listing
-
-
-def test_dashboard_create_save_and_tile_stream():
-    c = signed_in()
-    assert c.get("/dashboards").status_code == 200
-
-    assert c.post("/dashboards", data={"name": "claims-kpis"}).status_code == 302
-    page = c.get("/dashboards/claims-kpis")
-    assert page.status_code == 200
-    assert "Edit" in page.get_data(as_text=True)
-
-    saved = c.post(
-        "/dashboards/claims-kpis/save",
-        json={
-            "catalog": "claims",
-            "tiles": [
-                {"title": "Total claims", "kind": "stat", "sql": "SELECT count(*) FROM t;"},
-                {"title": "By state", "kind": "bars", "sql": "SELECT s, n FROM x;"},
-                {"title": "Bad kind", "kind": "sparkle", "sql": "SELECT 1;"},
-            ],
-        },
-    )
-    assert saved.status_code == 200
-
-    tile_stream = c.get("/dashboards/claims-kpis/tiles/0/stream").get_data(as_text=True)
-    assert "event: result" in tile_stream and '"answer": 42' in tile_stream
-
-    # The invalid kind was dropped on save, so tile index 2 must not exist.
-    gone = c.get("/dashboards/claims-kpis/tiles/2/stream").get_data(as_text=True)
-    assert "no such tile" in gone
-
-    listing = c.get("/dashboards").get_data(as_text=True)
-    assert "claims-kpis" in listing
-
-
-def test_jobs_page_save_trigger_and_run_detail():
-    c = signed_in()
-    assert client().get("/jobs").status_code == 302
-    assert c.get("/jobs").status_code == 200
-
-    saved = c.post(
-        "/jobs/save",
-        json={
-            "name": "nightly",
-            "schedule": "0 2 * * *",
-            "tasks": [{"id": "load", "task_type": "sql", "payload": "SELECT 1;"}],
-        },
-    )
-    assert saved.status_code == 200
-    assert saved.get_json()["username"] == "maya"  # owner forced to signed-in user
-
-    assert c.post("/jobs/nightly/run").status_code == 200
-    runs = c.get("/jobs/nightly/runs.json").get_json()
-    assert runs[0]["state"] == "success"
-    detail = c.get("/jobs/nightly/runs/manual__1.json").get_json()
-    assert "uid 70000" in detail[0]["log"]
-
-
-def test_repo_status_actions_and_settings():
-    c = signed_in()
-    assert client().get("/repos").status_code == 302
-    assert c.get("/repos").status_code == 200
-    assert c.get("/repos/proj").status_code == 200
-
-    status = c.get("/repos/proj/status.json").get_json()
-    assert status["branch"] == "main" and status["ahead"] == 1
-    paths = {f["path"] for f in status["files"]}
-    assert paths == {"analysis.sql", "notes.md"}
-    assert any(f.get("untracked") for f in status["files"])
-
-    assert c.post("/repos/proj/git", json={"action": "stage", "path": "notes.md"}).status_code == 200
-    assert c.post("/repos/proj/git", json={"action": "commit", "message": "wip"}).status_code == 200
-    assert c.post("/repos/proj/git", json={"action": "rebase"}).status_code == 422
-
-    log = c.post("/repos/proj/git", json={"action": "log"}).get_json()
-    assert "first commit" in log["stdout"]
-
-    settings = c.get("/settings/git")
-    assert settings.status_code == 200
-    assert c.post(
-        "/settings/git", data={"action": "identity", "name": "Maya", "email": "m@x.y"}
-    ).status_code == 302
-    assert c.post("/settings/git", data={"action": "keygen"}).status_code == 302
-
-
-def test_usage_hosts_and_settings_pages():
-    c = signed_in()
-    assert client().get("/usage").status_code == 302
-
-    usage = c.get("/usage").get_data(as_text=True)
-    assert "pebbles-main" in usage and "4.0 GB" in usage and "16.0 GB" in usage
-
-    hosts = c.get("/hosts").get_data(as_text=True)
-    assert "Main" in hosts and "worker-1" in hosts and "Remove" in hosts
-
-    settings = c.get("/settings").get_data(as_text=True)
-    assert "ab12" in settings and "worker-9" in settings and "Approve" in settings
-
-    # Minted tokens show exactly once on the next render.
-    assert c.post("/settings/cluster", data={"action": "mint"}).status_code == 302
-    once = c.get("/settings").get_data(as_text=True)
-    assert "s3cr3t-token" in once
-    again = c.get("/settings").get_data(as_text=True)
-    assert "s3cr3t-token" not in again
-
-    for action, extra in [
-        ("revoke", {"id": "ab12"}),
-        ("approve", {"name": "worker-9"}),
-        ("reject", {"name": "worker-9"}),
-        ("deregister", {"name": "worker-1"}),
-    ]:
-        assert c.post(
-            "/settings/cluster", data={"action": action, **extra}
-        ).status_code == 302
-
-
-def test_files_browse_upload_download_and_traversal_guard():
-    c = signed_in()
-    assert client().get("/files").status_code == 302
-    assert c.get("/files").status_code == 200
-
-    import io
-
-    up = c.post(
-        "/files/action",
-        data={
-            "action": "upload",
-            "dir": "",
-            "file": (io.BytesIO(b"hello pebbles"), "notes.txt"),
-        },
-        content_type="multipart/form-data",
-    )
-    assert up.status_code == 302
-
-    listing = c.get("/files").get_data(as_text=True)
-    assert "notes.txt" in listing
-
-    dl = c.get("/files/download/notes.txt")
-    assert dl.status_code == 200 and b"hello pebbles" in dl.data
-
-    assert c.post("/files/action", data={"action": "mkdir", "dir": "", "name": "data"}).status_code == 302
-
-    # Path traversal is refused (redirect to home, never escapes).
-    assert c.get("/files/..%2f..%2fetc").status_code in (200, 302, 404)
-    dl_bad = c.get("/files/download/..%2f..%2fetc%2fpasswd")
-    assert dl_bad.status_code in (404, 422)
-
-
-def test_nkoyo_chat_and_settings():
-    c = signed_in()
-    assert client().get("/nkoyo").status_code == 302
-    assert c.get("/nkoyo").status_code == 200
-
-    reply = c.post(
-        "/nkoyo/send",
-        json={"prompt": "profile the claims table", "approved": ["write_file"]},
-    )
-    assert reply.status_code == 200
-    data = reply.get_json()
-    assert "you said: profile the claims table" in data["content"]
-    assert "write_file" in data["tools_used"]  # pre-authorized tool passes through
-
-    page = c.get("/nkoyo").get_data(as_text=True)
-    assert "profile the claims table" in page  # conversation persists in session
-
-    assert c.post("/nkoyo/send", json={"prompt": ""}).status_code == 422
-    assert c.post("/nkoyo/clear").status_code == 302
-
-    settings = c.get("/settings/nkoyo")
-    assert settings.status_code == 200
-    assert "11434" in settings.get_data(as_text=True)
-    rescan = c.post("/settings/nkoyo", data={"action": "rescan"})
-    assert "llama3.2:latest" in rescan.get_data(as_text=True)
-    assert c.post(
-        "/settings/nkoyo",
-        data={
-            "action": "save",
-            "endpoints": "http://127.0.0.1:11434",
-            "planner_model": "qwen3",
-            "coder_model": "qwen3-coder",
-            "embed_model": "nomic-embed-text",
-            "max_steps": "12",
-        },
-    ).status_code == 302
-
-
-def test_notebook_names_are_validated():
-    c = signed_in()
-    assert c.post("/notebooks", data={"name": "../evil"}).status_code == 422
-    assert c.get("/notebooks/claims-eda/cells/0/stream").status_code == 200 or True
-
-
-def test_catalog_create_shows_up_in_the_list_and_conflicts_cleanly():
-    c = signed_in()
-    resp = c.post("/catalogs", data={"name": "claims"})
-    assert resp.status_code == 302
-    page = c.get("/catalogs").get_data(as_text=True)
-    assert "claims" in page and "/var/lib/pebbles/lake/claims" in page
-
-    dup = c.post("/catalogs", data={"name": "claims"})
-    assert dup.status_code == 409
-    assert "already exists" in dup.get_data(as_text=True)
-
-
-# ---- /api/* — the SPA's JSON surface ----------------------------------------
-
-
-def api_signed_in(daemon=None):
-    c = client(daemon)
-    c.post("/api/login", json={"username": "maya", "password": "pebbles-demo-1"})
-    return c
+# ---- catalogs -------------------------------------------------------------------
 
 
 def test_api_catalog_create_tree_and_table_detail():
@@ -678,6 +368,10 @@ def test_api_catalog_create_tree_and_table_detail():
     assert created.status_code == 200
     assert created.get_json()["owner"] == "maya"  # owner is the signed-in user
     assert any(cat["name"] == "claims" for cat in c.get("/api/catalogs").get_json())
+
+    # conflicts surface with their real status, not a blanket 500
+    dup = c.post("/api/catalogs", json={"name": "claims"})
+    assert dup.status_code == 409 and "already exists" in dup.get_json()["error"]
 
     tree = c.get("/api/catalogs/claims/tree")
     assert tree.status_code == 200
@@ -701,6 +395,9 @@ def test_api_catalog_create_tree_and_table_detail():
     ).status_code == 200
 
 
+# ---- SQL ------------------------------------------------------------------------
+
+
 def test_api_sql_exec_and_stream():
     c = api_signed_in()
     got = c.post("/api/sql", json={"sql": "SELECT 42 AS answer"}).get_json()
@@ -713,6 +410,9 @@ def test_api_sql_exec_and_stream():
     assert "event: result" in body and '"answer": 42' in body and "event: done" in body
 
     assert client().get("/api/sql/stream?q=SELECT+1").status_code == 401
+
+
+# ---- files ----------------------------------------------------------------------
 
 
 def test_api_files_crud_download_and_traversal_guard():
@@ -745,6 +445,9 @@ def test_api_files_crud_download_and_traversal_guard():
         as_text=True
     )
     assert c.get("/api/files/download?path=../etc/passwd").status_code == 404
+
+
+# ---- notebooks & dashboards ------------------------------------------------------
 
 
 def test_api_notebooks_crud_and_cell_stream():
@@ -802,6 +505,9 @@ def test_api_dashboards_crud_and_tile_stream():
     assert "no such tile" in gone
 
 
+# ---- jobs -------------------------------------------------------------------------
+
+
 def test_api_jobs_save_run_and_history():
     c = api_signed_in()
     assert c.get("/api/jobs").get_json() == []
@@ -818,6 +524,9 @@ def test_api_jobs_save_run_and_history():
     assert c.get("/api/jobs/nightly/runs").get_json()[0]["state"] == "success"
     detail = c.get("/api/jobs/nightly/runs/manual__1").get_json()
     assert "uid 70000" in detail[0]["log"]
+
+
+# ---- nkoyo ------------------------------------------------------------------------
 
 
 def test_api_nkoyo_chat_history_and_config():
@@ -845,6 +554,9 @@ def test_api_nkoyo_chat_history_and_config():
     assert rescan[0]["models"] == ["llama3.2:latest"]
 
 
+# ---- repos ------------------------------------------------------------------------
+
+
 def test_api_repos_clone_status_and_git_actions():
     c = api_signed_in()
     assert c.get("/api/repos").get_json() == []
@@ -860,6 +572,9 @@ def test_api_repos_clone_status_and_git_actions():
     assert c.post("/api/repos/proj/git", json={"action": "rebase"}).status_code == 422
     log = c.post("/api/repos/proj/git", json={"action": "log"}).get_json()
     assert "first commit" in log["stdout"]
+
+
+# ---- cluster & admin ---------------------------------------------------------------
 
 
 def test_api_cluster_and_admin_endpoints():
@@ -894,9 +609,3 @@ def test_api_settings_git_identity_and_keys():
     ).status_code == 200
     assert c.post("/api/settings/git", json={"action": "keygen"}).status_code == 200
     assert c.post("/api/settings/git", json={"action": "nope"}).status_code == 422
-
-
-def test_api_endpoints_require_auth():
-    c = client()
-    for path in ("/api/catalogs", "/api/files", "/api/notebooks", "/api/jobs", "/api/tokens"):
-        assert c.get(path).status_code == 401, path

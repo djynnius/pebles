@@ -122,7 +122,7 @@ echo "==> schema version is stamped in the config volume (REQ-09)"
 [ "$(ctr_exec cat /var/lib/pebbles/schema-version)" = "1" ] \
   || { echo "FAIL: schema-version file missing or wrong" >&2; exit 1; }
 
-echo "==> the Flask shell serves (login page when signed out)"
+echo "==> the web tier serves the React shell at /"
 curl -fsSL "$BASE/" | grep -q 'data-pb-theme' \
   || { echo "FAIL: / did not serve the shell page" >&2; exit 1; }
 
@@ -140,15 +140,17 @@ ctr_exec getent passwd maya | grep -q ':70000:70000:' \
 [ "$(ctr_exec stat -c '%u:%g:%a' /home/maya)" = "70000:70000:700" ] \
   || { echo "FAIL: /home/maya must be owned by maya, mode 0700" >&2; exit 1; }
 
-echo "==> Maya path: sign into the web UI with her UNIX password"
+echo "==> Maya path: sign into the web UI with her UNIX password (JSON API)"
 jar="$(mktemp)"
 code="$(curl -s -o /dev/null -w '%{http_code}' -c "$jar" \
-  -d 'username=maya&password=pebbles-demo-1' "$BASE/login")"
-[ "$code" = "302" ] || { echo "FAIL: login expected 302, got $code" >&2; exit 1; }
-curl -fsS -b "$jar" "$BASE/" | grep -q 'maya' \
-  || { echo "FAIL: signed-in shell does not show maya" >&2; exit 1; }
+  -H 'Content-Type: application/json' \
+  -d '{"username":"maya","password":"pebbles-demo-1"}' "$BASE/api/login")"
+[ "$code" = "200" ] || { echo "FAIL: login expected 200, got $code" >&2; exit 1; }
+curl -fsS -b "$jar" "$BASE/api/me" | grep -q '"username":"maya"' \
+  || { echo "FAIL: /api/me does not show the signed-in maya" >&2; exit 1; }
 badcode="$(curl -s -o /dev/null -w '%{http_code}' \
-  -d 'username=maya&password=wrong-password' "$BASE/login")"
+  -H 'Content-Type: application/json' \
+  -d '{"username":"maya","password":"wrong-password"}' "$BASE/api/login")"
 [ "$badcode" = "401" ] || { echo "FAIL: wrong password expected 401, got $badcode" >&2; exit 1; }
 rm -f "$jar"
 
@@ -269,9 +271,10 @@ pd -X DELETE "http://pebblesd/sessions/$id_tomas2" >/dev/null
 
 echo "==> results stream over SSE through the web tier (REQ-31)"
 jar5="$(mktemp)"
-curl -s -o /dev/null -c "$jar5" -d 'username=maya&password=pebbles-demo-1' "$BASE/login"
+curl -s -o /dev/null -c "$jar5" -H 'Content-Type: application/json' \
+  -d '{"username":"maya","password":"pebbles-demo-1"}' "$BASE/api/login"
 sse="$(curl -sN --max-time 60 -b "$jar5" \
-  "$BASE/sql/stream?catalog=claims&q=SELECT%20count(*)%20AS%20c%20FROM%20claims_t")"
+  "$BASE/api/sql/stream?catalog=claims&q=SELECT%20count(*)%20AS%20c%20FROM%20claims_t")"
 rm -f "$jar5"
 grep -q 'event: result' <<<"$sse" && grep -q '"c": 3' <<<"$sse" \
   || { echo "FAIL: SSE stream missing the result event: $sse" >&2; exit 1; }

@@ -18,8 +18,8 @@ team has a complete platform in under an hour — on **Docker, Podman, or LXC (I
 - **UNIX accounts are the permission system** — every Pebbles user is a real host
   account; sessions, files, lake data, and jobs are all governed by uid/gid and
   filesystem permissions. There is no second ACL system.
-- **`pebblesd` (Rust) is the only privileged component**; the web tier is a thin Flask
-  app that can only act through its API.
+- **`pebblesd` (Rust) is the only privileged component**; the UI is a React app
+  served by a thin Flask tier that can only act through pebblesd's API.
 - **Nkoyo**, the assistant, runs on local Ollama models. Fully air-gapped operation is a
   hard requirement.
 
@@ -32,10 +32,14 @@ password, sessions run as the user with memory admission control, and the lake i
 live — DuckLake catalogs (Postgres metadata + Parquet data) with snapshot time
 travel, a SQL editor, and results streaming over SSE. CI proves the acceptance
 path on all three runtimes with zero network egress, and a nightly test proves
-upgrades keep accounts, homes, and catalogs intact. **Phase 1 is underway**: engines
-now register with single-use join tokens, receive replicated accounts, and serve
-sessions brokered through the main — a fleet, not just a box. See `HOWTO.md` to run
-what exists.
+upgrades keep accounts, homes, and catalogs intact. **Phase 1 complete, Phase 2
+underway**: engines register with single-use join tokens and serve sessions
+brokered through the main; jobs compile to Airflow behind the scenes; Nkoyo (the
+local-models assistant) chats and acts with per-turn tool approvals; and the
+**UI is now the React workbench** from the design prototype — catalog browser
+with time travel, SQL editor, notebooks, dashboards, files, jobs, and settings,
+all served at `/` as a single-page app over the JSON API. Auto ETL is next. See
+`HOWTO.md` to run what exists.
 
 ## Documents
 

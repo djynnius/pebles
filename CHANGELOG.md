@@ -6,6 +6,15 @@ All notable changes to Pebbles are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **The React workbench is now the UI.** Root `/` (and every non-API path)
+  serves the SPA; `/app/*` links 301 to their new home. The server-rendered
+  Jinja UI is deleted — all 23 templates and their routes — leaving the web
+  tier as exactly what NFR-01 wants: static SPA serving plus the `/api` JSON
+  surface. Sign-in, the SSE proof (REQ-31), and the smoke tests now run
+  through `/api/login`, `/api/me`, and `/api/sql/stream`. Docs updated to
+  reflect the hand-written (not generated) pebblesd client.
+
 ### Fixed
 - **Init-duty hardening sweep (Incus/LXC audit)** — preventive follow-up to the
   three env/mount incus failures, closing what the OCI→Incus conversion and

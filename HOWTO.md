@@ -108,11 +108,17 @@ cargo test                      # build + run all workspace tests
 cargo fmt --check               # formatting
 cargo clippy -- -D warnings     # lints (CI treats warnings as errors)
 
-# Flask web tier
+# Flask web tier (serves the SPA + the /api JSON surface)
 cd web
 uv sync                         # create venv + install deps
 uv run ruff check .             # lint
 uv run pytest                   # tests
+
+# React UI (the workbench; built into web/pebbles_web/static/app)
+cd web/frontend
+npm ci                          # install deps
+npm run dev                     # dev server with /api proxied to :8080
+npm run typecheck && npm run build
 
 # Native dev loop (pebblesd + Flask against a scratch config dir; no container needed)
 scripts/dev/run.sh
