@@ -11,3 +11,4 @@ __pycache__/
 web/frontend/node_modules/
 web/frontend/dist/
 web/pebbles_web/static/app/
+*.tsbuildinfo

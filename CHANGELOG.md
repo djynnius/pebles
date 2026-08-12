@@ -7,6 +7,17 @@ All notable changes to Pebbles are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **React workbench foundations**: the complete JSON API the SPA needs
+  (`web/pebbles_web/api.py`) — every screen's data now has an `/api/*` route:
+  catalogs (list/create/grants plus exec-driven **browse**: schema tree, column
+  types, row counts, samples, DuckLake snapshots — all queried as the signed-in
+  user, so UNIX grants govern visibility), SQL exec + SSE stream, files
+  (browse/mkdir/rename/delete/upload/download with the traversal guard),
+  notebooks and dashboards CRUD + cell/tile streams, jobs, Nkoyo chat/config,
+  repos/git, git identity settings, cluster tokens and engine approvals. The
+  React shell gained the **workbench chrome** from the prototype: 46px icon
+  rail, 266px context panel (pushes ≥1280px, overlays with a scrim below),
+  document tab strip, and the five remaining prototype routes.
 - **M2.3 — Nkoyo agency (REQ-44/45)**: Nkoyo can now *act*, and does so bounded by
   the user. The agentic loop drives the planner model with tools; **every tool
   call executes through the invoking user's own engine session**, so Nkoyo can

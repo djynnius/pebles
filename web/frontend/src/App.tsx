@@ -42,13 +42,24 @@ export function App() {
         <Route path="/nkoyo" element={<Placeholder title="Nkoyo" />} />
         <Route path="/files" element={<Placeholder title="Files" eyebrow="Workspace" />} />
         <Route path="/catalog" element={<Placeholder title="Catalog" eyebrow="Workspace" />} />
+        <Route path="/newcatalog" element={<Placeholder title="Create catalog" eyebrow="Workspace" />} />
         <Route path="/notebooks" element={<Placeholder title="Notebooks" eyebrow="Analysis" />} />
         <Route path="/sql" element={<Placeholder title="SQL editor" eyebrow="Analysis" />} />
         <Route path="/dashboards" element={<Placeholder title="Dashboards" eyebrow="Analysis" />} />
+        <Route path="/dashboards/:name" element={<Placeholder title="Dashboard" eyebrow="Analysis" />} />
         <Route path="/jobs" element={<Placeholder title="Jobs" eyebrow="Data engineering" />} />
+        <Route path="/jobbuilder" element={<Placeholder title="Job builder" eyebrow="Data engineering" />} />
+        <Route
+          path="/jobs/:name/runs/:runId"
+          element={<Placeholder title="Job run" eyebrow="Data engineering" />}
+        />
         <Route path="/ingest" element={<Placeholder title="Ingestion" eyebrow="Data engineering" />} />
         <Route path="/autoetl" element={<Placeholder title="Auto ETL" eyebrow="Data engineering" />} />
         <Route path="/engines" element={<Engines />} />
+        <Route
+          path="/engineconfig"
+          element={<Placeholder title="Engine configuration" eyebrow="Infrastructure" />}
+        />
         <Route path="/hosts" element={<Hosts />} />
         <Route path="/users" element={<Users />} />
         <Route path="/groups" element={<Groups />} />

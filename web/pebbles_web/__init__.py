@@ -2,8 +2,11 @@
 
 Boundary rule (NFR-01): this app never touches a container socket, never runs as
 root, never spawns user processes, never reads another user's files. Every
-privileged action is an API call to pebblesd over its unix socket, via
-`pebblesd_client` — which will be generated from pebblesd's OpenAPI schema.
+privileged action is an API call to pebblesd over its unix socket, via the
+hand-written `pebblesd_client` (stdlib-only by design).
+
+The React SPA's JSON API lives in `pebbles_web.api`; the server-rendered routes
+below are the legacy Jinja UI, deleted screen-by-screen as the SPA takes over.
 """
 
 import base64
@@ -23,6 +26,7 @@ from flask import (
 )
 from werkzeug.exceptions import NotFound
 
+from pebbles_web.api import register_api
 from pebbles_web.pebblesd_client import PebblesdClient, PebblesdError
 
 
@@ -56,65 +60,8 @@ def create_app(pebblesd: PebblesdClient | None = None) -> Flask:
                 503,
             )
 
-    @app.get("/api/me")
-    def api_me():  # pyright: ignore[reportUnusedFunction]
-        user = session.get("user")
-        if user is None:
-            return jsonify({"error": "unauthenticated"}), 401
-        return jsonify(user)
-
-    @app.post("/api/login")
-    def api_login():  # pyright: ignore[reportUnusedFunction]
-        body = request.get_json(silent=True) or {}
-        identity = client.login(body.get("username", ""), body.get("password", ""))
-        if identity is None:
-            return jsonify({"error": "Invalid username or password."}), 401
-        session["user"] = identity
-        return jsonify(identity)
-
-    @app.post("/api/logout")
-    def api_logout():  # pyright: ignore[reportUnusedFunction]
-        session.clear()
-        return jsonify({"ok": True})
-
-    @app.get("/api/usage")
-    def api_usage():  # pyright: ignore[reportUnusedFunction]
-        if session.get("user") is None:
-            return jsonify({"error": "unauthenticated"}), 401
-        try:
-            return jsonify(client.usage())
-        except (OSError, RuntimeError, ValueError) as exc:
-            return jsonify({"error": str(exc)}), 503
-
-    def _api_auth():
-        return session.get("user") is not None
-
-    @app.get("/api/engines")
-    def api_engines():  # pyright: ignore[reportUnusedFunction]
-        if not _api_auth():
-            return jsonify({"error": "unauthenticated"}), 401
-        try:
-            return jsonify(client.list_engines())
-        except (OSError, RuntimeError, ValueError) as exc:
-            return jsonify({"error": str(exc)}), 503
-
-    @app.get("/api/users")
-    def api_users():  # pyright: ignore[reportUnusedFunction]
-        if not _api_auth():
-            return jsonify({"error": "unauthenticated"}), 401
-        try:
-            return jsonify(client.list_users())
-        except (OSError, RuntimeError, ValueError) as exc:
-            return jsonify({"error": str(exc)}), 503
-
-    @app.get("/api/groups")
-    def api_groups():  # pyright: ignore[reportUnusedFunction]
-        if not _api_auth():
-            return jsonify({"error": "unauthenticated"}), 401
-        try:
-            return jsonify(client.list_groups())
-        except (OSError, RuntimeError, ValueError) as exc:
-            return jsonify({"error": str(exc)}), 503
+    # The SPA's JSON API — every /api/* route (pebbles_web/api.py).
+    register_api(app, client)
 
     @app.get("/healthz")
     def healthz():  # pyright: ignore[reportUnusedFunction]

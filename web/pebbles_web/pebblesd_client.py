@@ -1,11 +1,9 @@
 """Client for pebblesd's privileged API over its unix socket.
 
-This hand-written stub will be REPLACED by a client generated from pebblesd's
-OpenAPI schema (`cargo run -p xtask -- api-schema`); CI's api-drift job enforces
-that the generated client stays current. Do not grow ad-hoc methods here.
-
-Stdlib-only on purpose: the web tier's path to privilege should have no clever
-dependencies in it.
+Hand-written and stdlib-only on purpose: the web tier's path to privilege
+should have no clever dependencies in it. Method names and shapes mirror
+pebblesd's routes one-to-one (crates/pebblesd/src/api.rs); when a route
+changes there, change it here in the same commit.
 """
 
 from __future__ import annotations
@@ -119,8 +117,17 @@ class PebblesdClient:
     def add_group_member(self, group: str, username: str) -> dict:
         return self._expect("POST", f"/groups/{group}/members", {"username": username})
 
+    def remove_group_member(self, group: str, username: str) -> dict:
+        return self._expect("DELETE", f"/groups/{group}/members/{username}")
+
     def grant_catalog(self, catalog: str, group: str) -> dict:
         return self._expect("POST", f"/catalogs/{catalog}/grants", {"group": group})
+
+    def list_catalog_grants(self, catalog: str) -> list:
+        status, data = self._request("GET", f"/catalogs/{catalog}/grants")
+        if status != 200:
+            raise PebblesdError(status, str(data))
+        return data
 
     def list_workflows(self) -> list:
         status, data = self._request("GET", "/workflows")

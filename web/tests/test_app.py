@@ -24,6 +24,35 @@ class FakeDaemon:
     def exec_in_session(self, session_id, payload):
         op = payload["op"]
         if op == "sql":
+            sql = payload["sql"]
+            if "information_schema.schemata" in sql:
+                return {
+                    "id": None,
+                    "ok": True,
+                    "rows": [{"schema_name": "bronze"}, {"schema_name": "main"}],
+                }
+            if "information_schema.tables" in sql:
+                return {
+                    "id": None,
+                    "ok": True,
+                    "rows": [{"table_schema": "bronze", "table_name": "claims"}],
+                }
+            if "information_schema.columns" in sql:
+                return {
+                    "id": None,
+                    "ok": True,
+                    "rows": [
+                        {"column_name": "id", "data_type": "BIGINT", "is_nullable": "NO"}
+                    ],
+                }
+            if "ducklake_snapshots" in sql:
+                return {
+                    "id": None,
+                    "ok": True,
+                    "rows": [{"snapshot_id": 1}, {"snapshot_id": 0}],
+                }
+            if "count(*) AS n" in sql:
+                return {"id": None, "ok": True, "rows": [{"n": 1234}]}
             return {"id": None, "ok": True, "rows": [{"answer": 42}]}
         if op in ("python", "r"):
             return {"id": None, "ok": True, "stdout": "42\n", "stderr": "", "error": None}
@@ -101,6 +130,12 @@ class FakeDaemon:
 
     def grant_catalog(self, catalog, group):
         return {"catalog": catalog, "group": group}
+
+    def list_catalog_grants(self, catalog):
+        return [{"group": "analysts"}]
+
+    def remove_group_member(self, group, username):
+        return {"name": group, "gid": 70050, "members": ["tomas"]}
 
     def list_engines(self):
         return [
@@ -626,3 +661,242 @@ def test_catalog_create_shows_up_in_the_list_and_conflicts_cleanly():
     dup = c.post("/catalogs", data={"name": "claims"})
     assert dup.status_code == 409
     assert "already exists" in dup.get_data(as_text=True)
+
+
+# ---- /api/* — the SPA's JSON surface ----------------------------------------
+
+
+def api_signed_in(daemon=None):
+    c = client(daemon)
+    c.post("/api/login", json={"username": "maya", "password": "pebbles-demo-1"})
+    return c
+
+
+def test_api_catalog_create_tree_and_table_detail():
+    c = api_signed_in()
+    created = c.post("/api/catalogs", json={"name": "claims"})
+    assert created.status_code == 200
+    assert created.get_json()["owner"] == "maya"  # owner is the signed-in user
+    assert any(cat["name"] == "claims" for cat in c.get("/api/catalogs").get_json())
+
+    tree = c.get("/api/catalogs/claims/tree")
+    assert tree.status_code == 200
+    schemas = {s["name"]: s["tables"] for s in tree.get_json()["schemas"]}
+    assert schemas["bronze"] == ["claims"] and "main" in schemas
+
+    detail = c.get("/api/catalogs/claims/tables/bronze/claims").get_json()
+    assert detail["columns"][0]["column_name"] == "id"
+    assert detail["row_count"] == 1234
+    assert detail["snapshots"][0]["snapshot_id"] == 1
+    assert detail["sample"] == [{"answer": 42}]
+
+    # identifier validation refuses anything that isn't a bare identifier
+    assert c.get("/api/catalogs/claims/tables/bad-schema/t").status_code == 422
+    assert c.get("/api/catalogs/bad-name!/tree").status_code == 422
+
+    grants = c.get("/api/catalogs/claims/grants").get_json()
+    assert grants == [{"group": "analysts"}]
+    assert c.post(
+        "/api/catalogs/claims/grants", json={"group": "analysts"}
+    ).status_code == 200
+
+
+def test_api_sql_exec_and_stream():
+    c = api_signed_in()
+    got = c.post("/api/sql", json={"sql": "SELECT 42 AS answer"}).get_json()
+    assert got["ok"] and got["rows"] == [{"answer": 42}]
+    assert c.post("/api/sql", json={"sql": " "}).status_code == 422
+
+    stream = c.get("/api/sql/stream?q=SELECT+42+AS+answer")
+    assert stream.mimetype == "text/event-stream"
+    body = stream.get_data(as_text=True)
+    assert "event: result" in body and '"answer": 42' in body and "event: done" in body
+
+    assert client().get("/api/sql/stream?q=SELECT+1").status_code == 401
+
+
+def test_api_files_crud_download_and_traversal_guard():
+    import io
+
+    c = api_signed_in()
+    up = c.post(
+        "/api/files/upload",
+        data={"dir": "", "file": (io.BytesIO(b"hello api"), "notes.txt")},
+        content_type="multipart/form-data",
+    )
+    assert up.get_json()["uploaded"] == ["notes.txt"]
+
+    listing = c.get("/api/files").get_json()
+    assert any(i["name"] == "notes.txt" for i in listing["items"])
+
+    dl = c.get("/api/files/download?path=notes.txt")
+    assert dl.status_code == 200 and b"hello api" in dl.data
+
+    assert c.post("/api/files/mkdir", json={"dir": "", "name": "data"}).status_code == 200
+    assert c.post(
+        "/api/files/rename", json={"path": "notes.txt", "to": "notes2.txt"}
+    ).status_code == 200
+    assert c.post("/api/files/delete", json={"path": "notes2.txt"}).status_code == 200
+
+    # traversal never escapes the home: leading ".." collapses against it, so
+    # "../../etc" is the (empty) home-relative "etc", not the host's /etc
+    contained = c.get("/api/files?path=../../etc")
+    assert contained.status_code in (200, 502) and "/etc" not in contained.get_data(
+        as_text=True
+    )
+    assert c.get("/api/files/download?path=../etc/passwd").status_code == 404
+
+
+def test_api_notebooks_crud_and_cell_stream():
+    c = api_signed_in()
+    assert c.get("/api/notebooks").get_json() == []
+    made = c.post("/api/notebooks", json={"name": "eda"})
+    assert made.status_code == 200 and made.get_json()["name"] == "eda"
+    assert c.post("/api/notebooks", json={"name": "../evil"}).status_code == 422
+
+    saved = c.put(
+        "/api/notebooks/eda",
+        json={
+            "catalog": "claims",
+            "cells": [
+                {"type": "sql", "source": "SELECT 42 AS answer;"},
+                {"type": "python", "source": "x = 41\nx + 1"},
+                {"type": "sparkle", "source": "dropped"},
+            ],
+        },
+    )
+    assert saved.status_code == 200
+
+    nb = c.get("/api/notebooks/eda").get_json()
+    assert nb["catalog"] == "claims" and len(nb["cells"]) == 2  # bad kind dropped
+
+    sql_stream = c.get("/api/notebooks/eda/cells/0/stream").get_data(as_text=True)
+    assert "event: result" in sql_stream and '"answer": 42' in sql_stream
+    py_stream = c.get("/api/notebooks/eda/cells/1/stream").get_data(as_text=True)
+    assert '"stdout": "42' in py_stream
+    gone = c.get("/api/notebooks/eda/cells/9/stream").get_data(as_text=True)
+    assert "no such cell" in gone
+
+    assert c.get("/api/notebooks").get_json() == ["eda"]
+    assert c.delete("/api/notebooks/eda").status_code == 200
+    assert c.get("/api/notebooks/missing").status_code == 404
+
+
+def test_api_dashboards_crud_and_tile_stream():
+    c = api_signed_in()
+    assert c.post("/api/dashboards", json={"name": "kpis"}).status_code == 200
+    saved = c.put(
+        "/api/dashboards/kpis",
+        json={
+            "catalog": "claims",
+            "tiles": [{"title": "Total", "kind": "stat", "sql": "SELECT 42 AS answer;"}],
+        },
+    )
+    assert saved.status_code == 200
+    dash = c.get("/api/dashboards/kpis").get_json()
+    assert dash["tiles"][0]["kind"] == "stat"
+
+    tile = c.get("/api/dashboards/kpis/tiles/0/stream").get_data(as_text=True)
+    assert "event: result" in tile and '"answer": 42' in tile
+    gone = c.get("/api/dashboards/kpis/tiles/5/stream").get_data(as_text=True)
+    assert "no such tile" in gone
+
+
+def test_api_jobs_save_run_and_history():
+    c = api_signed_in()
+    assert c.get("/api/jobs").get_json() == []
+    saved = c.post(
+        "/api/jobs",
+        json={
+            "name": "nightly",
+            "schedule": "0 2 * * *",
+            "tasks": [{"id": "load", "task_type": "sql", "payload": "SELECT 1;"}],
+        },
+    )
+    assert saved.get_json()["username"] == "maya"  # owner forced to signed-in user
+    assert c.post("/api/jobs/nightly/run").status_code == 200
+    assert c.get("/api/jobs/nightly/runs").get_json()[0]["state"] == "success"
+    detail = c.get("/api/jobs/nightly/runs/manual__1").get_json()
+    assert "uid 70000" in detail[0]["log"]
+
+
+def test_api_nkoyo_chat_history_and_config():
+    c = api_signed_in()
+    assert c.get("/api/nkoyo/chat").get_json() == []
+    reply = c.post(
+        "/api/nkoyo/send", json={"prompt": "profile claims", "approved": ["write_file"]}
+    ).get_json()
+    assert "you said: profile claims" in reply["content"]
+    assert "write_file" in reply["tools_used"]
+
+    history = c.get("/api/nkoyo/chat").get_json()
+    assert history[0]["role"] == "user" and history[1]["role"] == "assistant"
+    assert c.post("/api/nkoyo/send", json={"prompt": ""}).status_code == 422
+    assert c.post("/api/nkoyo/clear").status_code == 200
+    assert c.get("/api/nkoyo/chat").get_json() == []
+
+    cfg = c.get("/api/nkoyo/config").get_json()
+    assert cfg["planner_model"] == "llama3.2"
+    assert c.post(
+        "/api/nkoyo/config",
+        json={"endpoints": ["http://127.0.0.1:11434"], "max_steps": 12},
+    ).status_code == 200
+    rescan = c.post("/api/nkoyo/rescan").get_json()
+    assert rescan[0]["models"] == ["llama3.2:latest"]
+
+
+def test_api_repos_clone_status_and_git_actions():
+    c = api_signed_in()
+    assert c.get("/api/repos").get_json() == []
+    cloned = c.post("/api/repos/clone", json={"url": "https://x.y/proj.git"})
+    assert cloned.get_json()["name"] == "proj"
+
+    status = c.get("/api/repos/proj/status").get_json()
+    assert status["branch"] == "main" and status["ahead"] == 1
+
+    assert c.post(
+        "/api/repos/proj/git", json={"action": "stage", "path": "notes.md"}
+    ).status_code == 200
+    assert c.post("/api/repos/proj/git", json={"action": "rebase"}).status_code == 422
+    log = c.post("/api/repos/proj/git", json={"action": "log"}).get_json()
+    assert "first commit" in log["stdout"]
+
+
+def test_api_cluster_and_admin_endpoints():
+    c = api_signed_in()
+    assert c.post("/api/users", json={"username": "ade", "password": "p3"}).status_code == 200
+    assert c.post("/api/groups", json={"name": "science"}).status_code == 200
+    assert c.post(
+        "/api/groups/analysts/members", json={"username": "maya"}
+    ).status_code == 200
+    assert c.delete("/api/groups/analysts/members/maya").status_code == 200
+
+    assert c.get("/api/tokens").get_json()[0]["id"] == "ab12"
+    minted = c.post("/api/tokens").get_json()
+    assert minted["token"] == "s3cr3t-token"  # shown exactly once, in this response
+    assert c.delete("/api/tokens/ab12").status_code == 200
+
+    pending = c.get("/api/engines/pending").get_json()
+    assert pending[0]["name"] == "worker-9"
+    assert c.post("/api/engines/pending/worker-9/approve").status_code == 200
+    assert c.delete("/api/engines/pending/worker-9").status_code == 200
+    assert c.delete("/api/engines/worker-1").status_code == 200
+    assert c.post(
+        "/api/engines/cancel-reservation", json={"engine": "worker-1"}
+    ).status_code == 200
+
+
+def test_api_settings_git_identity_and_keys():
+    c = api_signed_in()
+    assert c.get("/api/settings/git").get_json() == {"pubkey": ""}
+    assert c.post(
+        "/api/settings/git", json={"action": "identity", "name": "Maya", "email": "m@x.y"}
+    ).status_code == 200
+    assert c.post("/api/settings/git", json={"action": "keygen"}).status_code == 200
+    assert c.post("/api/settings/git", json={"action": "nope"}).status_code == 422
+
+
+def test_api_endpoints_require_auth():
+    c = client()
+    for path in ("/api/catalogs", "/api/files", "/api/notebooks", "/api/jobs", "/api/tokens"):
+        assert c.get(path).status_code == 401, path
