@@ -6,6 +6,7 @@
 //! (NFR-01): the socket is root-owned with group `pebbles`, mode 0660.
 
 mod api;
+mod backups;
 mod catalog;
 mod cluster;
 mod config;
@@ -96,8 +97,14 @@ async fn main() -> anyhow::Result<()> {
     let sup = supervisor::Supervisor::start(services::for_role(&cfg));
     if cfg.role == pebbles_api::Role::Main {
         tokio::spawn(migrations::run(cfg.config_dir.clone()));
+        // REQ-50: daily catalog dump + lake manifest, with retention.
+        tokio::spawn(backups::scheduled_loop(cfg.config_dir.clone()));
     }
     let clu = cluster::Cluster::load(&cfg.config_dir);
+    if cfg.role == pebbles_api::Role::Main {
+        // REQ-22: probe registered engines every 10s; flag lost ones.
+        tokio::spawn(cluster::health_loop(clu.clone()));
+    }
     let state = session_state(&cfg, clu.clone());
 
     // Inter-host cluster API: registration inbound on the main, session serving

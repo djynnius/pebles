@@ -7,6 +7,28 @@ All notable changes to Pebbles are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **M2.4 — Ops hardening (in progress)**:
+  - **Repo-ref workflow tasks (REQ-37)**: a task can now name a `repo` and a
+    `ref` — the payload becomes a path inside `~/repos/<repo>`, resolved to a
+    commit sha at run time (logged for reproducibility) and read via
+    `git show`, never a checkout: the working tree is untouched and the same
+    ref always runs the same code. Works for sql/python/r/shell/notebook
+    tasks; a missing ref gets one fetch attempt, so air-gapped repos still
+    run local refs.
+  - **Engine health loop (REQ-22)**: the main probes every registered engine
+    every 10s; three consecutive misses flag it **lost** in the UI (distinct
+    from an engine's own "stopped"), recovery is logged, and `/engines` now
+    answers from the health cache instantly instead of probing inline per
+    request. Auto-restart is wired as the hook for main-launched engines
+    (REQ-21, not yet built) — remotely-joined engines are flagged, their host
+    owns their lifecycle.
+  - **Scheduled backups (REQ-50)**: daily `pg_dumpall` of the whole catalog
+    into `backups/` in the config volume plus a lake-file manifest
+    (size + path, to verify a paired filesystem copy), 7-dump retention,
+    `PEBBLES_BACKUP_INTERVAL_SECS`/`PEBBLES_BACKUP_KEEP` knobs; the
+    pre-migration upgrade backup now shares the same machinery and is never
+    pruned. HOWTO gains the full backup & restore procedure (the P0 half of
+    REQ-50).
 - **M2.3b — Auto ETL (REQ-46)**: drop a raw dataset → profile → propose →
   approve → load, exactly as the PRD words it. Profiling is DuckDB
   `SUMMARIZE` through the user's own session (read-only — nothing mutates

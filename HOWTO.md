@@ -90,6 +90,41 @@ incus launch pebbles pebbles-main -p default -p pebbles -c environment.PEBBLES_R
 incus list pebbles-main   # open http://<its IP>:8080
 ```
 
+## Back up (and restore) your installation
+
+Two things hold all state, both on the main's host:
+
+1. **The config volume** (`/var/lib/pebbles`) — Postgres (DuckLake catalog
+   metadata, Airflow, grants), user account snapshots, workflows, tokens.
+2. **The lake root** (`/var/lib/pebbles/lake` inside the same volume by
+   default) — the Parquet data files. DuckLake writes them append-mostly, so
+   incremental copies stay cheap.
+
+**Automated (REQ-50):** the main dumps the Postgres catalog daily to
+`/var/lib/pebbles/backups/scheduled-<ts>.sql` (plus a `.lake-manifest`
+listing every lake file with its size, so you can verify a lake copy matches
+the dump). Retention keeps the newest 7. Tune with
+`PEBBLES_BACKUP_INTERVAL_SECS` (default 86400; `0` disables) and
+`PEBBLES_BACKUP_KEEP` (default 7). Pre-migration backups (taken automatically
+before any schema upgrade) are never pruned.
+
+**Manual procedure** — run from the main's host:
+
+```sh
+# 1. catalog dump (consistent snapshot of all Postgres databases)
+docker exec pebbles sh -c \
+  'su postgres -s /bin/sh -c "pg_dumpall -h /run/postgresql"' > pebbles-catalog.sql
+
+# 2. lake + config files (rsync keeps repeat runs incremental)
+docker cp pebbles:/var/lib/pebbles ./pebbles-backup/     # or rsync the volume path
+```
+
+**Restore:** start a fresh container on an empty volume, stop it, copy the
+backed-up volume contents in (numeric uids matter — preserve them), start it
+again; accounts and role are restored from the snapshot on boot (REQ-09/11).
+For a catalog-only restore, feed the dump to psql as the postgres user before
+first login. Verify the lake against the paired `.lake-manifest`.
+
 ## Explore the product
 
 - **UI prototype:** open `ui_ux.html` in a desktop browser (it is a self-extracting

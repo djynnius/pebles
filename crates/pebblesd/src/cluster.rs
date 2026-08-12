@@ -91,7 +91,25 @@ pub struct Cluster {
     remote: Mutex<std::collections::HashMap<u64, RemoteRef>>,
     next_remote: AtomicU64,
     pub http: reqwest::Client,
+    /// REQ-22: the health loop's cache — engine name → last observation.
+    pub health: Mutex<std::collections::HashMap<String, EngineHealth>>,
 }
+
+/// What the 10s health loop last saw for one engine (REQ-22).
+#[derive(Debug, Clone, Serialize)]
+pub struct EngineHealth {
+    /// The engine's own reported state ("available", "draining …", …).
+    pub state: String,
+    pub sessions: u64,
+    /// Consecutive failed probes; >= LOST_AFTER flags the engine as lost.
+    pub misses: u32,
+    pub last_seen: u64,
+}
+
+/// Probes an engine may miss before it's flagged lost in the UI (3 × 10 s).
+pub const LOST_AFTER: u32 = 3;
+/// REQ-22's cadence.
+pub const HEALTH_INTERVAL_SECS: u64 = 10;
 
 fn now() -> u64 {
     std::time::SystemTime::now()
@@ -131,7 +149,55 @@ impl Cluster {
             remote: Mutex::new(std::collections::HashMap::new()),
             next_remote: AtomicU64::new(REMOTE_ID_BASE),
             http: reqwest::Client::new(),
+            health: Mutex::new(std::collections::HashMap::new()),
         })
+    }
+
+    /// The health cache's verdict for an engine: `(state, sessions)`, where a
+    /// lost engine (>= LOST_AFTER missed probes) reports "lost". None = the
+    /// loop hasn't observed this engine yet (caller may probe inline once).
+    pub fn engine_health(&self, name: &str) -> Option<(String, u64)> {
+        let health = self.health.lock().unwrap();
+        health.get(name).map(|h| {
+            if h.misses >= LOST_AFTER {
+                ("lost".to_string(), 0)
+            } else {
+                (h.state.clone(), h.sessions)
+            }
+        })
+    }
+
+    /// Record one probe result; returns the transition (was_lost, is_lost) so
+    /// the loop logs edges, not every tick.
+    pub fn note_probe(&self, name: &str, observed: Option<(String, u64)>) -> (bool, bool) {
+        let mut health = self.health.lock().unwrap();
+        let entry = health.entry(name.to_string()).or_insert(EngineHealth {
+            state: "unknown".into(),
+            sessions: 0,
+            misses: 0,
+            last_seen: 0,
+        });
+        let was_lost = entry.misses >= LOST_AFTER;
+        match observed {
+            Some((state, sessions)) => {
+                entry.state = state;
+                entry.sessions = sessions;
+                entry.misses = 0;
+                entry.last_seen = now();
+            }
+            None => entry.misses = entry.misses.saturating_add(1),
+        }
+        (was_lost, entry.misses >= LOST_AFTER)
+    }
+
+    /// Drop health records for engines that are no longer registered.
+    pub fn prune_health(&self, registered: &[EngineRecord]) {
+        let names: std::collections::HashSet<&str> =
+            registered.iter().map(|e| e.name.as_str()).collect();
+        self.health
+            .lock()
+            .unwrap()
+            .retain(|name, _| names.contains(name.as_str()));
     }
 
     pub fn record_catalog_grant(&self, catalog: &str, group: &str) {
@@ -440,6 +506,52 @@ fn write_json<T: Serialize>(path: &Path, value: &T) {
 
 /// Engine-role boot: register with the main (retrying — the main may not be up
 /// yet), verify the lake path (REQ-26), and apply the identity snapshot.
+/// REQ-22: the main probes every registered engine every 10 s. A miss is
+/// tolerated LOST_AFTER times, then the engine is flagged "lost" in the UI
+/// (distinct from "stopped": stopped is an engine's own report, lost means we
+/// can't reach it at all). Transitions log at warn/info; steady state is
+/// silent. Auto-restart hook: engines the main itself launched (REQ-21, not
+/// yet built) would be restarted here through their ContainerRuntime driver —
+/// remotely-joined engines can only be flagged, their host owns their
+/// lifecycle. Engines that reconnect re-register themselves (NFR-08), which
+/// the next probe observes.
+pub async fn health_loop(cluster: std::sync::Arc<Cluster>) {
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(HEALTH_INTERVAL_SECS)).await;
+        let engines = cluster.list_engines();
+        cluster.prune_health(&engines);
+        for engine in engines {
+            let observed = match cluster
+                .http
+                .get(format!("{}/engine/state", engine.address))
+                .bearer_auth(&engine.secret)
+                .timeout(std::time::Duration::from_secs(3))
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => resp
+                    .json::<pebbles_api::EngineStatus>()
+                    .await
+                    .ok()
+                    .map(|s| (s.state, s.sessions)),
+                _ => None,
+            };
+            let alive = observed.is_some();
+            let (was_lost, is_lost) = cluster.note_probe(&engine.name, observed);
+            match (was_lost, is_lost, alive) {
+                (false, true, _) => tracing::warn!(
+                    engine = %engine.name, address = %engine.address,
+                    "engine lost: {LOST_AFTER} consecutive probes failed (REQ-22)"
+                ),
+                (true, false, true) => {
+                    tracing::info!(engine = %engine.name, "engine recovered")
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 pub async fn engine_boot(config_dir: PathBuf, cluster: std::sync::Arc<Cluster>) {
     if cluster.engine_self.read().unwrap().is_some() {
         tracing::info!("engine already registered (sticky)");
@@ -587,6 +699,36 @@ mod tests {
         let c = Cluster::load(dir.path());
         std::mem::forget(dir); // keep the backing dir alive for the test
         c
+    }
+
+    #[test]
+    fn health_probes_flag_lost_engines_and_recovery() {
+        let c = cluster();
+        // unknown engine: no verdict yet
+        assert!(c.engine_health("w1").is_none());
+
+        // healthy probes cache the engine's own state
+        c.note_probe("w1", Some(("available".into(), 2)));
+        assert_eq!(c.engine_health("w1"), Some(("available".into(), 2)));
+
+        // misses below the threshold keep the last-known state (a blip)
+        c.note_probe("w1", None);
+        c.note_probe("w1", None);
+        assert_eq!(c.engine_health("w1"), Some(("available".into(), 2)));
+
+        // the LOST_AFTER'th miss flips it to lost, with the edge reported once
+        let (was_lost, is_lost) = c.note_probe("w1", None);
+        assert!(!was_lost && is_lost);
+        assert_eq!(c.engine_health("w1"), Some(("lost".into(), 0)));
+
+        // one good probe recovers it
+        let (was_lost, is_lost) = c.note_probe("w1", Some(("available".into(), 1)));
+        assert!(was_lost && !is_lost);
+        assert_eq!(c.engine_health("w1"), Some(("available".into(), 1)));
+
+        // deregistered engines fall out of the cache
+        c.prune_health(&[]);
+        assert!(c.engine_health("w1").is_none());
     }
 
     #[test]

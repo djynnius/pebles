@@ -48,6 +48,13 @@ pub struct WorkflowTask {
     pub depends_on: Vec<String>,
     #[serde(default)]
     pub retries: Option<u32>,
+    /// REQ-37: when set, `payload` is a PATH inside `~/repos/<repo>` and the
+    /// task executes that file's content at `ref` (default HEAD) — resolved to
+    /// a commit sha at run time and read via `git show`, never a checkout.
+    #[serde(default)]
+    pub repo: Option<String>,
+    #[serde(default, rename = "ref")]
+    pub git_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,7 +120,7 @@ fn render_dag(wf: &Workflow) -> String {
     ));
     for task in &wf.tasks {
         out.push_str(&format!(
-            "    t_{id} = PythonOperator(\n        task_id={tid},\n        python_callable=run_pebbles_task,\n        retries={retries},\n        op_kwargs={{\n            \"username\": {user},\n            \"task_type\": {ttype},\n            \"payload\": {payload},\n            \"engine\": {engine},\n            \"catalog\": {catalog},\n            \"mode\": {mode},\n        }},\n    )\n",
+            "    t_{id} = PythonOperator(\n        task_id={tid},\n        python_callable=run_pebbles_task,\n        retries={retries},\n        op_kwargs={{\n            \"username\": {user},\n            \"task_type\": {ttype},\n            \"payload\": {payload},\n            \"engine\": {engine},\n            \"catalog\": {catalog},\n            \"mode\": {mode},\n            \"repo\": {repo},\n            \"ref\": {git_ref},\n        }},\n    )\n",
             id = task.id.replace('-', "_"),
             tid = py_str(&task.id),
             retries = task.retries.unwrap_or(0),
@@ -131,6 +138,16 @@ fn render_dag(wf: &Workflow) -> String {
                 .map(|c| py_str(c))
                 .unwrap_or_else(|| "None".into()),
             mode = py_str(task.mode.as_deref().unwrap_or("shared")),
+            repo = task
+                .repo
+                .as_ref()
+                .map(|r| py_str(r))
+                .unwrap_or_else(|| "None".into()),
+            git_ref = task
+                .git_ref
+                .as_ref()
+                .map(|r| py_str(r))
+                .unwrap_or_else(|| "None".into()),
         ));
     }
     for task in &wf.tasks {
@@ -157,6 +174,32 @@ pub fn validate(wf: &Workflow) -> Result<(), JobsError> {
         );
         if !valid_name(&task.id) || !type_ok || !seen.insert(&task.id) {
             return Err(JobsError::InvalidTask(task.id.clone()));
+        }
+        // REQ-37 repo refs: repo must look like a repo name; the ref must be a
+        // plausible git rev with no room for argument injection (leading '-')
+        // and no quotes that could escape the generated Python.
+        if let Some(repo) = &task.repo {
+            if !valid_name(repo) {
+                return Err(JobsError::InvalidTask(format!(
+                    "{}: invalid repo {repo:?}",
+                    task.id
+                )));
+            }
+        }
+        if let Some(git_ref) = &task.git_ref {
+            let ref_ok = task.repo.is_some()
+                && !git_ref.is_empty()
+                && git_ref.len() <= 128
+                && !git_ref.starts_with('-')
+                && git_ref
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-'));
+            if !ref_ok {
+                return Err(JobsError::InvalidTask(format!(
+                    "{}: invalid ref {git_ref:?}",
+                    task.id
+                )));
+            }
         }
     }
     for task in &wf.tasks {
@@ -495,6 +538,8 @@ mod tests {
                     mode: None,
                     depends_on: vec![],
                     retries: Some(1),
+                    repo: None,
+                    git_ref: None,
                 },
                 WorkflowTask {
                     id: "report".into(),
@@ -505,6 +550,8 @@ mod tests {
                     mode: Some("dedicated".into()),
                     depends_on: vec!["load".into()],
                     retries: None,
+                    repo: None,
+                    git_ref: None,
                 },
             ],
         }
@@ -544,6 +591,39 @@ mod tests {
             .trim_end_matches('=')
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_'));
+    }
+
+    #[test]
+    fn repo_ref_tasks_render_and_validate() {
+        let mut wf = flow();
+        wf.tasks[1].repo = Some("analytics".into());
+        wf.tasks[1].git_ref = Some("v1.2".into());
+        wf.tasks[1].payload = "pipelines/report.json".into();
+        assert!(validate(&wf).is_ok());
+        let dag = render_dag(&wf);
+        assert!(dag.contains("\"repo\": \"analytics\""));
+        assert!(dag.contains("\"ref\": \"v1.2\""));
+        // tasks without a repo render explicit Nones (kwargs stay total)
+        assert!(dag.contains("\"repo\": None"));
+
+        // a ref without a repo is meaningless
+        let mut wf = flow();
+        wf.tasks[0].git_ref = Some("main".into());
+        assert!(matches!(validate(&wf), Err(JobsError::InvalidTask(_))));
+        // leading '-' would read as a git flag — refused
+        let mut wf = flow();
+        wf.tasks[0].repo = Some("analytics".into());
+        wf.tasks[0].git_ref = Some("--exec=evil".into());
+        assert!(matches!(validate(&wf), Err(JobsError::InvalidTask(_))));
+        // quotes could escape the generated Python — refused by the charset
+        let mut wf = flow();
+        wf.tasks[0].repo = Some("analytics".into());
+        wf.tasks[0].git_ref = Some("v1\"; import os".into());
+        assert!(matches!(validate(&wf), Err(JobsError::InvalidTask(_))));
+        // repo names follow workflow naming
+        let mut wf = flow();
+        wf.tasks[0].repo = Some("Bad Repo".into());
+        assert!(matches!(validate(&wf), Err(JobsError::InvalidTask(_))));
     }
 
     #[test]

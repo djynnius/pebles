@@ -220,6 +220,9 @@ const GIT_ALLOWED: &[&str] = &[
     "init",
     "rev-parse",
     "ls-files",
+    // read a file AT A REF without touching the working tree — the repo-ref
+    // workflow tasks' (REQ-37) reproducibility primitive
+    "show",
 ];
 
 fn run_git(id: &Value, args: &[String], cwd: Option<&str>) -> Value {

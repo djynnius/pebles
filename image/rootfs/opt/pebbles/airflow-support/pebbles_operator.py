@@ -60,6 +60,57 @@ def _exec(session_id: int, payload: dict) -> dict:
     return data
 
 
+def _git(session_id: int, repo: str, args: list) -> dict:
+    """A git call in the session that may legitimately fail (returns the raw
+    envelope instead of raising, unlike _exec)."""
+    status, data = _call(
+        "POST",
+        f"/sessions/{session_id}/exec",
+        {"op": "git", "args": args, "cwd": f"repos/{repo}"},
+    )
+    if status != 200:
+        raise RuntimeError(f"exec failed ({status}): {data.get('error', data)}")
+    return data
+
+
+def _resolve_repo_content(session_id: int, repo: str, ref: str | None, path: str) -> str:
+    """REQ-37: pin `ref` (default HEAD) to a commit sha and read `path` at that
+    sha via `git show` — reproducible, and the user's working tree is never
+    touched. A ref that isn't local yet gets one `git fetch` attempt (offline
+    repos still work when the ref resolves locally)."""
+    want = ref or "HEAD"
+    resolved = _git(session_id, repo, ["rev-parse", "--verify", f"{want}^{{commit}}"])
+    if not resolved.get("ok"):
+        print(f"pebbles: ref {want!r} not local, fetching")
+        _git(session_id, repo, ["fetch", "--all", "--tags"])
+        resolved = _git(session_id, repo, ["rev-parse", "--verify", f"{want}^{{commit}}"])
+    if not resolved.get("ok"):
+        raise RuntimeError(f"cannot resolve ref {want!r} in repo {repo!r}")
+    sha = resolved.get("stdout", "").strip()
+    print(f"pebbles: repo {repo} ref {want} = {sha}")  # reproducibility record (REQ-42)
+    shown = _git(session_id, repo, ["show", f"{sha}:{path}"])
+    if not shown.get("ok"):
+        raise RuntimeError(
+            f"cannot read {path!r} at {sha[:12]} in repo {repo!r}: "
+            f"{shown.get('stderr') or shown.get('error', '')}"
+        )
+    return shown.get("stdout", "")
+
+
+def _run_notebook(session_id: int, content: str, catalog: str | None) -> None:
+    notebook = json.loads(content or "{}")
+    nb_catalog = notebook.get("catalog") or catalog
+    for i, cell in enumerate(notebook.get("cells", [])):
+        print(f"pebbles: cell {i} ({cell.get('type', 'sql')})")
+        if cell.get("type") in ("python", "r"):
+            _exec(session_id, {"op": cell["type"], "code": cell.get("source", "")})
+        else:
+            op = {"op": "sql", "sql": cell.get("source", "")}
+            if nb_catalog:
+                op["catalog"] = nb_catalog
+            _exec(session_id, op)
+
+
 def run_pebbles_task(
     username: str,
     task_type: str,
@@ -67,6 +118,8 @@ def run_pebbles_task(
     engine: str | None = None,
     catalog: str | None = None,
     mode: str = "shared",
+    repo: str | None = None,
+    ref: str | None = None,
 ) -> None:
     body: dict = {"username": username, "mode": mode}
     if engine and engine != "main":
@@ -82,29 +135,28 @@ def run_pebbles_task(
     print(f"pebbles: session {session_id} opened as {username} (uid {sess.get('uid')})")
 
     try:
+        # REQ-37: with a repo, `payload` is a path INSIDE the repo and the
+        # content comes from the pinned ref, not the working tree.
+        content = (
+            _resolve_repo_content(session_id, repo, ref, payload) if repo else payload
+        )
         if task_type == "sql":
-            op: dict = {"op": "sql", "sql": payload}
+            op: dict = {"op": "sql", "sql": content}
             if catalog:
                 op["catalog"] = catalog
             _exec(session_id, op)
         elif task_type in ("python", "r"):
-            _exec(session_id, {"op": task_type, "code": payload})
+            _exec(session_id, {"op": task_type, "code": content})
         elif task_type == "shell":
-            _exec(session_id, {"op": "shell", "command": payload})
+            _exec(session_id, {"op": "shell", "command": content})
         elif task_type == "notebook":
-            # Run every cell of ~/notebooks/<payload>.json, in order (REQ-39).
-            got = _exec(session_id, {"op": "read", "path": f"notebooks/{payload}.json"})
-            notebook = json.loads(got.get("content", "{}"))
-            nb_catalog = notebook.get("catalog") or catalog
-            for i, cell in enumerate(notebook.get("cells", [])):
-                print(f"pebbles: cell {i} ({cell.get('type', 'sql')})")
-                if cell.get("type") in ("python", "r"):
-                    _exec(session_id, {"op": cell["type"], "code": cell.get("source", "")})
-                else:
-                    op = {"op": "sql", "sql": cell.get("source", "")}
-                    if nb_catalog:
-                        op["catalog"] = nb_catalog
-                    _exec(session_id, op)
+            if not repo:
+                # Run every cell of ~/notebooks/<payload>.json, in order (REQ-39).
+                got = _exec(
+                    session_id, {"op": "read", "path": f"notebooks/{payload}.json"}
+                )
+                content = got.get("content", "{}")
+            _run_notebook(session_id, content, catalog)
         else:
             raise RuntimeError(f"unknown task type {task_type!r}")
     finally:

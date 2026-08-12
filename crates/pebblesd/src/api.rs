@@ -1193,29 +1193,39 @@ async fn list_engines(State(state): State<AppState>) -> ApiResult<Vec<EngineDesc
         });
     }
     for record in state.cluster.list_engines() {
-        // The full REQ-23 state model comes from the engine itself; unreachable
-        // engines report as stopped.
-        let status = state
-            .cluster
-            .http
-            .get(format!("{}/engine/state", record.address))
-            .bearer_auth(&record.secret)
-            .timeout(std::time::Duration::from_secs(2))
-            .send()
-            .await;
-        let status = match status {
-            Ok(resp) if resp.status().is_success() => resp
-                .json::<EngineStatus>()
-                .await
-                .ok()
-                .unwrap_or(EngineStatus {
-                    state: "stopped".into(),
-                    sessions: 0,
-                }),
-            _ => EngineStatus {
-                state: "stopped".into(),
-                sessions: 0,
+        // REQ-22/23: state comes from the health loop's cache — instant, and
+        // "lost" (unreachable for 3 probes) is distinct from an engine's own
+        // "stopped". Only an engine the loop hasn't observed yet (registered
+        // seconds ago) gets one inline probe.
+        let status = match state.cluster.engine_health(&record.name) {
+            Some((engine_state, sessions)) => EngineStatus {
+                state: engine_state,
+                sessions,
             },
+            None => {
+                let probe = state
+                    .cluster
+                    .http
+                    .get(format!("{}/engine/state", record.address))
+                    .bearer_auth(&record.secret)
+                    .timeout(std::time::Duration::from_secs(2))
+                    .send()
+                    .await;
+                let observed = match probe {
+                    Ok(resp) if resp.status().is_success() => resp
+                        .json::<EngineStatus>()
+                        .await
+                        .ok()
+                        .map(|s| (s.state, s.sessions)),
+                    _ => None,
+                };
+                state.cluster.note_probe(&record.name, observed.clone());
+                let (engine_state, sessions) = observed.unwrap_or_else(|| ("stopped".into(), 0));
+                EngineStatus {
+                    state: engine_state,
+                    sessions,
+                }
+            }
         };
         let access = Some(state.cluster.engine_access(&record.name));
         engines.push(EngineDescriptor {

@@ -3,7 +3,6 @@
 //! Postgres backup is taken (non-optional) before any migration steps run. The
 //! nightly upgrade test exercises this end to end.
 
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
 /// Bump this when a release needs catalog migrations; steps go in `apply_steps`.
@@ -78,40 +77,10 @@ async fn wait_for_postgres() -> bool {
 }
 
 fn backup(config_dir: &Path, from: u32) -> std::io::Result<PathBuf> {
-    use std::os::unix::fs::PermissionsExt;
-    let dir = config_dir.join("backups");
-    std::fs::create_dir_all(&dir)?;
-    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let path = dir.join(format!(
-        "pre-migration-v{from}-to-v{SCHEMA_VERSION}-{ts}.sql"
-    ));
-
-    let (uid, gid) = pebbles_identity::system_user("postgres")
-        .ok_or_else(|| std::io::Error::other("no postgres user"))?;
-    let out = std::fs::File::create(&path)?;
-    let mut cmd = std::process::Command::new("pg_dumpall");
-    cmd.args(["-h", "/run/postgresql"])
-        .env_clear()
-        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
-        .stdout(out)
-        .stderr(std::process::Stdio::piped());
-    if uid != unsafe { libc::geteuid() } {
-        cmd.uid(uid).gid(gid);
-        // The postgres user must be able to read nothing and write nothing here;
-        // only the already-open stdout handle crosses the uid boundary.
-    }
-    let result = cmd.output()?;
-    if !result.status.success() {
-        let _ = std::fs::remove_file(&path);
-        return Err(std::io::Error::other(format!(
-            "pg_dumpall failed: {}",
-            String::from_utf8_lossy(&result.stderr).trim()
-        )));
-    }
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-    Ok(path)
+    // Shared dump machinery (backups.rs, REQ-50); the label keeps the
+    // pre-migration naming that `backups::prune` deliberately never touches.
+    crate::backups::dump_catalog(
+        config_dir,
+        &format!("pre-migration-v{from}-to-v{SCHEMA_VERSION}"),
+    )
 }
