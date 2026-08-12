@@ -8,6 +8,14 @@ name: Integration
 on:
   push:
     branches: [main]
+    # Docs-only pushes must not burn a 7-cell matrix run — or worse, cancel an
+    # in-flight one carrying a verdict (concurrency below cancels in progress).
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "*.png"
+      - "ui_ux.html"
+      - "LICENSE"
   workflow_dispatch:
 
 permissions:

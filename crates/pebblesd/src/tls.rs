@@ -167,6 +167,22 @@ mod tests {
         (der, fp)
     }
 
+    #[tokio::test]
+    async fn server_config_builds_with_the_installed_provider() {
+        // Regression guard for the boot panic: with both ring (ours) and
+        // aws-lc-rs (via reqwest) in the dependency graph, rustls has no
+        // default provider unless one is installed explicitly — exactly what
+        // main() does. This test walks the same path the cluster listener does.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = ensure_cert(dir.path()).unwrap();
+        server_config(cert, key)
+            .await
+            .expect("TLS server config must build at boot");
+        // and the pinned client constructor walks the client path
+        let _ = pinned_client(Some("00".repeat(32)));
+    }
+
     #[test]
     fn certs_persist_and_fingerprint_is_stable() {
         let dir = tempfile::tempdir().unwrap();

@@ -75,6 +75,16 @@ async fn main() -> anyhow::Result<()> {
         std::env::set_var("PYTHONUTF8", "1");
     }
     tracing_subscriber::fmt().with_target(false).init();
+    // The process-level rustls provider MUST be pinned before any TLS config
+    // is built: reqwest's rustls-tls pulls aws-lc-rs into the graph alongside
+    // our ring feature, and with two candidates rustls refuses to guess —
+    // panicking at the first handshake. Ring, explicitly, everywhere.
+    if rustls::crypto::ring::default_provider()
+        .install_default()
+        .is_err()
+    {
+        tracing::debug!("rustls provider already installed");
+    }
     #[cfg(target_os = "linux")]
     ensure_init_mounts();
     #[cfg(target_os = "linux")]
