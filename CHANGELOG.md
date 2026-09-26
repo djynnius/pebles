@@ -21,6 +21,11 @@ All notable changes to Pebbles are documented here. The format follows
   settable from Engines and Engine config.
 
 ### Fixed
+- **Creating a user after a team group could fail (500).** User ids and team
+  group ids share one reserved pool, but user creation only avoided other
+  users' uids — so a user created after a group (e.g. the `admins` group the
+  admin bootstrap creates) could pick a uid whose gid was taken. The
+  allocator now sees both; caught by the acceptance smoke on every runtime.
 - **Engines now follow the main in both directions.** Account sync used to be
   add-only: a user deleted or disabled on the main kept a working login (incl.
   SFTP) on every engine, and password changes never reached them. Engines now

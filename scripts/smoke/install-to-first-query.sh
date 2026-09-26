@@ -155,8 +155,15 @@ badcode="$(curl -s -o /dev/null -w '%{http_code}' \
 rm -f "$jar"
 
 echo "==> M0.4: two users, two sessions, two uids (REQ-12/16)"
-pd -H 'Content-Type: application/json' \
-  -d '{"username":"tomas","password":"pebbles-demo-2"}' http://pebblesd/users >/dev/null
+created_tomas="$(pd -H 'Content-Type: application/json' \
+  -d '{"username":"tomas","password":"pebbles-demo-2"}' http://pebblesd/users)"
+# The allocator hands out the next FREE id in the shared uid/gid pool — team
+# groups (e.g. `admins`, created with the first user) take ids too, so read it.
+uid_tomas="$(json_num "$created_tomas" uid)"
+[ -n "$uid_tomas" ] && [ "$uid_tomas" != "70000" ] \
+  || { echo "FAIL: tomas got no distinct uid: $created_tomas" >&2; exit 1; }
+ctr_exec getent group admins | grep -q ':maya' \
+  || { echo "FAIL: the first account should be bootstrapped into admins" >&2; exit 1; }
 s_maya="$(pd -H 'Content-Type: application/json' -d '{"username":"maya"}' http://pebblesd/sessions)"
 s_tomas="$(pd -H 'Content-Type: application/json' -d '{"username":"tomas"}' http://pebblesd/sessions)"
 id_maya="$(json_num "$s_maya" id)"; pid_maya="$(json_num "$s_maya" pid)"
@@ -165,8 +172,8 @@ echo "    maya: session $id_maya pid $pid_maya · tomas: session $id_tomas pid $
 uid_of() { ctr_exec sed -n 's/^Uid:[[:space:]]*\([0-9]*\).*/\1/p' "/proc/$1/status"; }
 [ "$(uid_of "$pid_maya")" = "70000" ] \
   || { echo "FAIL: maya's session process is not uid 70000" >&2; exit 1; }
-[ "$(uid_of "$pid_tomas")" = "70001" ] \
-  || { echo "FAIL: tomas's session process is not uid 70001" >&2; exit 1; }
+[ "$(uid_of "$pid_tomas")" = "$uid_tomas" ] \
+  || { echo "FAIL: tomas's session process is not uid $uid_tomas" >&2; exit 1; }
 
 echo "==> filesystem permissions ARE the permission system"
 pd -H 'Content-Type: application/json' \
@@ -420,7 +427,7 @@ echo "    $ready"
 expect '"state":"ready"' "dedicated session started after the drain" "$ready"
 ded_id="$(json_num "$ready" id)"
 pd -H 'Content-Type: application/json' -d '{"id":20,"op":"ping"}' \
-  "http://pebblesd/sessions/$ded_id/exec" | grep -q '"uid":70001' \
+  "http://pebblesd/sessions/$ded_id/exec" | grep -q "\"uid\":$uid_tomas" \
   || { echo "FAIL: dedicated session is not tomas" >&2; exit 1; }
 
 echo "==> a second reservation is cancellable (REQ-19)"

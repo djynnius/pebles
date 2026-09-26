@@ -332,7 +332,16 @@ pub mod host {
         if parse_passwd(&passwd, username).is_some() {
             return Err(IdentityError::UserExists(username.to_string()));
         }
-        let mut allocator = UidAllocator::new(pebbles_users(&passwd).iter().map(|u| u.uid));
+        // uid == gid (personal group), and team groups draw gids from the SAME
+        // reserved pool — so the allocator must see both, or a user created
+        // after a team group (e.g. `admins`) gets a uid whose gid is taken.
+        let group = std::fs::read_to_string("/etc/group")?;
+        let mut allocator = UidAllocator::new(
+            pebbles_users(&passwd)
+                .iter()
+                .map(|u| u.uid)
+                .chain(pebbles_groups(&group, &passwd).iter().map(|g| g.gid)),
+        );
         let uid = allocator.allocate()?;
         let id = uid.to_string();
 
