@@ -16,6 +16,10 @@ All notable changes to Pebbles are documented here. The format follows
   removed); each job's status dot shows its latest run.
 
 ### Fixed
+- **Admin controls missing right after sign-in.** The sign-in reply didn't
+  carry the `admin` flag (only `/api/me` did), so the Admin nav (Users,
+  Groups), "Register engine" and the join-token settings stayed hidden until
+  a page reload. `/api/login` now returns the same identity as `/api/me`.
 - **No more "Control server error" at boot.** gunicorn 26 opens a runtime
   control socket under `$HOME/.gunicorn`, which the unprivileged web user
   can't (and shouldn't) write. Pebbles supervises gunicorn itself, so the web

@@ -285,16 +285,21 @@ def register_api(app, client: PebblesdClient) -> None:
 
     # ---- auth ------------------------------------------------------------
 
+    def _whoami(user: dict) -> dict:
+        """The signed-in identity as the SPA sees it — /me and /login alike,
+        so the admin nav is right from the first render after sign-in."""
+        try:
+            admin = _is_admin(user["username"])
+        except (OSError, RuntimeError, ValueError):
+            admin = False
+        return {**user, "admin": admin}
+
     @app.get("/api/me")
     def api_me():  # pyright: ignore[reportUnusedFunction]
         user = session.get("user")
         if user is None:
             return jsonify({"error": "unauthenticated"}), 401
-        try:
-            admin = _is_admin(user["username"])
-        except (OSError, RuntimeError, ValueError):
-            admin = False
-        return jsonify({**user, "admin": admin})
+        return jsonify(_whoami(user))
 
     @app.post("/api/login")
     def api_login():  # pyright: ignore[reportUnusedFunction]
@@ -303,7 +308,7 @@ def register_api(app, client: PebblesdClient) -> None:
         if identity is None:
             return jsonify({"error": "Invalid username or password."}), 401
         session["user"] = identity
-        return jsonify(identity)
+        return jsonify(_whoami(identity))
 
     @app.post("/api/logout")
     def api_logout():  # pyright: ignore[reportUnusedFunction]

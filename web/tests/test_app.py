@@ -895,6 +895,15 @@ def test_me_reports_admin_membership():
     assert signed_in_as("tomas", d).get("/api/me").get_json()["admin"] is False
 
 
+def test_login_reports_admin_membership_too():
+    # UAT: the SPA takes the user from the login reply, so without the flag the
+    # admin nav stayed hidden until a reload hit /api/me.
+    d = FakeDaemon()
+    for name, admin in (("maya", True), ("tomas", False)):
+        r = client(d).post("/api/login", json={"username": name, "password": "pebbles-demo-1"})
+        assert r.get_json()["admin"] is admin
+
+
 def test_non_admins_are_refused_every_admin_action():
     c = signed_in_as("tomas")
     refused = [
