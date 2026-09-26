@@ -726,11 +726,12 @@ def register_api(app, client: PebblesdClient) -> None:
         rel = _safe_rel(request.args.get("path", ""))
         if not rel:
             return jsonify({"error": "bad path"}), 422
-        got = _session_op(user["username"], {"op": "read", "path": rel})
+        # Byte-exact (read_b64): the text `read` op can't carry binary files.
+        got = _session_op(user["username"], {"op": "read_b64", "path": rel})
         if not got.get("ok"):
             return jsonify({"error": got.get("error", "not found")}), 404
         return Response(
-            got.get("content", ""),
+            base64.b64decode(got.get("b64", "")),
             mimetype="application/octet-stream",
             headers={
                 "Content-Disposition": f'attachment; filename="{os.path.basename(rel)}"'

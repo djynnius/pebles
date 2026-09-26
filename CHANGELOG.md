@@ -16,6 +16,20 @@ All notable changes to Pebbles are documented here. The format follows
   removed); each job's status dot shows its latest run.
 
 ### Fixed
+- **Session replies could desync (found in the Phase 4 live test).** When a
+  client disconnected mid-execution (a timed-out request, a closed tab), the
+  kernel's reply stayed in the pipe and every later request in that session
+  received the *previous* request's answer — wrong cell outputs, "not found"
+  documents. Every kernel request now carries a unique id; the broker
+  discards stale replies and restores the caller's id.
+- **Files over 4 KB were truncated, binary files couldn't be downloaded or
+  opened.** The kernel's read capped content at 4 KB (breaking any notebook
+  with a saved chart, and every download larger than that) and only handled
+  UTF-8. Documents now read up to 16 MB; downloads use a byte-exact
+  `read_b64` op (64 MB cap; SFTP beyond that).
+- **Slow cells no longer time out at 10 s.** The web tier used its generic
+  10 s socket timeout for cell execution (a first `import matplotlib` alone
+  can exceed it); execution now allows the broker's full 120 s.
 - **The version shown is the real one.** The UI footer said `v0.1.0` (hard-
   coded in three places) after 1.0.0 shipped; it's now stamped at build time
   from `package.json`, and CI fails if Cargo, pyproject and package.json

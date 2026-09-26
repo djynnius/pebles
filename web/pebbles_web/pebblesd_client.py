@@ -33,9 +33,9 @@ class PebblesdClient:
         self.socket_path = socket_path or os.environ.get("PEBBLES_SOCKET", DEFAULT_SOCKET)
 
     def _request(  # body may be a dict or a list; both encode as JSON
-        self, method: str, path: str, body=None
+        self, method: str, path: str, body=None, timeout: float = 10.0
     ) -> tuple[int, dict]:
-        conn = _UnixHTTPConnection(self.socket_path)
+        conn = _UnixHTTPConnection(self.socket_path, timeout=timeout)
         try:
             headers = {}
             payload = None
@@ -72,8 +72,10 @@ class PebblesdClient:
             return None
         raise RuntimeError(f"pebblesd POST /auth/login -> {status}: {data}")
 
-    def _expect(self, method: str, path: str, body: dict | None = None) -> dict:
-        status, data = self._request(method, path, body)
+    def _expect(
+        self, method: str, path: str, body: dict | None = None, timeout: float = 10.0
+    ) -> dict:
+        status, data = self._request(method, path, body, timeout)
         if status // 100 == 2:
             return data
         raise PebblesdError(status, data.get("error", str(data)))
@@ -88,8 +90,15 @@ class PebblesdClient:
     def close_session(self, session_id: int) -> dict:
         return self._expect("DELETE", f"/sessions/{session_id}")
 
+    #: A cell/query may legitimately run up to the broker's 120 s exec limit
+    #: (a first `import matplotlib` builds its font cache for 10–30 s) — the
+    #: generic 10 s socket timeout failed every slow-but-healthy cell.
+    EXEC_TIMEOUT = 150.0
+
     def exec_in_session(self, session_id: int, payload: dict) -> dict:
-        return self._expect("POST", f"/sessions/{session_id}/exec", payload)
+        return self._expect(
+            "POST", f"/sessions/{session_id}/exec", payload, timeout=self.EXEC_TIMEOUT
+        )
 
     def exec_stream(self, session_id: int, payload: dict):
         """Progressive exec (op sql_stream, REQ-31): yields each NDJSON line

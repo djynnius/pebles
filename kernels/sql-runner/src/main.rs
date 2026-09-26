@@ -19,9 +19,41 @@
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 
-const MAX_READ_BYTES: usize = 4096;
+const MAX_READ_BYTES: usize = 4096; // error/stderr excerpts only
+/// Text documents (notebooks with saved outputs, dashboards, recents). This was
+/// once MAX_READ_BYTES — 4 KB — which truncated every notebook or dashboard
+/// larger than that into unparseable JSON.
+const MAX_DOC_BYTES: u64 = 16 * 1024 * 1024;
+/// Raw file reads for download (`read_b64`).
+const MAX_DOWNLOAD_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_RESULT_BYTES: usize = 262_144;
 const EXTENSION_DIR: &str = "/opt/pebbles/duckdb/extensions";
+
+/// Standard base64 encoder (downloads of arbitrary — often binary — files).
+fn b64_encode(bytes: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        out.push(T[(b[0] >> 2) as usize] as char);
+        out.push(T[(((b[0] & 3) << 4) | (b[1] >> 4)) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            T[(((b[1] & 15) << 2) | (b[2] >> 6)) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            T[(b[2] & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
 
 /// Minimal standard-base64 decoder (file uploads arrive base64 over JSON; no dep
 /// worth pulling for this). Ignores whitespace; returns None on invalid input.
@@ -313,14 +345,33 @@ fn handle(request: &Value, executors: &mut Executors) -> Value {
             "memory_limit_bytes": std::env::var("PEBBLES_SESSION_MEMORY_BYTES").ok(),
         }),
         Some("read") => match request.get("path").and_then(Value::as_str) {
-            Some(path) => match std::fs::read_to_string(path) {
-                Ok(mut content) => {
-                    content.truncate(MAX_READ_BYTES);
-                    json!({"id": id, "ok": true, "content": content})
-                }
+            Some(path) => match std::fs::metadata(path) {
+                Ok(meta) if meta.len() > MAX_DOC_BYTES => fail(format!(
+                    "{path} is {} bytes — too large to open as a document (limit {MAX_DOC_BYTES})",
+                    meta.len()
+                )),
+                Ok(_) => match std::fs::read_to_string(path) {
+                    Ok(content) => json!({"id": id, "ok": true, "content": content}),
+                    Err(e) => fail(e.to_string()),
+                },
                 Err(e) => fail(e.to_string()),
             },
             None => fail("read needs a path".into()),
+        },
+        // Byte-exact reads for downloads: any file type, base64 on the wire.
+        Some("read_b64") => match request.get("path").and_then(Value::as_str) {
+            Some(path) => match std::fs::metadata(path) {
+                Ok(meta) if meta.len() > MAX_DOWNLOAD_BYTES => fail(format!(
+                    "{path} is {} bytes — larger than the {MAX_DOWNLOAD_BYTES}-byte download limit; use SFTP",
+                    meta.len()
+                )),
+                Ok(_) => match std::fs::read(path) {
+                    Ok(bytes) => json!({"id": id, "ok": true, "b64": b64_encode(&bytes), "size": bytes.len()}),
+                    Err(e) => fail(e.to_string()),
+                },
+                Err(e) => fail(e.to_string()),
+            },
+            None => fail("read_b64 needs a path".into()),
         },
         Some("write") => match (
             request.get("path").and_then(Value::as_str),
@@ -493,7 +544,7 @@ fn handle(request: &Value, executors: &mut Executors) -> Value {
             run_git(&id, &args, request.get("cwd").and_then(Value::as_str))
         }
         other => fail(format!(
-            "unknown op {other:?} (proto 1: ping/read/write/list/browse/mkdir/delete/\
+            "unknown op {other:?} (proto 1: ping/read/read_b64/write/list/browse/mkdir/delete/\
              rename/sql/python/r/shell/git)"
         )),
     }
@@ -661,6 +712,18 @@ fn run_sql_stream(request: &Value, stdout: &std::io::Stdout) -> std::io::Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn b64_encoder_round_trips_binary_through_the_decoder() {
+        // Downloads used read_to_string (UTF-8 only, truncated at 4 KB): every
+        // binary or larger file broke. read_b64 carries exact bytes.
+        let bytes: Vec<u8> = (0..=255u8).cycle().take(10_007).collect();
+        let enc = b64_encode(&bytes);
+        assert_eq!(b64_decode(&enc).unwrap(), bytes);
+        assert_eq!(b64_encode(b"hello"), "aGVsbG8=");
+        assert_eq!(b64_encode(b""), "");
+        assert_eq!(b64_encode(b"ab"), "YWI=");
+    }
 
     #[test]
     fn base64_round_trips_common_inputs() {

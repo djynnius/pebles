@@ -145,6 +145,13 @@ class FakeDaemon:
         if op == "write":
             self.files[payload["path"]] = payload["content"]
             return {"id": None, "ok": True}
+        if op == "read_b64":
+            import base64 as _b64
+            content = self.files.get(payload["path"])
+            if content is None:
+                return {"id": None, "ok": False, "error": "No such file"}
+            raw = content if isinstance(content, bytes) else content.encode()
+            return {"id": None, "ok": True, "b64": _b64.b64encode(raw).decode(), "size": len(raw)}
         if op == "read":
             content = self.files.get(payload["path"])
             if content is None:
@@ -183,7 +190,11 @@ class FakeDaemon:
             if op == "upload":
                 import base64
 
-                self.files[payload["path"]] = base64.b64decode(payload["b64"]).decode()
+                raw = base64.b64decode(payload["b64"])
+                try:
+                    self.files[payload["path"]] = raw.decode()
+                except UnicodeDecodeError:
+                    self.files[payload["path"]] = raw
             if op == "delete":
                 self.files.pop(payload.get("path", ""), None)
             return {"id": None, "ok": True}
@@ -1239,3 +1250,15 @@ def test_search_covers_docs_jobs_tables_but_never_inaccessible_catalogs():
     assert ("catalog", "claims") in {(h["kind"], h["name"]) for h in mine}
     assert ("table", "claims") in {(h["kind"], h["name"]) for h in mine}
     assert tomas.get("/api/search?q=c").get_json() == []            # too short
+
+
+def test_downloads_are_byte_exact_for_binary_and_large_files():
+    # UAT follow-up: downloads went through a UTF-8 read truncated at 4 KB —
+    # binary files failed outright and anything larger was cut off.
+    import io
+    c = api_signed_in()
+    blob = bytes(range(256)) * 400                     # 102 KB, not UTF-8
+    c.post("/api/files/upload", data={"dir": "", "file": (io.BytesIO(blob), "data.bin")},
+           content_type="multipart/form-data")
+    got = c.get("/api/files/download?path=data.bin")
+    assert got.status_code == 200 and got.data == blob

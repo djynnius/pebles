@@ -127,6 +127,19 @@ pub struct Broker {
     /// Serializes reusable opens so N parallel requests from one fresh login
     /// converge on ONE kernel instead of racing to fork N of them.
     reuse_gate: Mutex<()>,
+    /// Stamps every kernel request with a unique id; replies are matched on it.
+    seq: AtomicU64,
+}
+
+/// Put our own sequence id on a request (the kernel echoes `id` back) and
+/// return (tag, the caller's original id).
+fn stamp(payload: &mut Value, seq: &AtomicU64) -> (Value, Value) {
+    let tag = Value::String(format!("pb-{}", seq.fetch_add(1, Ordering::SeqCst)));
+    let original = match payload {
+        Value::Object(map) => map.insert("id".into(), tag.clone()).unwrap_or(Value::Null),
+        _ => Value::Null,
+    };
+    (tag, original)
 }
 
 impl Broker {
@@ -142,6 +155,7 @@ impl Broker {
             reservation: StdMutex::new(None),
             next_id: AtomicU64::new(0),
             reuse_gate: Mutex::new(()),
+            seq: AtomicU64::new(1),
         });
         tokio::spawn(reap_idle(Arc::downgrade(&broker)));
         broker
@@ -438,6 +452,8 @@ impl Broker {
             .get(&id)
             .cloned()
             .ok_or(SessionError::NotFound(id))?;
+        let mut payload = payload;
+        let (tag, original_id) = stamp(&mut payload, &self.seq);
         let mut io = entry.io.lock().await;
         let line =
             serde_json::to_string(&payload).map_err(|e| SessionError::Kernel(e.to_string()))?;
@@ -445,13 +461,28 @@ impl Broker {
             .write_all(format!("{line}\n").as_bytes())
             .await
             .map_err(|e| SessionError::Kernel(e.to_string()))?;
-        let reply = tokio::time::timeout(EXEC_TIMEOUT, io.stdout.next_line())
-            .await
-            .map_err(|_| SessionError::Kernel("kernel timed out".into()))?
-            .map_err(|e| SessionError::Kernel(e.to_string()))?
-            .ok_or_else(|| SessionError::Kernel("kernel closed the session".into()))?;
-        *entry.last_used.lock().unwrap() = Instant::now();
-        serde_json::from_str(&reply).map_err(|e| SessionError::Kernel(format!("bad reply: {e}")))
+        // Read until OUR reply. A caller that was cancelled mid-exec (client
+        // disconnect, timeout) leaves its reply in the pipe; without matching,
+        // every later request in the session read the previous one's answer.
+        let deadline = tokio::time::Instant::now() + EXEC_TIMEOUT;
+        loop {
+            let reply = tokio::time::timeout_at(deadline, io.stdout.next_line())
+                .await
+                .map_err(|_| SessionError::Kernel("kernel timed out".into()))?
+                .map_err(|e| SessionError::Kernel(e.to_string()))?
+                .ok_or_else(|| SessionError::Kernel("kernel closed the session".into()))?;
+            let mut value: Value = serde_json::from_str(&reply)
+                .map_err(|e| SessionError::Kernel(format!("bad reply: {e}")))?;
+            if value.get("id") != Some(&tag) {
+                tracing::warn!(session = id, "discarding a stale kernel reply");
+                continue;
+            }
+            if let Value::Object(map) = &mut value {
+                map.insert("id".into(), original_id);
+            }
+            *entry.last_used.lock().unwrap() = Instant::now();
+            return Ok(value);
+        }
     }
 
     /// Send one request line and stream response lines into `tx` until the
@@ -471,6 +502,8 @@ impl Broker {
             .get(&id)
             .cloned()
             .ok_or(SessionError::NotFound(id))?;
+        let mut payload = payload;
+        let (tag, original_id) = stamp(&mut payload, &self.seq);
         let mut io = entry.io.lock().await;
         let line =
             serde_json::to_string(&payload).map_err(|e| SessionError::Kernel(e.to_string()))?;
@@ -484,8 +517,14 @@ impl Broker {
                 .map_err(|_| SessionError::Kernel("kernel timed out".into()))?
                 .map_err(|e| SessionError::Kernel(e.to_string()))?
                 .ok_or_else(|| SessionError::Kernel("kernel closed the session".into()))?;
-            let value: Value = serde_json::from_str(&reply)
+            let mut value: Value = serde_json::from_str(&reply)
                 .map_err(|e| SessionError::Kernel(format!("bad reply: {e}")))?;
+            if value.get("id") != Some(&tag) {
+                continue; // a cancelled earlier request's leftovers
+            }
+            if let Value::Object(map) = &mut value {
+                map.insert("id".into(), original_id.clone());
+            }
             let done = value.get("done").and_then(Value::as_bool).unwrap_or(false);
             // A receiver that hung up still needs the kernel drained to the
             // terminal line, or the next exec would read stale stream lines.
@@ -569,18 +608,35 @@ mod tests {
 
     /// A stand-in kernel honouring the protocol: hello with its real uid, then one
     /// JSON reply per request line.
-    fn stub_kernel(dir: &std::path::Path) -> PathBuf {
+    /// A kernel that echoes each request's id (as the real one does).
+    /// `stale_first` also emits a reply with the WRONG id before each real one
+    /// — exactly what a cancelled earlier request leaves in the pipe.
+    fn write_stub(dir: &std::path::Path, name: &str, stale_first: bool) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
-        let path = dir.join("stub-kernel.sh");
+        let path = dir.join(name);
+        let stale = if stale_first {
+            "echo '{\"id\":\"pb-stale\",\"ok\":true,\"stale\":true}';"
+        } else {
+            ""
+        };
         std::fs::write(
             &path,
-            "#!/bin/sh\n\
-             echo \"{\\\"kernel\\\":\\\"stub\\\",\\\"proto\\\":1,\\\"uid\\\":$(id -u),\\\"gid\\\":$(id -g)}\"\n\
-             while read line; do echo '{\"id\":0,\"ok\":true}'; done\n",
+            format!(
+                "#!/bin/sh\n\
+                 echo \"{{\\\"kernel\\\":\\\"stub\\\",\\\"proto\\\":1,\\\"uid\\\":$(id -u),\\\"gid\\\":$(id -g)}}\"\n\
+                 while read line; do \
+                   rid=$(printf '%s' \"$line\" | sed -n 's/.*\"id\":\"\\(pb-[0-9]*\\)\".*/\\1/p'); \
+                   {stale} echo \"{{\\\"id\\\":\\\"$rid\\\",\\\"ok\\\":true}}\"; \
+                 done\n"
+            ),
         )
         .unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         path
+    }
+
+    fn stub_kernel(dir: &std::path::Path) -> PathBuf {
+        write_stub(dir, "stub-kernel.sh", false)
     }
 
     fn request(dir: &std::path::Path, mem: u64) -> OpenRequest {
@@ -706,6 +762,30 @@ mod tests {
             out.push(d.expect("completed"));
         }
         out
+    }
+
+    #[tokio::test]
+    async fn stale_replies_are_discarded_and_the_callers_id_is_restored() {
+        // UAT: a client that disconnected mid-exec left its reply in the pipe,
+        // and every later request in the session got the PREVIOUS answer.
+        let dir = tempfile::tempdir().unwrap();
+        let broker = Broker::start(BrokerConfig {
+            kernel: write_stub(dir.path(), "desync-kernel.sh", true),
+            engine_memory_bytes: 100,
+            max_sessions: 4,
+            idle_timeout: Duration::from_secs(3600),
+            allow_dedicated: true,
+            drain_notify: Duration::from_secs(900),
+        });
+        let info = session(broker.open(request(dir.path(), 60)).await.unwrap());
+        for caller_id in [7, 8, 9] {
+            let reply = broker
+                .exec(info.id, serde_json::json!({"id": caller_id, "op": "ping"}))
+                .await
+                .unwrap();
+            assert!(reply.get("stale").is_none(), "got a stale reply: {reply}");
+            assert_eq!(reply["id"], caller_id, "caller's own id comes back");
+        }
     }
 
     #[tokio::test]
