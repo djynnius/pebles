@@ -656,8 +656,9 @@ function PermissionsTab({ catalog, canGrant }: { catalog: string; canGrant: bool
 
 /* ---- shared bits ------------------------------------------------------- */
 
-export function ResultGrid({ rows }: { rows: Row[] }) {
-  const columns = useMemo(() => columnsOf(rows), [rows]);
+export function ResultGrid({ rows, columns: given }: { rows: Row[]; columns?: string[] }) {
+  // An explicit column list (e.g. a DataFrame's) wins; otherwise SELECT order.
+  const columns = useMemo(() => (given && given.length ? given : columnsOf(rows)), [rows, given]);
 
   return (
     <div

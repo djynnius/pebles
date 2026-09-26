@@ -349,7 +349,10 @@ class FakeDaemon:
         return workflow
 
     def trigger_workflow(self, name):
-        return {"triggered": name}
+        return {"queued": name}
+
+    def trigger_status(self, name):
+        return {"state": "triggered", "error": None, "at": 1}
 
     def workflow_runs(self, name):
         return [{"run_id": "manual__1", "state": "success", "start": "t0", "end": "t1"}]
@@ -841,7 +844,7 @@ def test_api_autoetl_profile_and_approve():
     assert ok.status_code == 200
     out = ok.get_json()
     assert out["workflow"]["username"] == "maya"  # loads run as the approver
-    assert out["run"] == {"triggered": proposal["name"]}
+    assert out["run"] == {"queued": proposal["name"]}
     task_ids = [t["id"] for t in out["workflow"]["tasks"]]
     assert task_ids[0] == "stage" and task_ids[-1] == "fact"
 
@@ -1069,3 +1072,122 @@ def test_managed_pgpass_cannot_be_deleted_or_renamed():
     c = api_signed_in()
     assert c.post("/api/files/delete", json={"path": ".pgpass"}).status_code == 409
     assert c.post("/api/files/rename", json={"path": "./.pgpass", "to": "x"}).status_code == 409
+
+
+# ---- Phase 4: notebooks ---------------------------------------------------------
+
+
+def test_notebook_markdown_cells_and_saved_outputs():
+    c = api_signed_in()
+    c.post("/api/notebooks", json={"name": "eda"})
+    png = "iVBORw0KGgo" + "A" * 20
+    c.put("/api/notebooks/eda", json={"catalog": None, "cells": [
+        {"type": "md", "source": "# Title", "output": {"stdout": "ignored"}},
+        {"type": "python", "source": "df", "output": {
+            "ok": True, "table": {"columns": ["a"], "rows": [{"a": 1}], "total": 1},
+            "images": [png], "evil": "<script>"}},
+        {"type": "bogus", "source": "dropped"},
+    ]})
+    nb = c.get("/api/notebooks/eda").get_json()
+    assert [x["type"] for x in nb["cells"]] == ["md", "python"]
+    assert "output" not in nb["cells"][0]                 # markdown never has output
+    out = nb["cells"][1]["output"]
+    assert out["table"]["rows"] == [{"a": 1}] and out["images"] == [png]
+    assert "evil" not in out                               # only whitelisted fields
+    md = c.get("/api/notebooks/eda/cells/0/stream").get_data(as_text=True)
+    assert "event: result" in md                           # md is a no-op, not an error
+
+
+def test_saved_outputs_are_capped():
+    from pebbles_web.notebooks import sanitize
+
+    huge = {"ok": True, "stdout": "x" * 3_000_000}
+    nb = sanitize({"cells": [{"type": "python", "source": "p", "output": huge}]})
+    assert "too large" in nb["cells"][0]["output"]["stdout"]
+
+
+def test_ipynb_round_trip_preserves_cell_types():
+    from pebbles_web.notebooks import from_ipynb, to_ipynb
+
+    ours = {"catalog": "claims", "cells": [
+        {"type": "md", "source": "# Claims\nnotes"},
+        {"type": "sql", "source": "SELECT 1"},
+        {"type": "python", "source": "x = 1\nx"},
+        {"type": "r", "source": "summary(cars)"},
+    ]}
+    doc = to_ipynb(ours)
+    assert doc["nbformat"] == 4
+    assert [c["cell_type"] for c in doc["cells"]] == ["markdown", "code", "code", "code"]
+    assert "".join(doc["cells"][1]["source"]).startswith("%%sql\n")
+    back = from_ipynb(doc)
+    assert back == ours
+
+
+def test_ipynb_export_and_import_endpoints():
+    import io
+    c = api_signed_in()
+    c.post("/api/notebooks", json={"name": "src"})
+    c.put("/api/notebooks/src", json={"cells": [{"type": "python", "source": "1+1"}]})
+    exported = c.get("/api/notebooks/src/ipynb")
+    assert exported.status_code == 200
+    assert "attachment" in exported.headers["Content-Disposition"]
+    imported = c.post("/api/notebooks/import", data={
+        "file": (io.BytesIO(exported.data), "From Jupyter.ipynb")},
+        content_type="multipart/form-data")
+    assert imported.get_json() == {"name": "from-jupyter", "cells": 1}
+    again = c.post("/api/notebooks/import", data={
+        "file": (io.BytesIO(exported.data), "From Jupyter.ipynb")},
+        content_type="multipart/form-data")
+    assert again.status_code == 409                        # never overwrites
+    bad = c.post("/api/notebooks/import", data={"file": (io.BytesIO(b"{}"), "x.ipynb")},
+                 content_type="multipart/form-data")
+    assert bad.status_code == 422
+
+
+# ---- Phase 4: dashboards ---------------------------------------------------------
+
+
+def test_dashboard_filter_values_are_literals_never_sql():
+    from pebbles_web.dashboards import apply_filters
+
+    filters = [{"name": "state", "label": "State", "default": "CA"}]
+    sql = "SELECT * FROM claims WHERE state = {{state}} AND x = {{unknown}}"
+    assert apply_filters(sql, filters, {}) == (
+        "SELECT * FROM claims WHERE state = 'CA' AND x = {{unknown}}"
+    )
+    evil = apply_filters(sql, filters, {"state": "x' OR '1'='1"})
+    assert "state = 'x'' OR ''1''=''1'" in evil          # quoted & escaped: pure data
+
+
+def test_dashboard_new_tile_kinds_filters_and_stream_substitution():
+    d = FakeDaemon()
+    seen = []
+    orig = d.exec_in_session
+    d.exec_in_session = lambda sid, p: (seen.append(p.get("sql")), orig(sid, p))[1]
+    c = api_signed_in(d)
+    c.post("/api/dashboards", json={"name": "kpis"})
+    c.put("/api/dashboards/kpis", json={
+        "filters": [{"name": "state", "default": "CA"}, {"name": "Bad Name!"}],
+        "tiles": [
+            {"title": "Trend", "kind": "line", "sql": "SELECT d, n FROM t WHERE s = {{state}}"},
+            {"title": "Mix", "kind": "donut", "sql": "SELECT s, n FROM t"},
+            {"title": "Nope", "kind": "sparkle", "sql": "SELECT 1"},
+        ]})
+    dash = c.get("/api/dashboards/kpis").get_json()
+    assert [t["kind"] for t in dash["tiles"]] == ["line", "donut"]
+    assert [f["name"] for f in dash["filters"]] == ["state"]   # invalid name dropped
+    c.get("/api/dashboards/kpis/tiles/0/stream").get_data()
+    assert seen[-1].endswith("s = 'CA'")                        # default applied
+    c.get("/api/dashboards/kpis/tiles/0/stream?f.state=NY").get_data()
+    assert seen[-1].endswith("s = 'NY'")                        # chosen value applied
+
+
+def test_run_now_is_queued_and_its_outcome_is_readable():
+    d = FakeDaemon()
+    tomas, maya = signed_in_as("tomas", d), signed_in_as("maya", d)
+    tomas.post("/api/jobs", json={"name": "etl", "schedule": None,
+               "tasks": [{"id": "t", "task_type": "sql", "payload": "SELECT 1"}]})
+    assert tomas.post("/api/jobs/etl/run").get_json() == {"queued": "etl"}
+    assert tomas.get("/api/jobs/etl/trigger").get_json()["state"] == "triggered"
+    d.admins = []
+    assert maya.get("/api/jobs/etl/trigger").status_code == 404   # owner-scoped

@@ -17,7 +17,7 @@ import time
 
 from flask import Response, jsonify, request, session
 
-from pebbles_web import autoetl
+from pebbles_web import autoetl, dashboards, notebooks
 from pebbles_web.pebblesd_client import PebblesdClient, PebblesdError
 
 #: home-relative document names (notebooks, dashboards, repos)
@@ -797,36 +797,18 @@ def register_api(app, client: PebblesdClient) -> None:
                 _session_op(user["username"], {"op": "delete", "path": f"{kind}/{name}.json"})
             )
 
-    def _sanitize_notebook(nb: dict) -> dict:
-        return {
-            "catalog": nb.get("catalog") or None,
-            "cells": [
-                {"type": c.get("type", "sql"), "source": str(c.get("source", ""))}
-                for c in nb.get("cells", [])
-                if c.get("type", "sql") in ("sql", "python", "r")
-            ],
-        }
+    _sanitize_notebook = notebooks.sanitize
 
-    def _sanitize_dashboard(dash: dict) -> dict:
-        return {
-            "catalog": dash.get("catalog") or None,
-            "tiles": [
-                {
-                    "title": str(t.get("title", ""))[:80],
-                    "sql": str(t.get("sql", "")),
-                    "kind": t.get("kind", "table"),
-                }
-                for t in dash.get("tiles", [])
-                if t.get("kind", "table") in ("table", "stat", "bars")
-            ],
-        }
+    _sanitize_dashboard = dashboards.sanitize
 
     _doc_routes(
         "notebooks",
         {"catalog": None, "cells": [{"type": "sql", "source": ""}]},
         _sanitize_notebook,
     )
-    _doc_routes("dashboards", {"catalog": None, "tiles": []}, _sanitize_dashboard)
+    _doc_routes(
+        "dashboards", {"catalog": None, "filters": [], "tiles": []}, _sanitize_dashboard
+    )
 
     @app.get("/api/notebooks/<name>/cells/<int:index>/stream")
     def api_notebook_cell_stream(name, index):  # pyright: ignore[reportUnusedFunction]
@@ -843,7 +825,9 @@ def register_api(app, client: PebblesdClient) -> None:
                 error = "no such cell"
             else:
                 cell = cells[index]
-                if cell.get("type") in ("python", "r"):
+                if cell.get("type") == "md":
+                    result = {"ok": True}  # markdown renders client-side; nothing runs
+                elif cell.get("type") in ("python", "r"):
                     result = _session_op(
                         user["username"], {"op": cell["type"], "code": cell.get("source", "")}
                     )
@@ -854,6 +838,46 @@ def register_api(app, client: PebblesdClient) -> None:
         except (OSError, RuntimeError, ValueError) as exc:
             error = str(exc)
         return _sse_response(result, error)
+
+    @app.get("/api/notebooks/<name>/ipynb")
+    @authed
+    def api_notebook_export(user, name):  # pyright: ignore[reportUnusedFunction]
+        if not DOC_NAME.match(name):
+            return jsonify({"error": "invalid name"}), 422
+        nb = _load_doc(user["username"], "notebooks", name)
+        if nb is None:
+            return jsonify({"error": "not found"}), 404
+        return Response(
+            json.dumps(notebooks.to_ipynb(nb), indent=1),
+            mimetype="application/x-ipynb+json",
+            headers={"Content-Disposition": f'attachment; filename="{name}.ipynb"'},
+        )
+
+    @app.post("/api/notebooks/import")
+    @authed
+    def api_notebook_import(user):  # pyright: ignore[reportUnusedFunction]
+        """Multipart: `file` (.ipynb) + optional `name`; refuses to overwrite."""
+        upload = request.files.get("file")
+        if upload is None:
+            return jsonify({"error": "attach a .ipynb file"}), 422
+        base = (upload.filename or "notebook").rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        name = (request.form.get("name") or "").strip() or re.sub(
+            r"[^a-z0-9_-]+", "-", base.lower()
+        ).strip("-_")
+        if not DOC_NAME.match(name):
+            return jsonify({"error": "invalid notebook name"}), 422
+        try:
+            nb = notebooks.from_ipynb(json.loads(upload.read().decode("utf-8")))
+        except (ValueError, UnicodeDecodeError) as exc:
+            return jsonify({"error": f"couldn't read that notebook: {exc}"}), 422
+        if name in _list_docs(user["username"], "notebooks"):
+            return jsonify({"error": f"a notebook named {name!r} already exists"}), 409
+        _session_op(
+            user["username"],
+            {"op": "write", "path": f"notebooks/{name}.json",
+             "content": json.dumps(notebooks.sanitize(nb))},
+        )
+        return jsonify({"name": name, "cells": len(nb["cells"])})
 
     @app.get("/api/dashboards/<name>/tiles/<int:index>/stream")
     def api_dashboard_tile_stream(name, index):  # pyright: ignore[reportUnusedFunction]
@@ -869,9 +893,14 @@ def register_api(app, client: PebblesdClient) -> None:
             if dash is None or index >= len(tiles):
                 error = "no such tile"
             else:
-                result = _run_sql(
-                    user["username"], tiles[index].get("sql", ""), dash.get("catalog")
+                # f.<name>=value query params choose filter values (else defaults)
+                chosen = {
+                    k[2:]: v for k, v in request.args.items() if k.startswith("f.")
+                }
+                sql = dashboards.apply_filters(
+                    tiles[index].get("sql", ""), dash.get("filters", []), chosen
                 )
+                result = _run_sql(user["username"], sql, dash.get("catalog"))
         except (OSError, RuntimeError, ValueError) as exc:
             error = str(exc)
         return _sse_response(result, error)
@@ -898,6 +927,12 @@ def register_api(app, client: PebblesdClient) -> None:
     def api_jobs_run(user, name):  # pyright: ignore[reportUnusedFunction]
         _, err = _job_visible(user, name)
         return err or jsonify(client.trigger_workflow(name))
+
+    @app.get("/api/jobs/<name>/trigger")
+    @authed
+    def api_jobs_trigger_status(user, name):  # pyright: ignore[reportUnusedFunction]
+        _, err = _job_visible(user, name)
+        return err or jsonify(client.trigger_status(name))
 
     @app.get("/api/jobs/<name>/runs")
     @authed

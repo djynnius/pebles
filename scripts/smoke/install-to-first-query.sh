@@ -357,16 +357,25 @@ triggered=""
 # Airflow readiness = postgres boot + provision + db migrate + scheduler + DAG
 # parse. On the unprivileged incus system container the whole boot is slower, so
 # the window is generous (~7 min).
+# Triggers are asynchronous (the Airflow CLI is slow to start): POST queues one
+# and returns at once; the outcome lands in GET …/trigger. While Airflow is
+# still booting the recorded outcome is "failed" — re-queue until "triggered".
+queued=""
 for _ in $(seq 1 84); do
-  code="$(pd_code -X POST http://pebblesd/workflows/smoke-flow/run)"
-  [ "$code" = "200" ] && { triggered=yes; break; }
+  if [ -z "$queued" ]; then
+    code="$(pd_code -X POST http://pebblesd/workflows/smoke-flow/run)"
+    [ "$code" = "200" ] && queued=yes
+  fi
+  status="$(pd http://pebblesd/workflows/smoke-flow/trigger 2>/dev/null || true)"
+  grep -q '"state":"triggered"' <<<"$status" && { triggered=yes; break; }
+  grep -q '"state":"failed"' <<<"$status" && queued=""   # not ready yet: re-queue
   sleep 5
 done
 if [ "$triggered" != "yes" ]; then
   echo "FAIL: workflow trigger never accepted" >&2
-  echo "--- last trigger response body ---" >&2
-  ctr_exec curl -s --max-time 120 --unix-socket /run/pebbles/pebblesd.sock \
-    -X POST http://pebblesd/workflows/smoke-flow/run >&2 || true
+  echo "--- last recorded trigger outcome ---" >&2
+  ctr_exec curl -s --max-time 30 --unix-socket /run/pebbles/pebblesd.sock \
+    http://pebblesd/workflows/smoke-flow/trigger >&2 || true
   echo >&2
   echo "--- /dev/shm (Airflow's LocalExecutor needs POSIX sem/shm) ---" >&2
   ctr_exec sh -c 'ls -ld /dev/shm 2>&1; grep /dev/shm /proc/mounts 2>&1 || echo "NOT MOUNTED"' >&2 || true

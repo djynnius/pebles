@@ -125,6 +125,8 @@ def _run_notebook(session_id: int, content: str, catalog: str | None) -> None:
     notebook = json.loads(content or "{}")
     nb_catalog = notebook.get("catalog") or catalog
     for i, cell in enumerate(notebook.get("cells", [])):
+        if cell.get("type") == "md":
+            continue  # markdown documents; it never runs
         print(f"pebbles: cell {i} ({cell.get('type', 'sql')})")
         if cell.get("type") in ("python", "r"):
             _exec(session_id, {"op": cell["type"], "code": cell.get("source", "")})

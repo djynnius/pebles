@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, errorText, sse, type Row } from "../api";
 import { useCatalogs } from "../catalogs";
+import { DonutChart, LineChart } from "../components/Charts";
+import { FormMessage, SmallButton } from "../components/Form";
 import { ErrorBlock, Loading } from "../components/State";
 import { ResultGrid, cell } from "./Catalog";
 
@@ -14,13 +16,27 @@ import { ResultGrid, cell } from "./Catalog";
  * preference in localStorage, keyed by dashboard name. That keeps the saved
  * document portable and avoids sending keys the server would silently strip.
  *
- * Widget kinds are table / stat / bars: the three the tile stream can feed.
- * The prototype's MAP / LINE / DONUT / PYRAMID widgets need shapes the API
- * does not describe yet (and the US cartogram needs baked geometry, §9), so
- * they are not offered here.
+ * Widget kinds are table / stat / bars / line / donut, charts drawn as plain
+ * SVG (components/Charts.tsx). The prototype's MAP and PYRAMID widgets need
+ * shapes the API does not describe (and the cartogram needs baked geometry,
+ * §9), so they are not offered here.
+ *
+ * Filters are part of the document: tile SQL says {{name}} and the server
+ * substitutes the chosen value as a quoted literal. Chosen values live in the
+ * URL (?f.state=NY) — never in the document — so a filtered view is a link.
  */
 
-type Kind = "table" | "stat" | "bars";
+type Kind = "table" | "stat" | "bars" | "line" | "donut";
+
+interface Filter {
+  name: string;
+  label: string;
+  default: string;
+}
+
+/** Mirrors the server (dashboards.py): name rule and count cap. */
+const FILTER_NAME = /^[a-z][a-z0-9_]{0,31}$/;
+const MAX_FILTERS = 8;
 
 interface Tile {
   title: string;
@@ -30,6 +46,7 @@ interface Tile {
 
 interface DashDoc {
   catalog: string | null;
+  filters: Filter[];
   tiles: Tile[];
 }
 
@@ -48,12 +65,16 @@ const KINDS: { kind: Kind; label: string }[] = [
   { kind: "stat", label: "Stat" },
   { kind: "table", label: "Table" },
   { kind: "bars", label: "Bars" },
+  { kind: "line", label: "Line" },
+  { kind: "donut", label: "Donut" },
 ];
 
 const DEFAULT_SPAN: Record<Kind, Span> = {
   stat: { w: 1, h: 1 },
   table: { w: 2, h: 2 },
   bars: { w: 2, h: 2 },
+  line: { w: 2, h: 2 },
+  donut: { w: 2, h: 2 },
 };
 
 const layoutKey = (name: string) => `pebbles.dashlayout.${name}`;
@@ -74,6 +95,13 @@ export function Dashboard() {
   const [menu, setMenu] = useState<number | null>(null);
   const [editing, setEditing] = useState<number | null>(null);
   const [drag, setDrag] = useState<number | null>(null);
+  const [params, setParams] = useSearchParams();
+  /** Filter values typed but not yet applied, by filter name. */
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [filterEdit, setFilterEdit] = useState(false);
+  /** The applied filter values as a query string, read by every tile run. */
+  const qsRef = useRef("");
+  qsRef.current = filterQs(params);
 
   const docRef = useRef<DashDoc | null>(null);
   docRef.current = doc;
@@ -88,7 +116,7 @@ export function Dashboard() {
       .then((d) => {
         if (!live) return;
         const tiles = d.tiles ?? [];
-        setDoc({ catalog: d.catalog ?? null, tiles });
+        setDoc({ catalog: d.catalog ?? null, filters: d.filters ?? [], tiles });
         setSpans(readLayout(name, tiles));
         setOuts(tiles.map(() => ({})));
       })
@@ -129,11 +157,19 @@ export function Dashboard() {
   const save = useCallback(async () => {
     const d = docRef.current;
     if (!d) return;
+    // The server silently drops filters it won't accept; refuse here instead.
+    const problem = filterProblem(d.filters);
+    if (problem) {
+      setError(problem);
+      setFilterEdit(true);
+      throw new Error(problem);
+    }
     setSaving(true);
     try {
       // Only title/sql/kind travel — layout stays client-side on purpose.
       await api.put(`/dashboards/${encodeURIComponent(name)}`, {
         catalog: d.catalog,
+        filters: d.filters,
         tiles: d.tiles.map((t) => ({ title: t.title, sql: t.sql, kind: t.kind })),
       });
       setDirty(false);
@@ -148,12 +184,13 @@ export function Dashboard() {
 
   /* ---- execution --------------------------------------------------------- */
 
-  const streamTile = (i: number) =>
+  const streamTile = (i: number, qs: string) =>
     new Promise<void>((resolve) => {
       cancels.current[i]?.();
       setOuts((cur) => cur.map((o, j) => (j === i ? { running: true } : o)));
       let acc: Out = {};
-      cancels.current[i] = sse(`/dashboards/${encodeURIComponent(name)}/tiles/${i}/stream`, {
+      const path = `/dashboards/${encodeURIComponent(name)}/tiles/${i}/stream${qs ? `?${qs}` : ""}`;
+      cancels.current[i] = sse(path, {
         result: (r) => {
           acc = { rows: r.rows ?? [] };
         },
@@ -175,13 +212,13 @@ export function Dashboard() {
     } catch {
       return;
     }
-    await streamTile(i);
+    await streamTile(i, qsRef.current);
   };
 
   const runAll = useCallback(
-    async (tiles: Tile[]) => {
+    async (tiles: Tile[], qs: string) => {
       // Sequential: each tile is a real query on the user's engine session.
-      for (let i = 0; i < tiles.length; i += 1) await streamTile(i);
+      for (let i = 0; i < tiles.length; i += 1) await streamTile(i, qs);
     },
     // streamTile closes over `name` only, which is stable for the mounted route
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -193,8 +230,58 @@ export function Dashboard() {
   useEffect(() => {
     if (!doc || ranOnce.current || doc.tiles.length === 0) return;
     ranOnce.current = true;
-    void runAll(doc.tiles);
+    void runAll(doc.tiles, qsRef.current);
   }, [doc, runAll]);
+
+  /* ---- filters ----------------------------------------------------------- */
+
+  const filterValue = (f: Filter) => draft[f.name] ?? params.get(`f.${f.name}`) ?? f.default;
+
+  /**
+   * Put the typed values in the URL (defaults are left out, so the link stays
+   * short and follows a later default change) and re-run every tile with them.
+   * Unsaved filter edits are saved first — the server substitutes from disk.
+   */
+  const applyFilters = async () => {
+    if (!doc) return;
+    if (dirty) {
+      try {
+        await save();
+      } catch {
+        return;
+      }
+    }
+    const next = new URLSearchParams(params);
+    for (const k of [...next.keys()]) if (k.startsWith("f.")) next.delete(k);
+    for (const f of doc.filters) {
+      const v = filterValue(f);
+      if (v !== f.default) next.set(`f.${f.name}`, v);
+    }
+    setParams(next, { replace: true });
+    setDraft({});
+    const qs = filterQs(next);
+    qsRef.current = qs;
+    await runAll(doc.tiles, qs);
+  };
+
+  const setFilter = (i: number, patch: Partial<Filter>) =>
+    edit((d) => ({ ...d, filters: d.filters.map((f, j) => (j === i ? { ...f, ...patch } : f)) }));
+
+  const addFilter = () =>
+    edit((d) => {
+      const taken = new Set(d.filters.map((f) => f.name));
+      let n = d.filters.length + 1;
+      while (taken.has(`filter_${n}`)) n += 1;
+      return {
+        ...d,
+        filters: [...d.filters, { name: `filter_${n}`, label: `Filter ${n}`, default: "" }],
+      };
+    });
+
+  const removeFilter = (i: number) =>
+    edit((d) => ({ ...d, filters: d.filters.filter((_, j) => j !== i) }));
+
+  const filterError = doc ? filterProblem(doc.filters) : "";
 
   /* ---- mutation ---------------------------------------------------------- */
 
@@ -366,14 +453,126 @@ export function Dashboard() {
                     />
                   ))}
                   <div style={{ borderTop: "1px solid var(--border)", margin: "5px 0" }} />
-                  <div style={{ padding: "6px 14px 8px", fontSize: 11, color: "var(--text-faint)" }}>
-                    Map, line and donut widgets arrive with Auto ETL.
-                  </div>
+                  <MenuItem
+                    label={doc && doc.filters.length ? "Edit filters…" : "Add a filter…"}
+                    onClick={() => {
+                      setAddMenu(false);
+                      if (doc && doc.filters.length === 0) addFilter();
+                      setFilterEdit(true);
+                    }}
+                  />
                 </div>
               )}
             </div>
           </div>
         </div>
+
+        {/* filters bar */}
+        {doc && (doc.filters.length > 0 || filterEdit) && (
+          <div
+            style={{
+              background: "var(--surface)",
+              border: "1px solid var(--border)",
+              borderRadius: 14,
+              padding: "10px 14px",
+              marginBottom: 14,
+            }}
+          >
+            {filterEdit ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={filterEyebrow}>Filters</span>
+                  <span style={{ fontSize: 11.5, color: "var(--text-dim)" }}>
+                    Tile SQL references a filter as {"{{name}}"} — its value is substituted as a
+                    quoted string.
+                  </span>
+                </div>
+                {doc.filters.length === 0 && (
+                  <div style={{ fontSize: 12, color: "var(--text-dim)" }}>No filters yet.</div>
+                )}
+                {doc.filters.map((f, i) => (
+                  <div
+                    key={i}
+                    style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}
+                  >
+                    <input
+                      value={f.name}
+                      onChange={(e) => setFilter(i, { name: e.target.value })}
+                      aria-label={`Filter ${i + 1} name`}
+                      placeholder="name"
+                      className="mono"
+                      style={{
+                        ...filterInput,
+                        width: 150,
+                        borderColor: FILTER_NAME.test(f.name) ? "var(--border)" : "var(--err)",
+                      }}
+                    />
+                    <input
+                      value={f.label}
+                      onChange={(e) => setFilter(i, { label: e.target.value.slice(0, 40) })}
+                      aria-label={`Filter ${i + 1} label`}
+                      placeholder="Label"
+                      style={{ ...filterInput, width: 170 }}
+                    />
+                    <input
+                      value={f.default}
+                      onChange={(e) => setFilter(i, { default: e.target.value.slice(0, 200) })}
+                      aria-label={`Filter ${i + 1} default`}
+                      placeholder="default value"
+                      className="mono"
+                      style={{ ...filterInput, width: 170 }}
+                    />
+                    <SmallButton danger onClick={() => removeFilter(i)}>
+                      Remove
+                    </SmallButton>
+                  </div>
+                ))}
+                {filterError && <FormMessage tone="err">{filterError}</FormMessage>}
+                <div style={{ display: "flex", gap: 8 }}>
+                  <SmallButton
+                    onClick={addFilter}
+                    disabled={doc.filters.length >= MAX_FILTERS}
+                    title={doc.filters.length >= MAX_FILTERS ? `At most ${MAX_FILTERS} filters` : undefined}
+                  >
+                    + Add filter
+                  </SmallButton>
+                  <SmallButton primary disabled={Boolean(filterError)} onClick={() => setFilterEdit(false)}>
+                    Done
+                  </SmallButton>
+                </div>
+              </div>
+            ) : (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void applyFilters();
+                }}
+                style={{ display: "flex", alignItems: "flex-end", gap: 10, flexWrap: "wrap" }}
+              >
+                <span style={{ ...filterEyebrow, alignSelf: "center" }}>Filters</span>
+                {doc.filters.map((f) => (
+                  <label key={f.name} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                    <span style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{f.label}</span>
+                    <input
+                      value={filterValue(f)}
+                      onChange={(e) =>
+                        setDraft((cur) => ({ ...cur, [f.name]: e.target.value.slice(0, 200) }))
+                      }
+                      placeholder={f.default || f.name}
+                      className="mono"
+                      style={{ ...filterInput, width: 150 }}
+                    />
+                  </label>
+                ))}
+                <SmallButton type="submit" primary>
+                  Apply
+                </SmallButton>
+                <div style={{ flex: 1 }} />
+                <SmallButton onClick={() => setFilterEdit(true)}>Edit filters</SmallButton>
+              </form>
+            )}
+          </div>
+        )}
 
         {error && <ErrorBlock error={error} />}
 
@@ -394,7 +593,7 @@ export function Dashboard() {
               }}
             >
               {doc ? (
-                "No widgets yet — add a stat, table or bars widget with the button above."
+                "No widgets yet — add a stat, table, bars, line or donut widget with the button above."
               ) : (
                 <Loading />
               )}
@@ -570,6 +769,15 @@ export function Dashboard() {
                           lineHeight: "18px",
                         }}
                       />
+                      <div style={{ fontSize: 10.5, color: "var(--text-dim)", marginTop: 5 }}>
+                        Use {"{{name}}"} to reference a filter (substituted as a quoted value)
+                        {doc && doc.filters.length > 0 && (
+                          <span className="mono">
+                            {" — "}
+                            {doc.filters.map((f) => `{{${f.name}}}`).join(", ")}
+                          </span>
+                        )}
+                      </div>
                       <div
                         style={{ display: "flex", gap: 6, marginTop: 8, alignItems: "center" }}
                       >
@@ -614,7 +822,7 @@ export function Dashboard() {
 
                   {/* body */}
                   <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 12 }}>
-                    <TileBody tile={t} out={outs[i]} />
+                    <TileBody tile={t} out={outs[i]} span={span} />
                   </div>
                 </div>
               );
@@ -628,7 +836,7 @@ export function Dashboard() {
 
 /* ---- widget bodies ------------------------------------------------------- */
 
-function TileBody({ tile, out }: { tile: Tile; out?: Out }) {
+function TileBody({ tile, out, span }: { tile: Tile; out?: Out; span: Span }) {
   if (!out || out.running) {
     return <div style={hint}>{out?.running ? "Running…" : "Not run yet."}</div>;
   }
@@ -674,6 +882,12 @@ function TileBody({ tile, out }: { tile: Tile; out?: Out }) {
   }
 
   if (tile.kind === "bars") return <Bars rows={rows} />;
+
+  // Explicit sizes from the grid span (140px rows, 14px gaps, minus tile
+  // header and body padding) — the charts never measure the DOM (spec §9).
+  const bodyH = span.h * 154 - 79;
+  if (tile.kind === "line") return <LineChart rows={rows} width={span.w * 290 - 24} height={bodyH} />;
+  if (tile.kind === "donut") return <DonutChart rows={rows} height={bodyH} />;
 
   return <ResultGrid rows={rows} />;
 }
@@ -818,6 +1032,29 @@ function readLayout(name: string, tiles: Tile[]): Span[] {
   });
 }
 
+/** The applied `f.<name>` params, as the query string a tile stream takes. */
+function filterQs(params: URLSearchParams): string {
+  const out = new URLSearchParams();
+  params.forEach((v, k) => {
+    if (k.startsWith("f.")) out.append(k, v);
+  });
+  return out.toString();
+}
+
+/** First reason the filter list would not survive the server's sanitizer. */
+function filterProblem(filters: Filter[]): string {
+  if (filters.length > MAX_FILTERS) return `At most ${MAX_FILTERS} filters.`;
+  const seen = new Set<string>();
+  for (const f of filters) {
+    if (!FILTER_NAME.test(f.name)) {
+      return `Filter name “${f.name}”: start with a lower-case letter; then letters, digits or _ (max 32).`;
+    }
+    if (seen.has(f.name)) return `Two filters are named “${f.name}”.`;
+    seen.add(f.name);
+  }
+  return "";
+}
+
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
 
 /** Numbers get thousands separators; everything else goes through `cell`. */
@@ -831,6 +1068,25 @@ function format(v: unknown): string {
 }
 
 const hint: CSSProperties = { fontSize: 11.5, color: "var(--text-dim)" };
+
+const filterEyebrow: CSSProperties = {
+  fontSize: 10.5,
+  fontWeight: 600,
+  letterSpacing: "0.6px",
+  textTransform: "uppercase",
+  color: "var(--text-faint)",
+};
+
+const filterInput: CSSProperties = {
+  height: 30,
+  padding: "0 10px",
+  borderRadius: 9,
+  border: "1px solid var(--border)",
+  background: "var(--surface-alt)",
+  color: "var(--text)",
+  fontSize: 12,
+  outline: "none",
+};
 
 const ghost: CSSProperties = {
   background: "var(--surface)",

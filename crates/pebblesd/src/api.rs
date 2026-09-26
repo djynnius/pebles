@@ -101,6 +101,7 @@ pub fn router(role: Role, state: AppState) -> Router {
             .route("/usage", get(usage))
             .route("/workflows", get(list_workflows).post(save_workflow))
             .route("/workflows/{name}/run", post(trigger_workflow))
+            .route("/workflows/{name}/trigger", get(workflow_trigger_status))
             .route("/workflows/{name}/runs", get(workflow_runs))
             .route("/workflows/{name}/runs/{run_id}", get(workflow_run_detail))
             .route("/nkoyo/config", get(nkoyo_config).post(nkoyo_config_save))
@@ -1372,6 +1373,14 @@ async fn save_workflow(
         .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?
         .map_err(jobs_error)?;
     tracing::info!(workflow = %wf.name, owner = %wf.username, "workflow saved and compiled");
+    // Register with Airflow now (background) rather than at the scheduler's
+    // next scan, so "Run now" right after "Save" finds the DAG.
+    let (reg_dir, reg_name) = (state.config_dir.clone(), wf.name.clone());
+    tokio::task::spawn_blocking(move || {
+        if let Err(err) = crate::jobs::register(&reg_dir, &reg_name) {
+            tracing::warn!(workflow = %reg_name, %err, "background DAG registration failed");
+        }
+    });
     Ok(Json(wf))
 }
 
@@ -1389,12 +1398,35 @@ async fn trigger_workflow(
     Path(name): Path<String>,
 ) -> ApiResult<Value> {
     let dir = state.config_dir.clone();
-    let flow_name = name.clone();
-    tokio::task::spawn_blocking(move || crate::jobs::trigger(&dir, &flow_name))
+    // Existence check up front so a typo still gets a synchronous 404.
+    let check = (dir.clone(), name.clone());
+    tokio::task::spawn_blocking(move || crate::jobs::get(&check.0, &check.1))
         .await
         .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?
         .map_err(jobs_error)?;
-    Ok(Json(serde_json::json!({ "triggered": name })))
+    // The Airflow CLI is slow to start (seconds natively, a minute+ on small
+    // or emulated hardware): trigger in the background, record the outcome.
+    crate::jobs::set_trigger_status(&dir, &name, "queued", None);
+    let flow_name = name.clone();
+    tokio::task::spawn_blocking(move || match crate::jobs::trigger(&dir, &flow_name) {
+        Ok(()) => crate::jobs::set_trigger_status(&dir, &flow_name, "triggered", None),
+        Err(err) => {
+            tracing::error!(workflow = %flow_name, %err, "trigger failed");
+            crate::jobs::set_trigger_status(&dir, &flow_name, "failed", Some(err.to_string()));
+        }
+    });
+    Ok(Json(serde_json::json!({ "queued": name })))
+}
+
+async fn workflow_trigger_status(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> ApiResult<Value> {
+    let dir = state.config_dir.clone();
+    let status = tokio::task::spawn_blocking(move || crate::jobs::trigger_status(&dir, &name))
+        .await
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(serde_json::to_value(status).unwrap_or(Value::Null)))
 }
 
 async fn workflow_runs(

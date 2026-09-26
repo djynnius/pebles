@@ -1,10 +1,17 @@
-import { useCallback, useEffect, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, errorText } from "../api";
 import { AccentButton, Page } from "../components/Page";
 import { Table, Td } from "../components/Table";
 import { Empty, EmptyAction, ErrorBlock, Loading } from "../components/State";
-import { duration, runColor, stamp, type RunInfo, type Workflow } from "../jobs";
+import { duration, isLive, runColor, stamp, type RunInfo, type Workflow } from "../jobs";
+
+/** GET /api/jobs/<name>/trigger — the background trigger's outcome (null if never run). */
+type TriggerStatus = { state: "queued" | "triggered" | "failed"; error: string | null; at: number };
+
+const TRIGGER_POLL_MS = 3000;
+const TRIGGER_POLL_MAX_MS = 6 * 60 * 1000;
+const RUNS_REFRESH_MS = 5000;
 
 /*
  * /jobs — the workflow list (spec §5 "jobs"). Jobs are pebblesd workflows that
@@ -21,22 +28,99 @@ export function Jobs() {
   const [open, setOpen] = useState<string | null>(null);
   const [runs, setRuns] = useState<Record<string, RunInfo[] | "loading" | string>>({});
   const [busy, setBusy] = useState("");
+  // Jobs whose run request is accepted but Airflow hasn't confirmed yet, and
+  // per-job trigger failures ("Couldn't start the run: …").
+  const [queued, setQueued] = useState<Record<string, boolean>>({});
+  const [trigErr, setTrigErr] = useState<Record<string, string>>({});
+  const polls = useRef<Map<string, number>>(new Map());
+  const alive = useRef(true);
+
+  useEffect(() => {
+    alive.current = true;
+    const timers = polls.current;
+    return () => {
+      alive.current = false;
+      timers.forEach((t) => window.clearTimeout(t));
+      timers.clear();
+    };
+  }, []);
+
+  const loadRuns = useCallback((name: string, quiet = false) => {
+    if (!quiet) setRuns((cur) => ({ ...cur, [name]: "loading" }));
+    api
+      .get<RunInfo[]>(`/jobs/${encodeURIComponent(name)}/runs`)
+      .then((r) => alive.current && setRuns((cur) => ({ ...cur, [name]: r })))
+      .catch((e) => alive.current && setRuns((cur) => ({ ...cur, [name]: errorText(e) })));
+  }, []);
+
+  // The run request returns before Airflow has the run; poll the trigger
+  // outcome every 3 s (for up to ~6 min) and only then show the run.
+  const watchTrigger = useCallback(
+    (name: string) => {
+      if (polls.current.has(name)) return;
+      const started = Date.now();
+      setQueued((cur) => ({ ...cur, [name]: true }));
+      const settle = (err?: string) => {
+        polls.current.delete(name);
+        if (!alive.current) return;
+        setQueued((cur) => ({ ...cur, [name]: false }));
+        if (err !== undefined) setTrigErr((cur) => ({ ...cur, [name]: err }));
+      };
+      const tick = () => {
+        api
+          .get<TriggerStatus | null>(`/jobs/${encodeURIComponent(name)}/trigger`)
+          .then((t) => {
+            if (!alive.current) return;
+            if (t?.state === "triggered") {
+              settle();
+              setOpen(name);
+              loadRuns(name);
+            } else if (t?.state === "failed") {
+              settle(t.error || "the scheduler rejected the trigger");
+            } else if (Date.now() - started > TRIGGER_POLL_MAX_MS) {
+              settle("the scheduler still hasn't picked it up after 6 minutes. Check back later.");
+            } else {
+              polls.current.set(name, window.setTimeout(tick, TRIGGER_POLL_MS));
+            }
+          })
+          .catch((e) => settle(errorText(e)));
+      };
+      polls.current.set(name, window.setTimeout(tick, TRIGGER_POLL_MS));
+    },
+    [loadRuns],
+  );
 
   useEffect(() => {
     api
       .get<Workflow[]>("/jobs")
-      .then(setJobs)
+      .then((list) => {
+        if (!alive.current) return;
+        setJobs(list);
+        // A run may have been requested elsewhere (Auto ETL's "Approve & run");
+        // pick up any trigger that is still queued.
+        for (const j of list) {
+          api
+            .get<TriggerStatus | null>(`/jobs/${encodeURIComponent(j.name)}/trigger`)
+            .then((t) => {
+              if (alive.current && t?.state === "queued") watchTrigger(j.name);
+            })
+            .catch(() => undefined);
+        }
+      })
       // Leave `jobs` null so a failed read renders the error, not "no jobs yet".
       .catch((e) => setError(errorText(e)));
-  }, []);
+  }, [watchTrigger]);
 
-  const loadRuns = useCallback((name: string) => {
-    setRuns((cur) => ({ ...cur, [name]: "loading" }));
-    api
-      .get<RunInfo[]>(`/jobs/${encodeURIComponent(name)}/runs`)
-      .then((r) => setRuns((cur) => ({ ...cur, [name]: r })))
-      .catch((e) => setRuns((cur) => ({ ...cur, [name]: errorText(e) })));
-  }, []);
+  // Keep a job's history fresh while its newest run is still moving.
+  useEffect(() => {
+    const timers: number[] = [];
+    for (const [name, h] of Object.entries(runs)) {
+      if (Array.isArray(h) && h[0] && isLive(h[0].state)) {
+        timers.push(window.setTimeout(() => loadRuns(name, true), RUNS_REFRESH_MS));
+      }
+    }
+    return () => timers.forEach((t) => window.clearTimeout(t));
+  }, [runs, loadRuns]);
 
   const toggle = (name: string) => {
     if (open === name) {
@@ -50,12 +134,10 @@ export function Jobs() {
   const runNow = (name: string) => {
     setBusy(name);
     setError("");
+    setTrigErr((cur) => ({ ...cur, [name]: "" }));
     api
       .post(`/jobs/${encodeURIComponent(name)}/run`)
-      .then(() => {
-        setOpen(name);
-        loadRuns(name);
-      })
+      .then(() => watchTrigger(name))
       .catch((e) => setError(errorText(e)))
       .finally(() => setBusy(""));
   };
@@ -171,11 +253,11 @@ export function Jobs() {
                     <button
                       type="button"
                       onClick={() => runNow(job.name)}
-                      disabled={busy === job.name}
+                      disabled={busy === job.name || !!queued[job.name]}
                       title={`Run ${job.name} now`}
                       style={rowBtn}
                     >
-                      {busy === job.name ? "Starting…" : "▶ Run now"}
+                      {busy === job.name ? "Starting…" : queued[job.name] ? "Queued…" : "▶ Run now"}
                     </button>
                     <button
                       type="button"
@@ -187,6 +269,17 @@ export function Jobs() {
                   </div>
                 </Td>
               </tr>,
+              trigErr[job.name] ? (
+                <tr key={`${job.name}-trigger`}>
+                  <td colSpan={6} style={{ padding: "8px 16px" }}>
+                    <ErrorBlock
+                      title="Couldn't start the run"
+                      error={trigErr[job.name]}
+                      style={{ marginBottom: 0 }}
+                    />
+                  </td>
+                </tr>
+              ) : null,
               expanded ? (
                 <tr key={`${job.name}-runs`}>
                   <td colSpan={6} style={{ padding: 0, background: "var(--surface-alt)" }}>

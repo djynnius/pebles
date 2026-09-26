@@ -7,12 +7,14 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { useSearchParams } from "react-router-dom";
-import { columnsOf, sse, type Row } from "../api";
+import { Link, useSearchParams } from "react-router-dom";
+import { api, columnsOf, errorText, sse, type Row } from "../api";
 import { qualify, useCatalogs } from "../catalogs";
 import { CatalogPanel } from "../components/CatalogTree";
+import { FormMessage, SmallButton, selectStyle } from "../components/Form";
 import { Workbench } from "../components/Workbench";
 import { ResultGrid, cell } from "./Catalog";
+import { DOC_NAME } from "./Notebooks";
 
 /*
  * /sql — the SQL editor (spec §5 "sql"), on the workbench shell.
@@ -72,6 +74,9 @@ export function Sql() {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [error, setError] = useState("");
   const [elapsed, setElapsed] = useState<number | null>(null);
+  /** The last run produced a result (not an error) — gates Add to dashboard. */
+  const [ranOk, setRanOk] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
   const cancel = useRef<(() => void) | null>(null);
 
   const doc = docs.find((d) => d.id === activeId) ?? docs[0];
@@ -142,6 +147,7 @@ export function Sql() {
     setRows(null);
     setError("");
     setElapsed(null);
+    setRanOk(false);
     const started = performance.now();
     const query = `q=${encodeURIComponent(doc.sql)}${
       doc.catalog ? `&catalog=${encodeURIComponent(doc.catalog)}` : ""
@@ -152,9 +158,13 @@ export function Sql() {
       rows: (b) => setRows((prev) => [...(prev ?? []), ...b.rows]),
       result: (r) => {
         setRows(r.rows ?? []);
+        setRanOk(true);
         if (r.truncated) setError("Result truncated at 100,000 rows — refine the query.");
       },
-      error: (m) => setError(m),
+      error: (m) => {
+        setError(m);
+        setRanOk(false);
+      },
       done: () => {
         setElapsed((performance.now() - started) / 1000);
         setRunning(false);
@@ -314,14 +324,33 @@ export function Sql() {
             >
               Download CSV
             </button>
-            <button
-              type="button"
-              disabled
-              title="arrives with dashboards"
-              style={{ ...ghostSmall, color: "var(--text-faint)", cursor: "not-allowed" }}
-            >
-              Add to dashboard
-            </button>
+            <div style={{ position: "relative" }}>
+              <button
+                type="button"
+                disabled={!ranOk || running}
+                title={ranOk ? undefined : "Run the query first"}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setAddOpen((v) => !v);
+                }}
+                style={{
+                  ...ghostSmall,
+                  color: ranOk && !running ? "var(--text-mid)" : "var(--text-faint)",
+                  cursor: ranOk && !running ? "pointer" : "not-allowed",
+                }}
+              >
+                Add to dashboard
+              </button>
+              {addOpen && ranOk && (
+                <AddToDashboard
+                  key={doc.id}
+                  sql={doc.sql}
+                  catalog={doc.catalog}
+                  defaultTitle={doc.name.replace(/\.sql$/, "")}
+                  onClose={() => setAddOpen(false)}
+                />
+              )}
+            </div>
           </div>
 
           <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 18 }}>
@@ -352,6 +381,232 @@ export function Sql() {
     </Workbench>
   );
 }
+
+/* ---- add to dashboard ---------------------------------------------------- */
+
+type TileKind = "table" | "stat" | "bars" | "line" | "donut";
+const TILE_KINDS: TileKind[] = ["table", "stat", "bars", "line", "donut"];
+const NEW = "__new__"; // DOC_NAME can't start with "_", so no real dashboard collides
+
+interface DashDoc {
+  catalog: string | null;
+  filters?: unknown[];
+  tiles: { title: string; sql: string; kind: string }[];
+}
+
+/**
+ * Inline popover: pick (or name) a dashboard, title and kind; the current SQL
+ * is appended as a tile by read-modify-write of the whole document, so the
+ * dashboard's filters and other tiles travel back untouched.
+ */
+function AddToDashboard({
+  sql,
+  catalog,
+  defaultTitle,
+  onClose,
+}: {
+  sql: string;
+  catalog: string | null;
+  defaultTitle: string;
+  onClose: () => void;
+}) {
+  const [names, setNames] = useState<string[] | null>(null);
+  const [target, setTarget] = useState("");
+  const [fresh, setFresh] = useState("");
+  const [title, setTitle] = useState(defaultTitle);
+  const [kind, setKind] = useState<TileKind>("table");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [added, setAdded] = useState<string | null>(null);
+  const box = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let live = true;
+    api
+      .get<string[]>("/dashboards")
+      .then((list) => {
+        if (!live) return;
+        setNames(list);
+        setTarget(list[0] ?? NEW);
+      })
+      .catch((e) => {
+        if (!live) return;
+        setNames([]);
+        setTarget(NEW);
+        setError(errorText(e));
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  // Click anywhere outside closes; Escape too.
+  useEffect(() => {
+    const off = (e: MouseEvent) => {
+      if (box.current && !box.current.contains(e.target as Node)) onClose();
+    };
+    const esc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("click", off);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("click", off);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [onClose]);
+
+  const confirm = async () => {
+    const isNew = target === NEW;
+    const dash = isNew ? fresh.trim() : target;
+    if (isNew) {
+      if (!DOC_NAME.test(dash)) {
+        setError("Dashboard name: lower-case letters, digits, dash or underscore (max 64).");
+        return;
+      }
+      if (names?.includes(dash)) {
+        setError(`“${dash}” already exists — pick it from the list.`);
+        return;
+      }
+    }
+    if (!title.trim()) {
+      setError("Give the widget a title.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const path = `/dashboards/${encodeURIComponent(dash)}`;
+      if (isNew) await api.post("/dashboards", { name: dash });
+      const d = await api.get<DashDoc>(path);
+      await api.put(path, {
+        ...d,
+        catalog: d.catalog || catalog,
+        tiles: [...(d.tiles ?? []), { title: title.trim().slice(0, 80), sql, kind }],
+      });
+      setAdded(dash);
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      ref={box}
+      style={{
+        position: "absolute",
+        right: 0,
+        top: 24,
+        zIndex: 40,
+        width: 300,
+        background: "var(--surface)",
+        border: "1px solid var(--border)",
+        borderRadius: 12,
+        boxShadow: "0 8px 26px rgba(20,22,16,.22)",
+        padding: 14,
+        display: "flex",
+        flexDirection: "column",
+        gap: 10,
+        color: "var(--text)",
+      }}
+    >
+      {added ? (
+        <>
+          <FormMessage tone="ok">
+            Added to {added} —{" "}
+            <Link to={`/dashboards/${encodeURIComponent(added)}`} style={{ color: "var(--accent-ink)" }}>
+              open
+            </Link>
+          </FormMessage>
+          <div>
+            <SmallButton onClick={onClose}>Close</SmallButton>
+          </div>
+        </>
+      ) : (
+        <>
+          <div style={{ fontSize: 12.5, fontWeight: 600 }}>Add this query to a dashboard</div>
+          <label style={popLabel}>
+            Dashboard
+            <select
+              value={target}
+              disabled={names === null}
+              onChange={(e) => setTarget(e.target.value)}
+              style={{ ...selectStyle, width: "100%" }}
+            >
+              {names === null && <option value="">Loading…</option>}
+              {(names ?? []).map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+              <option value={NEW}>+ New dashboard…</option>
+            </select>
+          </label>
+          {target === NEW && (
+            <label style={popLabel}>
+              New dashboard name
+              <input
+                value={fresh}
+                onChange={(e) => setFresh(e.target.value)}
+                placeholder="claims-overview"
+                className="mono"
+                style={popInput}
+              />
+            </label>
+          )}
+          <label style={popLabel}>
+            Widget title
+            <input value={title} onChange={(e) => setTitle(e.target.value)} style={popInput} />
+          </label>
+          <label style={popLabel}>
+            Kind
+            <select
+              value={kind}
+              onChange={(e) => setKind(e.target.value as TileKind)}
+              style={{ ...selectStyle, width: "100%" }}
+            >
+              {TILE_KINDS.map((k) => (
+                <option key={k} value={k}>
+                  {k}
+                </option>
+              ))}
+            </select>
+          </label>
+          {error && <FormMessage tone="err">{error}</FormMessage>}
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <SmallButton onClick={onClose} disabled={busy}>
+              Cancel
+            </SmallButton>
+            <SmallButton primary onClick={() => void confirm()} disabled={busy || names === null}>
+              {busy ? "Adding…" : "Add"}
+            </SmallButton>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+const popLabel: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 4,
+  fontSize: 11,
+  color: "var(--text-faint)",
+};
+
+const popInput: CSSProperties = {
+  height: 30,
+  padding: "0 10px",
+  borderRadius: 9,
+  border: "1px solid var(--border)",
+  background: "var(--surface-alt)",
+  color: "var(--text)",
+  fontSize: 12.5,
+  outline: "none",
+};
 
 /* ---- editor ------------------------------------------------------------ */
 

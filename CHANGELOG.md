@@ -6,6 +6,32 @@ All notable changes to Pebbles are documented here. The format follows
 
 ## [Unreleased]
 
+### Added (UAT Phase 4 — notebooks & analytics)
+- **Rich notebook output.** Python cells return matplotlib figures as images
+  and DataFrames (pandas/polars) as real tables — first 200 rows with the
+  total — instead of text; R cells capture base and ggplot plots and render
+  data frames as tables. Tables are data, never HTML.
+- **Outputs are saved with the notebook** (2 MB cap, oversize results
+  replaced by a note) and shown on reopen, marked "from last run".
+- **Markdown cells** (rendered safely — no raw HTML), listed as headings in
+  the table of contents; they never execute, including in scheduled runs.
+- **Jupyter interop:** export any notebook as `.ipynb`, import `.ipynb`
+  files. SQL and R cells round-trip via `%%sql` / `%%R` cell magics.
+- **Dashboards:** line (multi-series, first column as x) and donut tiles, and
+  **filters** — tiles reference `{{name}}` in their SQL, values are
+  substituted as quoted literals (never SQL), chosen values live in the URL
+  so a filtered view is shareable. **Add to dashboard** from the SQL editor
+  works (pick or create a dashboard, title, tile kind).
+
+### Changed
+- **"Run now" is asynchronous.** The Airflow CLI takes seconds to start
+  natively (a minute+ on small or emulated hardware), which made triggers
+  time out inside the request. Run now returns immediately as *queued*; the
+  outcome (`triggered` / `failed` + error) is recorded per job and shown in
+  Jobs. Saving a job registers it with Airflow in the background, so running
+  it straight after saving works. `PEBBLES_AIRFLOW_CLI_TIMEOUT` (default 300 s)
+  caps each CLI call.
+
 ### Security
 - **Catalogs are private to their owner until granted.** Postgres grants
   `CONNECT` to `PUBLIC` on every new database, so any user could attach any

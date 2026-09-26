@@ -248,6 +248,13 @@ pub fn list(config_dir: &Path) -> Result<Vec<Workflow>, JobsError> {
         return Ok(flows);
     };
     for entry in entries.flatten() {
+        if entry
+            .file_name()
+            .to_str()
+            .is_some_and(|n| n.ends_with(".trigger.json"))
+        {
+            continue;
+        }
         if let Ok(content) = std::fs::read_to_string(entry.path()) {
             if let Ok(wf) = serde_json::from_str::<Workflow>(&content) {
                 flows.push(wf);
@@ -409,7 +416,10 @@ pub const MIGRATE_SH: &str = "for i in $(seq 1 10); do \
 pub fn airflow_cli(config_dir: &Path, args: &[&str]) -> Result<String, JobsError> {
     let (uid, gid) = pebbles_identity::system_user(AIRFLOW_USER).ok_or(JobsError::NoAirflow)?;
     let mut cmd = std::process::Command::new("timeout");
-    cmd.arg("60").arg(AIRFLOW_BIN).args(args).env_clear();
+    cmd.arg(cli_timeout_secs().to_string())
+        .arg(AIRFLOW_BIN)
+        .args(args)
+        .env_clear();
     for (k, v) in airflow_env(config_dir) {
         cmd.env(k, v);
     }
@@ -433,6 +443,66 @@ pub fn airflow_cli(config_dir: &Path, args: &[&str]) -> Result<String, JobsError
     }
 }
 
+/// Wall-clock cap per Airflow CLI call. Each call imports Airflow's whole
+/// provider tree (several seconds natively, a minute+ under emulation or on
+/// small hardware), so this is generous; nothing user-facing waits on it —
+/// triggers and registration run in the background.
+fn cli_timeout_secs() -> u64 {
+    std::env::var("PEBBLES_AIRFLOW_CLI_TIMEOUT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(300)
+}
+
+/// Register one workflow's DAG with Airflow now instead of waiting for the
+/// scheduler's next directory scan. Called in the background after save.
+pub fn register(config_dir: &Path, name: &str) -> Result<(), JobsError> {
+    let file = airflow_home(config_dir)
+        .join("dags")
+        .join(format!("{}.py", dag_id(name)));
+    airflow_cli(
+        config_dir,
+        &["dags", "reserialize", "-S", &file.display().to_string()],
+    )
+    .map(|_| ())
+}
+
+/// The outcome of the last "Run now" (triggers are asynchronous, so a failed
+/// trigger must be recorded somewhere the UI can see it).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TriggerStatus {
+    /// queued | triggered | failed
+    pub state: String,
+    #[serde(default)]
+    pub error: Option<String>,
+    pub at: u64,
+}
+
+fn trigger_status_path(config_dir: &Path, name: &str) -> PathBuf {
+    jobs_dir(config_dir).join(format!("{name}.trigger.json"))
+}
+
+pub fn set_trigger_status(config_dir: &Path, name: &str, state: &str, error: Option<String>) {
+    let status = TriggerStatus {
+        state: state.to_string(),
+        error,
+        at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+    };
+    let _ = std::fs::write(
+        trigger_status_path(config_dir, name),
+        serde_json::to_string(&status).expect("serializable"),
+    );
+}
+
+pub fn trigger_status(config_dir: &Path, name: &str) -> Option<TriggerStatus> {
+    std::fs::read_to_string(trigger_status_path(config_dir, name))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+}
+
 pub fn trigger(config_dir: &Path, name: &str) -> Result<(), JobsError> {
     get(config_dir, name)?;
     let dag = dag_id(name);
@@ -442,13 +512,7 @@ pub fn trigger(config_dir: &Path, name: &str) -> Result<(), JobsError> {
         // scheduler's next directory scan (~10 s). Register just this file
         // ourselves and retry once — "Run now" right after "Save" must work.
         Err(JobsError::Airflow(msg)) if is_dag_not_found(&msg) => {
-            let file = airflow_home(config_dir)
-                .join("dags")
-                .join(format!("{dag}.py"));
-            airflow_cli(
-                config_dir,
-                &["dags", "reserialize", "-S", &file.display().to_string()],
-            )?;
+            register(config_dir, name)?;
             airflow_cli(config_dir, &["dags", "trigger", &dag])
                 .map(|_| ())
                 .map_err(|_| {
@@ -686,6 +750,22 @@ mod tests {
         assert!(!is_dag_not_found(
             "psycopg2.OperationalError: could not connect"
         ));
+    }
+
+    #[test]
+    fn trigger_status_round_trips_and_is_not_listed_as_a_workflow() {
+        let dir = tempfile::tempdir().unwrap();
+        save(dir.path(), &flow()).unwrap();
+        set_trigger_status(dir.path(), "nightly-claims", "failed", Some("boom".into()));
+        let st = trigger_status(dir.path(), "nightly-claims").unwrap();
+        assert_eq!(st.state, "failed");
+        assert_eq!(st.error.as_deref(), Some("boom"));
+        let names: Vec<String> = list(dir.path())
+            .unwrap()
+            .into_iter()
+            .map(|w| w.name)
+            .collect();
+        assert_eq!(names, vec!["nightly-claims"]);
     }
 
     #[test]

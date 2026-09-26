@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { api, errorText, sse, type Row } from "../api";
 import { qualify, useCatalogs } from "../catalogs";
 import { CatalogPanel } from "../components/CatalogTree";
+import { Markdown, markdownHeadings } from "../components/Markdown";
 import { Workbench } from "../components/Workbench";
 import { ResultGrid } from "./Catalog";
 
@@ -15,13 +16,42 @@ import { ResultGrid } from "./Catalog";
  * so every run saves first — otherwise an edited-but-unsaved cell would run
  * its stale twin. Outputs live in a plain array kept in lockstep with `cells`
  * (add / delete / move splice both), so a reorder carries its results along.
+ *
+ * Outputs are persisted with the document (the server whitelists the fields
+ * and caps the total), so a reopened notebook shows what it last produced —
+ * marked "from last run" until the cell runs again. After a run the notebook
+ * saves itself once more (debounced) so the fresh outputs reach disk.
+ *
+ * Markdown cells never run: they toggle between a textarea and the safe
+ * renderer in components/Markdown.tsx, and feed the table of contents.
  */
 
-type CellType = "sql" | "python" | "r";
+type CellType = "sql" | "python" | "r" | "md";
+
+/** A DataFrame result from a python/r cell. */
+interface DfTable {
+  columns: string[];
+  rows: Row[];
+  total: number;
+  truncated?: boolean;
+}
+
+/** The union the stream can carry — and what the server persists per cell. */
+interface CellResult {
+  ok?: boolean;
+  rows?: Row[];
+  stdout?: string;
+  stderr?: string;
+  error?: string;
+  images?: string[];
+  table?: DfTable;
+  truncated?: boolean;
+}
 
 interface Cell {
   type: CellType;
   source: string;
+  output?: CellResult;
 }
 
 interface NotebookDoc {
@@ -29,24 +59,15 @@ interface NotebookDoc {
   cells: Cell[];
 }
 
-/** The union the stream can carry: rows for SQL, stdio for python/r. */
-interface CellResult {
-  ok: boolean;
-  rows?: Row[];
-  stdout?: string;
-  stderr?: string;
-}
-
-interface CellOut {
+interface CellOut extends CellResult {
   running?: boolean;
-  rows?: Row[];
-  stdout?: string;
-  stderr?: string;
-  error?: string;
   seconds?: number;
+  /** Loaded from disk, not produced in this visit. */
+  stale?: boolean;
 }
 
-const BADGE: Record<CellType, string> = { sql: "SQL", python: "PY", r: "R" };
+const BADGE: Record<CellType, string> = { sql: "SQL", python: "PY", r: "R", md: "MD" };
+const CELL_TYPES: CellType[] = ["sql", "python", "r", "md"];
 
 export function Notebook() {
   const { name = "" } = useParams();
@@ -60,20 +81,29 @@ export function Notebook() {
   const [saving, setSaving] = useState(false);
   const [runningAll, setRunningAll] = useState(false);
   const [focused, setFocused] = useState(0);
+  /** The markdown cell currently in edit mode (one at a time). */
+  const [mdEdit, setMdEdit] = useState<number | null>(null);
 
   const cellRefs = useRef<(HTMLDivElement | null)[]>([]);
   const cancels = useRef<Record<number, () => void>>({});
   // Handlers close over the doc; a ref keeps `save` stable without stale reads.
   const docRef = useRef<NotebookDoc | null>(null);
   docRef.current = doc;
+  const outsRef = useRef<CellOut[]>([]);
+  outsRef.current = outs;
+  const autoSave = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     api
       .get<NotebookDoc>(`/notebooks/${encodeURIComponent(name)}`)
       .then((d) => {
-        const cells = d.cells?.length ? d.cells : [{ type: "sql" as CellType, source: "" }];
+        const loaded: Cell[] = d.cells?.length ? d.cells : [{ type: "sql", source: "" }];
+        const cells = loaded.map((c) => ({
+          type: CELL_TYPES.includes(c.type) ? c.type : "sql",
+          source: c.source ?? "",
+        }));
         setDoc({ catalog: d.catalog ?? null, cells });
-        setOuts(cells.map(() => ({})));
+        setOuts(loaded.map((c) => (c.output && c.type !== "md" ? { ...c.output, stale: true } : {})));
       })
       .catch((e) => setError(errorText(e)));
   }, [name]);
@@ -82,6 +112,7 @@ export function Notebook() {
     const live = cancels.current;
     return () => {
       for (const stop of Object.values(live)) stop();
+      window.clearTimeout(autoSave.current);
     };
   }, []);
 
@@ -96,6 +127,7 @@ export function Notebook() {
     edit((d) => ({ ...d, cells: d.cells.map((c, j) => (j === i ? { ...c, source } : c)) }));
 
   const addCell = (at: number, type: CellType) => {
+    setMdEdit((cur) => (type === "md" ? at : cur !== null && cur >= at ? cur + 1 : cur));
     edit((d) => {
       const cells = [...d.cells];
       cells.splice(at, 0, { type, source: "" });
@@ -110,6 +142,7 @@ export function Notebook() {
   };
 
   const deleteCell = (i: number) => {
+    setMdEdit(null);
     edit((d) => {
       const cells = d.cells.filter((_, j) => j !== i);
       return { ...d, cells: cells.length ? cells : [{ type: "sql", source: "" }] };
@@ -128,6 +161,7 @@ export function Notebook() {
       [cells[i], cells[j]] = [cells[j], cells[i]];
       return { ...d, cells };
     });
+    setMdEdit((cur) => (cur === i ? j : cur === j ? i : cur));
     setOuts((cur) => {
       const next = [...cur];
       [next[i], next[j]] = [next[j], next[i]];
@@ -141,9 +175,18 @@ export function Notebook() {
   const save = useCallback(async () => {
     const d = docRef.current;
     if (!d) return;
+    window.clearTimeout(autoSave.current);
+    const outs = outsRef.current;
+    const payload = {
+      catalog: d.catalog,
+      cells: d.cells.map((c, i) => {
+        const output = c.type === "md" ? undefined : persistable(outs[i]);
+        return output ? { type: c.type, source: c.source, output } : { type: c.type, source: c.source };
+      }),
+    };
     setSaving(true);
     try {
-      await api.put(`/notebooks/${encodeURIComponent(name)}`, d);
+      await api.put(`/notebooks/${encodeURIComponent(name)}`, payload);
       setDirty(false);
       setError("");
     } catch (e) {
@@ -154,6 +197,14 @@ export function Notebook() {
     }
   }, [name]);
 
+  /** Fresh outputs reach disk shortly after the last run finishes. */
+  const scheduleSave = useCallback(() => {
+    window.clearTimeout(autoSave.current);
+    autoSave.current = window.setTimeout(() => {
+      save().catch(() => {}); // the error is already on screen
+    }, 800);
+  }, [save]);
+
   const streamCell = (i: number) =>
     new Promise<void>((resolve) => {
       cancels.current[i]?.();
@@ -163,7 +214,16 @@ export function Notebook() {
       cancels.current[i] = sse(`/notebooks/${encodeURIComponent(name)}/cells/${i}/stream`, {
         result: (r) => {
           const d = r as CellResult;
-          acc = { rows: d.rows, stdout: d.stdout, stderr: d.stderr };
+          acc = {
+            ok: d.ok,
+            rows: d.rows,
+            stdout: d.stdout,
+            stderr: d.stderr,
+            error: d.error,
+            images: d.images,
+            table: d.table,
+            truncated: d.truncated,
+          };
         },
         error: (m) => {
           acc = { error: m };
@@ -184,6 +244,7 @@ export function Notebook() {
       return; // the save error is already on screen; running would use stale state
     }
     await streamCell(i);
+    scheduleSave();
   };
 
   const runAll = async () => {
@@ -195,10 +256,35 @@ export function Notebook() {
     }
     setRunningAll(true);
     for (let i = 0; i < doc.cells.length; i += 1) {
+      if (doc.cells[i].type === "md") continue; // markdown renders, never runs
       await streamCell(i);
     }
     setRunningAll(false);
+    scheduleSave();
   };
+
+  /** The export reads the file on disk, so unsaved edits go first. */
+  const exportIpynb = async () => {
+    if (dirty) {
+      try {
+        await save();
+      } catch {
+        return;
+      }
+    }
+    const a = document.createElement("a");
+    a.href = `/api/notebooks/${encodeURIComponent(name)}/ipynb`;
+    a.download = `${name}.ipynb`;
+    a.click();
+  };
+
+  const toc = (doc?.cells ?? []).flatMap((c, i) => {
+    if (c.type === "md") {
+      const hs = markdownHeadings(c.source);
+      if (hs.length) return hs.map((h) => ({ i, type: c.type, text: h.text, level: h.level }));
+    }
+    return [{ i, type: c.type, text: headline(c.source), level: 0 }];
+  });
 
   const insertAtFocus = (text: string) => {
     if (!doc) return;
@@ -226,11 +312,11 @@ export function Notebook() {
             <div style={{ padding: "4px 12px 8px", fontSize: 11, color: "var(--text-dim)" }}>
               {doc ? `${doc.cells.length} cell${doc.cells.length === 1 ? "" : "s"}` : "…"}
             </div>
-            {(doc?.cells ?? []).map((c, i) => (
+            {toc.map((e, k) => (
               <button
-                key={i}
+                key={k}
                 type="button"
-                onClick={() => scrollToCell(i)}
+                onClick={() => scrollToCell(e.i)}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -240,15 +326,17 @@ export function Notebook() {
                   border: "none",
                   background: "transparent",
                   padding: "6px 12px",
+                  paddingLeft: 12 + Math.max(0, e.level - 1) * 12,
                   fontFamily: "inherit",
-                  fontSize: 12,
-                  color: "var(--text-mid)",
+                  fontSize: e.level === 1 ? 12.5 : 12,
+                  fontWeight: e.level === 1 ? 600 : 400,
+                  color: e.level ? "var(--text)" : "var(--text-mid)",
                 }}
               >
                 <span className="mono" style={{ fontSize: 10, color: "var(--text-faint)" }}>
-                  {String(i + 1).padStart(2, "0")}
+                  {String(e.i + 1).padStart(2, "0")}
                 </span>
-                <Badge type={c.type} tiny />
+                {e.level === 0 && <Badge type={e.type} tiny />}
                 <span
                   style={{
                     flex: 1,
@@ -258,7 +346,7 @@ export function Notebook() {
                     whiteSpace: "nowrap",
                   }}
                 >
-                  {headline(c.source) || <span style={{ color: "var(--text-faint)" }}>empty</span>}
+                  {e.text || <span style={{ color: "var(--text-faint)" }}>empty</span>}
                 </span>
               </button>
             ))}
@@ -341,6 +429,15 @@ export function Notebook() {
           >
             {runningAll ? "Running…" : "Run all"}
           </button>
+          <button
+            type="button"
+            onClick={() => void exportIpynb()}
+            disabled={!doc || saving}
+            title="Download as a Jupyter notebook (outputs are left out)"
+            style={{ ...ghost, color: !doc || saving ? "var(--text-faint)" : "var(--text-mid)" }}
+          >
+            Export .ipynb
+          </button>
         </div>
 
         {error && (
@@ -399,14 +496,19 @@ export function Notebook() {
                   <Badge type={c.type} />
                   <select
                     value={c.type}
-                    onChange={(e) =>
+                    onChange={(e) => {
+                      const type = e.target.value as CellType;
                       edit((d) => ({
                         ...d,
-                        cells: d.cells.map((x, j) =>
-                          j === i ? { ...x, type: e.target.value as CellType } : x,
-                        ),
-                      }))
-                    }
+                        cells: d.cells.map((x, j) => (j === i ? { ...x, type } : x)),
+                      }));
+                      if (type === "md") {
+                        cancels.current[i]?.();
+                        delete cancels.current[i];
+                        setOuts((cur) => cur.map((o, j) => (j === i ? {} : o)));
+                        setMdEdit(i);
+                      }
+                    }}
                     aria-label={`Cell ${i + 1} language`}
                     style={{
                       border: "1px solid var(--border)",
@@ -420,6 +522,7 @@ export function Notebook() {
                     <option value="sql">sql</option>
                     <option value="python">python</option>
                     <option value="r">r</option>
+                    <option value="md">markdown</option>
                   </select>
                   <div style={{ flex: 1 }} />
                   <IconBtn label="Move up" onClick={() => moveCell(i, -1)}>
@@ -431,6 +534,18 @@ export function Notebook() {
                   <IconBtn label="Delete cell" onClick={() => deleteCell(i)} danger>
                     ✕
                   </IconBtn>
+                  {c.type === "md" ? (
+                    <button
+                      type="button"
+                      // mousedown fires before the textarea's blur, so Done
+                      // doesn't re-open what blur just closed.
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setMdEdit((cur) => (cur === i ? null : i))}
+                      style={{ ...ghost, fontSize: 11.5, padding: "4px 12px", borderRadius: 9 }}
+                    >
+                      {mdEdit === i ? "Done" : "Edit"}
+                    </button>
+                  ) : (
                   <button
                     type="button"
                     onClick={() => void runCell(i)}
@@ -447,19 +562,40 @@ export function Notebook() {
                   >
                     {outs[i]?.running ? "Running…" : "▶ Run"}
                   </button>
+                  )}
                 </div>
 
                 {/* source */}
+                {c.type === "md" && mdEdit !== i ? (
+                  <div
+                    onDoubleClick={() => setMdEdit(i)}
+                    title="Double-click to edit"
+                    style={{ padding: "14px 18px", background: "var(--surface)", cursor: "text" }}
+                  >
+                    {c.source.trim() ? (
+                      <Markdown source={c.source} />
+                    ) : (
+                      <div style={{ fontSize: 12.5, color: "var(--text-faint)" }}>
+                        Empty markdown cell — double-click to write.
+                      </div>
+                    )}
+                  </div>
+                ) : (
                 <textarea
                   value={c.source}
                   spellCheck={false}
                   rows={rowsFor(c.source)}
+                  autoFocus={c.type === "md"}
                   onFocus={() => setFocused(i)}
+                  onBlur={() => {
+                    if (c.type === "md") setMdEdit((cur) => (cur === i ? null : cur));
+                  }}
                   onChange={(e) => setSource(i, e.target.value)}
                   onKeyDown={(e) => {
                     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
                       e.preventDefault();
-                      void runCell(i);
+                      if (c.type === "md") setMdEdit(null);
+                      else void runCell(i);
                     }
                   }}
                   aria-label={`Cell ${i + 1} source`}
@@ -478,9 +614,10 @@ export function Notebook() {
                     tabSize: 2,
                   }}
                 />
+                )}
 
                 {/* output */}
-                <Output out={outs[i]} />
+                {c.type !== "md" && <Output out={outs[i]} />}
               </div>
 
               {/* add-cell gutter */}
@@ -496,20 +633,29 @@ export function Notebook() {
 /* ---- pieces ------------------------------------------------------------- */
 
 function Output({ out }: { out?: CellOut }) {
-  if (!out || (!out.rows && !out.stdout && !out.stderr && !out.error && !out.running)) return null;
+  if (!out || (!hasOutput(out) && !out.running)) return null;
   return (
     <div
       style={{
         borderTop: "1px solid var(--border)",
         background: "var(--surface-alt)",
         padding: "10px 14px",
-        maxHeight: 420,
+        maxHeight: 560,
         overflow: "auto",
       }}
     >
       {out.running && (
         <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
           Running on your engine session…
+        </div>
+      )}
+      {out.stale && !out.running && (
+        <div
+          className="mono"
+          title="Saved with the notebook — run the cell to refresh"
+          style={{ fontSize: 10.5, color: "var(--text-faint)", marginBottom: 6 }}
+        >
+          from last run
         </div>
       )}
       {out.error && (
@@ -528,6 +674,9 @@ function Output({ out }: { out?: CellOut }) {
             }}
           >
             ✓ {out.rows.length.toLocaleString()} row{out.rows.length === 1 ? "" : "s"}
+            {out.truncated && (
+              <span style={{ color: "var(--warn)", fontWeight: 400 }}> · truncated</span>
+            )}
             {out.seconds !== undefined && (
               <span style={{ color: "var(--text-dim)", fontWeight: 400 }}>
                 {" "}
@@ -542,6 +691,36 @@ function Output({ out }: { out?: CellOut }) {
           )}
         </>
       )}
+      {!out.running && out.table && (
+        <div style={{ marginBottom: 6 }}>
+          <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginBottom: 6 }}>
+            {out.table.truncated
+              ? `${out.table.rows.length.toLocaleString()} of ${out.table.total.toLocaleString()} rows`
+              : `${out.table.total.toLocaleString()} row${out.table.total === 1 ? "" : "s"}`}
+          </div>
+          {out.table.rows.length > 0 ? (
+            <ResultGrid rows={out.table.rows} columns={out.table.columns} />
+          ) : (
+            <div style={{ fontSize: 12, color: "var(--text-dim)" }}>Empty frame.</div>
+          )}
+        </div>
+      )}
+      {!out.running &&
+        out.images?.map((b64, k) => (
+          <img
+            key={k}
+            src={`data:image/png;base64,${b64}`}
+            alt={`Figure ${k + 1}`}
+            style={{
+              display: "block",
+              maxWidth: "100%",
+              height: "auto",
+              margin: "6px 0",
+              background: "var(--surface)",
+              borderRadius: 8,
+            }}
+          />
+        ))}
       {out.stdout && (
         <pre className="mono" style={pre}>
           {out.stdout}
@@ -569,7 +748,7 @@ function AddCell({ onAdd }: { onAdd: (t: CellType) => void }) {
       }}
     >
       <span>+</span>
-      {(["sql", "python", "r"] as CellType[]).map((t) => (
+      {CELL_TYPES.map((t) => (
         <button
           key={t}
           type="button"
@@ -646,6 +825,19 @@ function IconBtn({
 }
 
 /* ---- helpers ------------------------------------------------------------ */
+
+function hasOutput(o: CellResult): boolean {
+  return Boolean(
+    o.rows || o.stdout || o.stderr || o.error || o.images?.length || o.table,
+  );
+}
+
+/** The whitelisted slice of an output the server persists; none while running. */
+function persistable(o?: CellOut): CellResult | undefined {
+  if (!o || o.running || !hasOutput(o)) return undefined;
+  const { ok, rows, stdout, stderr, error, images, table, truncated } = o;
+  return { ok: ok ?? !error, rows, stdout, stderr, error, images, table, truncated };
+}
 
 /** First non-empty line, for the table of contents. */
 function headline(source: string): string {

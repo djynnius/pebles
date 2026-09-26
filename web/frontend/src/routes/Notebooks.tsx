@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, errorText } from "../api";
-import { AccentButton, Page } from "../components/Page";
+import { AccentButton, GhostButton, Page } from "../components/Page";
 import { InlineConfirm } from "../components/Form";
 import { Empty, ErrorBlock, Loading } from "../components/State";
 
@@ -22,6 +22,9 @@ export function Notebooks() {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const field = useRef<HTMLInputElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState("");
 
   const load = useCallback(() => {
     setError("");
@@ -53,6 +56,25 @@ export function Notebooks() {
       .finally(() => setBusy(false));
   };
 
+  /**
+   * .ipynb import: the server converts, names the notebook after the file
+   * (or the name typed in the field, when valid), and refuses to overwrite —
+   * its 409/422 sentences are shown as-is.
+   */
+  const importFile = (file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    const n = name.trim();
+    if (n && DOC_NAME.test(n)) body.append("name", n);
+    setImporting(true);
+    setImportError("");
+    api
+      .upload<{ name: string; cells: number }>("/notebooks/import", body)
+      .then((r) => nav(`/notebooks/${encodeURIComponent(r.name)}`))
+      .catch((e) => setImportError(errorText(e)))
+      .finally(() => setImporting(false));
+  };
+
   // Inline "Delete x? [Delete] [Cancel]" instead of window.confirm.
   const [confirming, setConfirming] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -78,7 +100,29 @@ export function Notebooks() {
   };
 
   return (
-    <Page title="Notebooks" eyebrow="Analysis">
+    <Page
+      title="Notebooks"
+      eyebrow="Analysis"
+      actions={
+        <>
+          <input
+            ref={picker}
+            type="file"
+            accept=".ipynb,application/x-ipynb+json,application/json"
+            aria-label="Import .ipynb file"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = ""; // picking the same file again must re-fire
+              if (f) importFile(f);
+            }}
+          />
+          <GhostButton disabled={importing} onClick={() => picker.current?.click()}>
+            {importing ? "Importing…" : "Import .ipynb"}
+          </GhostButton>
+        </>
+      }
+    >
       {/* new notebook */}
       <div
         style={{
@@ -121,6 +165,7 @@ export function Notebooks() {
         </AccentButton>
       </div>
 
+      {importError && <ErrorBlock title="Couldn't import that notebook" error={importError} />}
       {error && <ErrorBlock error={error} />}
       {!error && names === null && <Loading />}
       {confirming && (
@@ -209,7 +254,7 @@ export function Notebooks() {
           <Empty
             glyph="▧"
             title="No notebooks yet"
-            body="Notebooks are JSON documents in your own home — SQL, Python and R cells that run on your engine session as you."
+            body="Notebooks are JSON documents in your own home — SQL, Python and R cells that run on your engine session as you, plus markdown notes. Import a Jupyter .ipynb to start from one you have."
             action={
               <button
                 type="button"
