@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { api } from "../api";
 import {
   accessDenied,
@@ -27,12 +27,20 @@ export interface TableRef {
   table: string;
 }
 
+/** What a right-click in the tree landed on. */
+export type TreeTarget =
+  | { kind: "catalog"; catalog: string; locked: boolean }
+  | { kind: "schema"; catalog: string; schema: string }
+  | { kind: "table"; catalog: string; schema: string; table: string };
+
 export function CatalogTree({
   catalogs,
   filter = "",
   selected,
   onPick,
   onDenied,
+  onContext,
+  refreshToken = 0,
 }: {
   catalogs: Catalog[];
   /** Client-side substring filter over catalog / schema / table names. */
@@ -41,6 +49,10 @@ export function CatalogTree({
   onPick: (ref: TableRef) => void;
   /** Called when the user clicks a catalog they can't open. */
   onDenied?: (info: AccessDenied) => void;
+  /** Right-click on a row; omitted → the browser's own menu. */
+  onContext?: (target: TreeTarget, x: number, y: number) => void;
+  /** Bump to re-fetch every tree already loaded (after a create/rename). */
+  refreshToken?: number;
 }) {
   const [trees, setTrees] = useState<Record<string, TreeResponse | null>>({});
   const [openCatalogs, setOpen] = useState<string[]>([]);
@@ -68,8 +80,10 @@ export function CatalogTree({
   const q = filter.trim().toLowerCase();
   const filtering = q.length > 0;
 
-  const load = (name: string) => {
-    setTrees((cur) => (name in cur ? cur : { ...cur, [name]: null }));
+  const treesRef = useRef(trees);
+  treesRef.current = trees;
+
+  const fetchTree = (name: string) =>
     api
       .get<TreeResponse>(`/catalogs/${encodeURIComponent(name)}/tree`)
       .then((t) => setTrees((cur) => ({ ...cur, [name]: t })))
@@ -78,7 +92,26 @@ export function CatalogTree({
         if (denied) setBlocked((cur) => ({ ...cur, [name]: denied.owner }));
         setTrees((cur) => ({ ...cur, [name]: { schemas: [] } }));
       });
+
+  const load = (name: string) => {
+    setTrees((cur) => (name in cur ? cur : { ...cur, [name]: null }));
+    fetchTree(name);
   };
+
+  // Re-read what is already on screen; the old tree stays up until the new
+  // one lands so nothing flickers to "Loading…".
+  useEffect(() => {
+    if (!refreshToken) return;
+    for (const name of Object.keys(treesRef.current)) fetchTree(name);
+  }, [refreshToken]);
+
+  const ctx = (target: TreeTarget) =>
+    onContext
+      ? (e: MouseEvent) => {
+          e.preventDefault();
+          onContext(target, e.clientX, e.clientY);
+        }
+      : undefined;
 
   // Open the first catalog on arrival so the panel is never a dead end.
   useEffect(() => {
@@ -166,6 +199,7 @@ export function CatalogTree({
                 depth={0}
                 muted
                 onClick={() => toggleCatalog(c)}
+                onContextMenu={ctx({ kind: "catalog", catalog: c.name, locked: true })}
                 glyph={<LockGlyph />}
                 label={c.name}
                 weight={600}
@@ -189,6 +223,7 @@ export function CatalogTree({
               open={open}
               caret
               onClick={() => toggleCatalog(c)}
+              onContextMenu={ctx({ kind: "catalog", catalog: c.name, locked: false })}
               glyph={<DbGlyph />}
               label={c.name}
               weight={600}
@@ -208,6 +243,7 @@ export function CatalogTree({
                       open={sOpen}
                       caret
                       onClick={() => toggleSchema(key)}
+                      onContextMenu={ctx({ kind: "schema", catalog: c.name, schema: s.name })}
                       glyph={<span style={{ color: "var(--text-faint)" }}>▤</span>}
                       label={s.name}
                     />
@@ -226,6 +262,12 @@ export function CatalogTree({
                             depth={2}
                             active={on}
                             onClick={() => onPick({ catalog: c.name, schema: s.name, table: t })}
+                            onContextMenu={ctx({
+                              kind: "table",
+                              catalog: c.name,
+                              schema: s.name,
+                              table: t,
+                            })}
                             glyph={
                               <span style={{ color: on ? "var(--accent)" : "var(--text-faint)" }}>
                                 ▦
@@ -261,11 +303,11 @@ export function CatalogPanel({
 }) {
   return (
     <>
-      <div style={{ padding: "8px 12px", fontSize: 11, color: "var(--text-dim)" }}>
+      <div style={{ padding: "8px 12px", fontSize: "var(--fs-label)", color: "var(--text-dim)" }}>
         Click a table to insert its name
       </div>
       {error ? (
-        <div style={{ padding: "8px 12px", fontSize: 11.5, color: "var(--err)" }}>{error}</div>
+        <div style={{ padding: "8px 12px", fontSize: "var(--fs-small)", color: "var(--err)" }}>{error}</div>
       ) : catalogs === null ? (
         <div style={hint}>Loading catalogs…</div>
       ) : catalogs.length === 0 ? (
@@ -288,6 +330,7 @@ function TreeRow({
   muted,
   title,
   onClick,
+  onContextMenu,
 }: {
   depth: number;
   label: string;
@@ -300,12 +343,14 @@ function TreeRow({
   muted?: boolean;
   title?: string;
   onClick: () => void;
+  onContextMenu?: (e: MouseEvent) => void;
 }) {
   const [hover, setHover] = useState(false);
   return (
     <button
       type="button"
       onClick={onClick}
+      onContextMenu={onContextMenu}
       title={title}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
@@ -319,7 +364,7 @@ function TreeRow({
         borderRadius: 8,
         padding: "5px 8px",
         paddingLeft: 8 + depth * 14,
-        fontSize: 12.5,
+        fontSize: "var(--fs-body)",
         fontWeight: weight ?? (active ? 600 : 400),
         fontFamily: "inherit",
         background: active ? "var(--accent-tint)" : hover ? "var(--hover)" : "transparent",
@@ -330,14 +375,14 @@ function TreeRow({
         style={{
           width: 9,
           flexShrink: 0,
-          fontSize: 9,
+          fontSize: "var(--fs-2xs)",
           color: "var(--text-faint)",
           visibility: caret ? "visible" : "hidden",
         }}
       >
         {open ? "▾" : "▸"}
       </span>
-      {glyph && <span style={{ flexShrink: 0, fontSize: 11 }}>{glyph}</span>}
+      {glyph && <span style={{ flexShrink: 0, fontSize: "var(--fs-label)" }}>{glyph}</span>}
       <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {label}
       </span>
@@ -345,12 +390,12 @@ function TreeRow({
   );
 }
 
-/** 11px database cylinder, matching the rail's catalog icon. */
+/** 13px database cylinder, matching the rail's catalog icon. */
 function DbGlyph() {
   return (
     <svg
-      width="11"
-      height="11"
+      width="13"
+      height="13"
       viewBox="0 0 16 16"
       fill="none"
       stroke="currentColor"
@@ -364,12 +409,12 @@ function DbGlyph() {
   );
 }
 
-/** 11px padlock for catalogs the user can't open. */
+/** 13px padlock for catalogs the user can't open. */
 function LockGlyph() {
   return (
     <svg
-      width="11"
-      height="11"
+      width="13"
+      height="13"
       viewBox="0 0 16 16"
       fill="none"
       stroke="currentColor"
@@ -385,6 +430,6 @@ function LockGlyph() {
 
 const hint: React.CSSProperties = {
   padding: "6px 10px",
-  fontSize: 11,
+  fontSize: "var(--fs-label)",
   color: "var(--text-dim)",
 };

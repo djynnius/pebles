@@ -311,7 +311,7 @@ export function Notebook() {
       panels={{
         toc: (
           <div style={{ padding: "6px 0 12px" }}>
-            <div style={{ padding: "4px 12px 8px", fontSize: 11, color: "var(--text-dim)" }}>
+            <div style={{ padding: "4px 12px 8px", fontSize: "var(--fs-label)", color: "var(--text-dim)" }}>
               {doc ? `${doc.cells.length} cell${doc.cells.length === 1 ? "" : "s"}` : "…"}
             </div>
             {toc.map((e, k) => (
@@ -330,12 +330,12 @@ export function Notebook() {
                   padding: "6px 12px",
                   paddingLeft: 12 + Math.max(0, e.level - 1) * 12,
                   fontFamily: "inherit",
-                  fontSize: e.level === 1 ? 12.5 : 12,
+                  fontSize: e.level === 1 ? "var(--fs-body)" : "var(--fs-meta)",
                   fontWeight: e.level === 1 ? 600 : 400,
                   color: e.level ? "var(--text)" : "var(--text-mid)",
                 }}
               >
-                <span className="mono" style={{ fontSize: 10, color: "var(--text-faint)" }}>
+                <span className="mono" style={{ fontSize: "var(--fs-xs)", color: "var(--text-faint)" }}>
                   {String(e.i + 1).padStart(2, "0")}
                 </span>
                 {e.level === 0 && <Badge type={e.type} tiny />}
@@ -387,11 +387,11 @@ export function Notebook() {
           <button type="button" onClick={() => nav("/notebooks")} style={crumbBtn}>
             ‹ Notebooks
           </button>
-          <span className="mono" style={{ fontSize: 12.5, fontWeight: 600 }}>
+          <span className="mono" style={{ fontSize: "var(--fs-body)", fontWeight: 600 }}>
             ~/notebooks/{name}.json
           </span>
           {dirty && (
-            <span style={{ fontSize: 11, color: "var(--accent-ink)" }}>unsaved changes</span>
+            <span style={{ fontSize: "var(--fs-label)", color: "var(--accent-ink)" }}>unsaved changes</span>
           )}
           <div style={{ flex: 1 }} />
           <select
@@ -405,7 +405,7 @@ export function Notebook() {
               border: "1px solid var(--border)",
               background: "var(--surface-alt)",
               color: "var(--accent-deep)",
-              fontSize: 11.5,
+              fontSize: "var(--fs-small)",
             }}
           >
             <option value="">no catalog</option>
@@ -452,7 +452,7 @@ export function Notebook() {
               borderRadius: 12,
               padding: "10px 14px",
               color: "var(--err)",
-              fontSize: 12.5,
+              fontSize: "var(--fs-body)",
             }}
           >
             {error}
@@ -462,7 +462,7 @@ export function Notebook() {
         {/* cells */}
         <div style={{ padding: "16px 18px 80px", display: "flex", flexDirection: "column", gap: 4 }}>
           {!doc && !error && (
-            <div style={{ fontSize: 12.5, color: "var(--text-dim)" }}>Loading…</div>
+            <div style={{ fontSize: "var(--fs-body)", color: "var(--text-dim)" }}>Loading…</div>
           )}
           {doc?.cells.map((c, i) => (
             <div key={i}>
@@ -492,7 +492,7 @@ export function Notebook() {
                     borderBottom: "1px solid var(--border)",
                   }}
                 >
-                  <span className="mono" style={{ fontSize: 10.5, color: "var(--text-faint)" }}>
+                  <span className="mono" style={{ fontSize: "var(--fs-eyebrow)", color: "var(--text-faint)" }}>
                     [{i + 1}]
                   </span>
                   <Badge type={c.type} />
@@ -517,7 +517,7 @@ export function Notebook() {
                       borderRadius: 8,
                       background: "var(--surface)",
                       color: "var(--text-muted)",
-                      fontSize: 11,
+                      fontSize: "var(--fs-label)",
                       padding: "2px 6px",
                     }}
                   >
@@ -543,7 +543,7 @@ export function Notebook() {
                       // doesn't re-open what blur just closed.
                       onMouseDown={(e) => e.preventDefault()}
                       onClick={() => setMdEdit((cur) => (cur === i ? null : i))}
-                      style={{ ...ghost, fontSize: 11.5, padding: "4px 12px", borderRadius: 9 }}
+                      style={{ ...ghost, fontSize: "var(--fs-small)", padding: "4px 12px", borderRadius: 9 }}
                     >
                       {mdEdit === i ? "Done" : "Edit"}
                     </button>
@@ -558,7 +558,7 @@ export function Notebook() {
                       border: "none",
                       borderRadius: 9,
                       fontWeight: 600,
-                      fontSize: 11.5,
+                      fontSize: "var(--fs-small)",
                       padding: "5px 12px",
                     }}
                   >
@@ -577,7 +577,7 @@ export function Notebook() {
                     {c.source.trim() ? (
                       <Markdown source={c.source} />
                     ) : (
-                      <div style={{ fontSize: 12.5, color: "var(--text-faint)" }}>
+                      <div style={{ fontSize: "var(--fs-body)", color: "var(--text-faint)" }}>
                         Empty markdown cell — double-click to write.
                       </div>
                     )}
@@ -611,7 +611,7 @@ export function Notebook() {
                     padding: "12px 14px",
                     background: "var(--surface)",
                     color: "var(--text)",
-                    fontSize: 12.5,
+                    fontSize: "var(--fs-body)",
                     lineHeight: "20px",
                     tabSize: 2,
                   }}
@@ -647,7 +647,7 @@ function Output({ out }: { out?: CellOut }) {
       }}
     >
       {out.running && (
-        <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+        <div style={{ fontSize: "var(--fs-meta)", color: "var(--text-muted)" }}>
           Running on your engine session…
         </div>
       )}
@@ -655,13 +655,13 @@ function Output({ out }: { out?: CellOut }) {
         <div
           className="mono"
           title="Saved with the notebook — run the cell to refresh"
-          style={{ fontSize: 10.5, color: "var(--text-faint)", marginBottom: 6 }}
+          style={{ fontSize: "var(--fs-eyebrow)", color: "var(--text-faint)", marginBottom: 6 }}
         >
           from last run
         </div>
       )}
       {out.error && (
-        <div className="mono" style={{ fontSize: 12, color: "var(--err)", whiteSpace: "pre-wrap" }}>
+        <div className="mono" style={{ fontSize: "var(--fs-meta)", color: "var(--err)", whiteSpace: "pre-wrap" }}>
           {out.error}
         </div>
       )}
@@ -669,7 +669,7 @@ function Output({ out }: { out?: CellOut }) {
         <>
           <div
             style={{
-              fontSize: 11.5,
+              fontSize: "var(--fs-small)",
               color: "var(--ok-ink)",
               fontWeight: 600,
               marginBottom: 8,
@@ -689,13 +689,13 @@ function Output({ out }: { out?: CellOut }) {
           {out.rows.length > 0 ? (
             <ResultGrid rows={out.rows} />
           ) : (
-            <div style={{ fontSize: 12, color: "var(--text-dim)" }}>No rows.</div>
+            <div style={{ fontSize: "var(--fs-meta)", color: "var(--text-dim)" }}>No rows.</div>
           )}
         </>
       )}
       {!out.running && out.table && (
         <div style={{ marginBottom: 6 }}>
-          <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginBottom: 6 }}>
+          <div style={{ fontSize: "var(--fs-small)", color: "var(--text-muted)", marginBottom: 6 }}>
             {out.table.truncated
               ? `${out.table.rows.length.toLocaleString()} of ${out.table.total.toLocaleString()} rows`
               : `${out.table.total.toLocaleString()} row${out.table.total === 1 ? "" : "s"}`}
@@ -703,7 +703,7 @@ function Output({ out }: { out?: CellOut }) {
           {out.table.rows.length > 0 ? (
             <ResultGrid rows={out.table.rows} columns={out.table.columns} />
           ) : (
-            <div style={{ fontSize: 12, color: "var(--text-dim)" }}>Empty frame.</div>
+            <div style={{ fontSize: "var(--fs-meta)", color: "var(--text-dim)" }}>Empty frame.</div>
           )}
         </div>
       )}
@@ -745,7 +745,7 @@ function AddCell({ onAdd }: { onAdd: (t: CellType) => void }) {
         alignItems: "center",
         gap: 6,
         padding: "6px 0 6px 10px",
-        fontSize: 11,
+        fontSize: "var(--fs-label)",
         color: "var(--text-faint)",
       }}
     >
@@ -761,7 +761,7 @@ function AddCell({ onAdd }: { onAdd: (t: CellType) => void }) {
             background: "var(--surface)",
             color: "var(--text-muted)",
             fontFamily: "inherit",
-            fontSize: 11,
+            fontSize: "var(--fs-label)",
             padding: "2px 9px",
           }}
         >
@@ -781,7 +781,7 @@ function Badge({ type, tiny }: { type: CellType; tiny?: boolean }) {
         display: "inline-block",
         borderRadius: 6,
         padding: tiny ? "0 4px" : "1px 7px",
-        fontSize: tiny ? 9 : 10,
+        fontSize: tiny ? "var(--fs-2xs)" : "var(--fs-xs)",
         fontWeight: 600,
         letterSpacing: "0.4px",
         background: sql ? "var(--accent-tint)" : "var(--track)",
@@ -817,7 +817,7 @@ function IconBtn({
         borderRadius: 6,
         background: "transparent",
         color: danger ? "var(--err)" : "var(--text-faint)",
-        fontSize: 11,
+        fontSize: "var(--fs-label)",
         lineHeight: 1,
       }}
     >
@@ -857,7 +857,7 @@ function rowsFor(source: string): number {
 }
 
 const pre: CSSProperties = {
-  fontSize: 12,
+  fontSize: "var(--fs-meta)",
   lineHeight: "18px",
   whiteSpace: "pre-wrap",
   overflowWrap: "break-word",
@@ -870,7 +870,7 @@ const ghost: CSSProperties = {
   color: "var(--text-mid)",
   border: "1px solid var(--border)",
   borderRadius: 11,
-  fontSize: 12.5,
+  fontSize: "var(--fs-body)",
   padding: "7px 14px",
 };
 
@@ -879,6 +879,6 @@ const crumbBtn: CSSProperties = {
   background: "transparent",
   padding: 0,
   font: "inherit",
-  fontSize: 11.5,
+  fontSize: "var(--fs-small)",
   color: "var(--text-dim)",
 };

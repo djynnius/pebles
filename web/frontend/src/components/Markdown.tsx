@@ -138,7 +138,7 @@ const HEADING_SIZE: Record<1 | 2 | 3, number> = { 1: 22, 2: 17, 3: 14.5 };
 export function Markdown({ source, style }: { source: string; style?: CSSProperties }) {
   const blocks = parse(source);
   return (
-    <div style={{ fontSize: 13.5, lineHeight: 1.6, color: "var(--text)", ...style }}>
+    <div style={{ fontSize: "var(--fs-lead)", lineHeight: 1.6, color: "var(--text)", ...style }}>
       {blocks.map((b, i) => {
         const first = i === 0;
         switch (b.kind) {
@@ -176,7 +176,7 @@ export function Markdown({ source, style }: { source: string; style?: CSSPropert
                   background: "var(--surface-alt)",
                   border: "1px solid var(--border)",
                   borderRadius: 9,
-                  fontSize: 12,
+                  fontSize: "var(--fs-meta)",
                   lineHeight: "18px",
                   overflowX: "auto",
                   whiteSpace: "pre",

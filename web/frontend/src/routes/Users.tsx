@@ -117,7 +117,7 @@ function UsersList({ me }: { me: string }) {
         !adding ? <AccentButton onClick={() => setAdding(true)}>Add user</AccentButton> : undefined
       }
     >
-      <p style={{ color: "var(--text-dim)", fontSize: 12.5, marginTop: -8, marginBottom: 18 }}>
+      <p style={{ color: "var(--text-dim)", fontSize: "var(--fs-body)", marginTop: -8, marginBottom: 18 }}>
         Every user is a real UNIX account in the reserved uid range. Admins are members of the{" "}
         <code>admins</code> group.
       </p>
@@ -220,7 +220,7 @@ function UserRows({
       <tr>
         <Td style={dim}>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <span className="mono" style={{ fontSize: 12.5 }}>
+            <span className="mono" style={{ fontSize: "var(--fs-body)" }}>
               {u.username}
             </span>
             {self && <Badge tone="dim">you</Badge>}
@@ -428,7 +428,7 @@ function DeleteUser({
         </span>
       </label>
       {removeHome && (
-        <div style={{ fontSize: 11.5, color: "var(--err)", marginTop: 4 }}>
+        <div style={{ fontSize: "var(--fs-small)", color: "var(--err)", marginTop: 4 }}>
           Files in {home} will be permanently removed and cannot be recovered.
         </div>
       )}
@@ -466,7 +466,7 @@ function AddUserForm({ onCancel, onCreated }: { onCancel: () => void; onCreated:
   return (
     <Card style={{ padding: 18, marginBottom: 18 }}>
       <form onSubmit={submit}>
-        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 14 }}>Add user</div>
+        <div style={{ fontSize: "var(--fs-lg)", fontWeight: 600, marginBottom: 14 }}>Add user</div>
         <div
           style={{
             display: "grid",

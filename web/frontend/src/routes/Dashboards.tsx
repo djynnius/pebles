@@ -114,7 +114,7 @@ export function Dashboards() {
             border: "1px solid var(--border)",
             background: "var(--surface-alt)",
             color: "var(--text)",
-            fontSize: 12.5,
+            fontSize: "var(--fs-body)",
             outline: "none",
           }}
         />
@@ -189,7 +189,7 @@ export function Dashboards() {
                   borderRadius: 6,
                   background: "transparent",
                   color: "var(--text-faint)",
-                  fontSize: 11,
+                  fontSize: "var(--fs-label)",
                   lineHeight: 1,
                 }}
               >
@@ -223,7 +223,7 @@ export function Dashboards() {
 
               <div
                 style={{
-                  fontSize: 14,
+                  fontSize: "var(--fs-md)",
                   fontWeight: 600,
                   overflow: "hidden",
                   textOverflow: "ellipsis",
@@ -232,7 +232,7 @@ export function Dashboards() {
               >
                 {n}
               </div>
-              <div className="mono" style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 3 }}>
+              <div className="mono" style={{ fontSize: "var(--fs-label)", color: "var(--text-dim)", marginTop: 3 }}>
                 ~/dashboards/{n}.json
               </div>
             </div>
@@ -254,7 +254,7 @@ export function Dashboards() {
                   border: "none",
                   borderRadius: 11,
                   fontWeight: 600,
-                  fontSize: 13,
+                  fontSize: "var(--fs-base)",
                   padding: "9px 18px",
                 }}
               >

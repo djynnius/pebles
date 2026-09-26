@@ -32,13 +32,30 @@ interface Msg {
 }
 
 /** pebblesd's ask-first tools (crates/pebblesd/src/nkoyo.rs `tools()`). */
-const ASK_FIRST = ["write_file", "sql_exec"];
+const ASK_FIRST = [
+  "write_file",
+  "sql_exec",
+  "create_catalog",
+  "create_schema",
+  "create_notebook",
+  "create_job",
+];
+
+/** Plain-language names for the approval list; unknown tools show their id. */
+const TOOL_LABELS: Record<string, string> = {
+  write_file: "Write a file",
+  sql_exec: "Run SQL that changes data",
+  create_catalog: "Create a catalog",
+  create_schema: "Create a schema",
+  create_notebook: "Create a notebook",
+  create_job: "Create a job",
+};
 
 const SUGGESTIONS = [
+  { title: "Ask how Pebbles works", body: "How do I share a catalog with my team?" },
+  { title: "Create a schema for me", body: "Create a schema called staging in my first catalog." },
   { title: "Profile a table", body: "Profile the biggest table in my lake and flag odd columns." },
   { title: "Write a query", body: "Write a query that counts rows per month in " },
-  { title: "Summarize a notebook", body: "Summarize what my latest notebook does." },
-  { title: "Find slow jobs", body: "Which of my jobs failed or ran longest recently?" },
 ];
 
 /**
@@ -156,7 +173,7 @@ export function Nkoyo({ user }: { user: User }) {
             border: "none",
             borderRadius: 12,
             fontWeight: 600,
-            fontSize: 13,
+            fontSize: "var(--fs-base)",
             padding: "9px 14px",
             textAlign: "left",
           }}
@@ -167,7 +184,7 @@ export function Nkoyo({ user }: { user: User }) {
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
           <div
             style={{
-              fontSize: 10.5,
+              fontSize: "var(--fs-eyebrow)",
               letterSpacing: "0.8px",
               textTransform: "uppercase",
               color: "var(--text-faint)",
@@ -182,7 +199,7 @@ export function Nkoyo({ user }: { user: User }) {
               borderRadius: 10,
               background: empty ? "transparent" : "var(--surface)",
               border: empty ? "1px solid transparent" : "1px solid var(--border)",
-              fontSize: 12.5,
+              fontSize: "var(--fs-body)",
               color: empty ? "var(--text-dim)" : "var(--text-mid)",
               overflow: "hidden",
               textOverflow: "ellipsis",
@@ -191,14 +208,14 @@ export function Nkoyo({ user }: { user: User }) {
           >
             {firstUserLine ?? "Current chat"}
           </div>
-          <div style={{ fontSize: 11, color: "var(--text-dim)", padding: "10px 6px" }}>
+          <div style={{ fontSize: "var(--fs-label)", color: "var(--text-dim)", padding: "10px 6px" }}>
             One conversation at a time — “New chat” clears it.
           </div>
         </div>
 
         <div
           style={{
-            fontSize: 11,
+            fontSize: "var(--fs-label)",
             lineHeight: 1.6,
             color: "var(--text-dim)",
             borderTop: "1px solid var(--border)",
@@ -231,7 +248,7 @@ export function Nkoyo({ user }: { user: User }) {
               <NkoyoAvatar size={72} />
               <h1
                 style={{
-                  fontSize: 26,
+                  fontSize: "var(--fs-h1)",
                   fontWeight: 600,
                   letterSpacing: "-0.5px",
                   textAlign: "center",
@@ -267,10 +284,10 @@ export function Nkoyo({ user }: { user: User }) {
                       color: "var(--text)",
                     }}
                   >
-                    <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 4 }}>
+                    <div style={{ fontSize: "var(--fs-lead)", fontWeight: 600, marginBottom: 4 }}>
                       {s.title}
                     </div>
-                    <div style={{ fontSize: 12, color: "var(--text-dim)" }}>{s.body}</div>
+                    <div style={{ fontSize: "var(--fs-meta)", color: "var(--text-dim)" }}>{s.body}</div>
                   </button>
                 ))}
               </div>
@@ -288,7 +305,7 @@ export function Nkoyo({ user }: { user: User }) {
                         color: "var(--deep-text)",
                         borderRadius: "12px 12px 3px 12px",
                         padding: "10px 14px",
-                        fontSize: 13.5,
+                        fontSize: "var(--fs-lead)",
                         whiteSpace: "pre-wrap",
                         overflowWrap: "break-word",
                       }}
@@ -308,7 +325,7 @@ export function Nkoyo({ user }: { user: User }) {
                           border: "1px solid var(--track)",
                           borderRadius: "12px 12px 12px 3px",
                           padding: "10px 14px",
-                          fontSize: 13.5,
+                          fontSize: "var(--fs-lead)",
                           whiteSpace: "pre-wrap",
                           overflowWrap: "break-word",
                         }}
@@ -349,7 +366,7 @@ export function Nkoyo({ user }: { user: User }) {
                         >
                           <div
                             style={{
-                              fontSize: 12,
+                              fontSize: "var(--fs-meta)",
                               fontWeight: 600,
                               color: "var(--accent-tint-ink)",
                               marginBottom: 8,
@@ -364,7 +381,7 @@ export function Nkoyo({ user }: { user: User }) {
                                 display: "flex",
                                 alignItems: "center",
                                 gap: 8,
-                                fontSize: 12.5,
+                                fontSize: "var(--fs-body)",
                                 marginBottom: 6,
                               }}
                             >
@@ -377,7 +394,12 @@ export function Nkoyo({ user }: { user: User }) {
                                   )
                                 }
                               />
-                              <span className="mono">{t}</span>
+                              <span>{TOOL_LABELS[t] ?? t}</span>
+                              {TOOL_LABELS[t] && (
+                                <span className="mono" style={{ color: "var(--text-dim)", fontSize: "var(--fs-small)" }}>
+                                  {t}
+                                </span>
+                              )}
                             </label>
                           ))}
                           <button
@@ -393,7 +415,7 @@ export function Nkoyo({ user }: { user: User }) {
                               border: "none",
                               borderRadius: 11,
                               fontWeight: 600,
-                              fontSize: 12.5,
+                              fontSize: "var(--fs-body)",
                               padding: "7px 14px",
                             }}
                           >
@@ -413,7 +435,7 @@ export function Nkoyo({ user }: { user: User }) {
                     gap: 10,
                     marginBottom: 16,
                     color: "var(--text-dim)",
-                    fontSize: 12.5,
+                    fontSize: "var(--fs-body)",
                   }}
                 >
                   <NkoyoAvatar size={28} />
@@ -444,7 +466,7 @@ export function Nkoyo({ user }: { user: User }) {
               />
               <div
                 style={{
-                  fontSize: 11,
+                  fontSize: "var(--fs-label)",
                   color: "var(--text-dim)",
                   textAlign: "center",
                   marginTop: 8,
@@ -459,7 +481,7 @@ export function Nkoyo({ user }: { user: User }) {
           <div
             style={{
               flex: "0 0 auto",
-              fontSize: 11,
+              fontSize: "var(--fs-label)",
               color: "var(--text-dim)",
               textAlign: "center",
               padding: "0 24px 16px",
@@ -515,7 +537,7 @@ function AskBox({
           resize: "none",
           background: "transparent",
           color: "var(--text)",
-          fontSize: 14,
+          fontSize: "var(--fs-md)",
           lineHeight: 1.6,
         }}
       />
@@ -538,7 +560,7 @@ function AskBox({
             border: "none",
             background: busy || !value.trim() ? "var(--track)" : "var(--accent)",
             color: busy || !value.trim() ? "var(--text-dim)" : "var(--on-accent)",
-            fontSize: 14,
+            fontSize: "var(--fs-md)",
           }}
         >
           →
@@ -552,7 +574,7 @@ const chip: CSSProperties = {
   border: "1px solid var(--border)",
   borderRadius: 20,
   padding: "3px 9px",
-  fontSize: 11,
+  fontSize: "var(--fs-label)",
   color: "var(--text-mid)",
   background: "var(--surface-alt)",
 };

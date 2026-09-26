@@ -24,7 +24,9 @@ team has a complete platform in under an hour — on **Docker, Podman, or LXC (I
   filesystem permissions. There is no second ACL system.
 - **`pebblesd` (Rust) is the only privileged component**; the UI is a React app
   served by a thin Flask tier that can only act through pebblesd's API.
-- **Nkoyo**, the assistant, runs on local Ollama models. Fully air-gapped operation is a
+- **Nkoyo**, the assistant, runs on local Ollama models, knows how Pebbles works
+  (a built-in guide skill), and can create catalogs, schemas, notebooks and jobs with
+  your approval. Skills install by name from git. Fully air-gapped operation is a
   hard requirement.
 
 ## Status

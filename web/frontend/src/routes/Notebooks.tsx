@@ -156,7 +156,7 @@ export function Notebooks() {
             border: "1px solid var(--border)",
             background: "var(--surface-alt)",
             color: "var(--text)",
-            fontSize: 12.5,
+            fontSize: "var(--fs-body)",
             outline: "none",
           }}
         />
@@ -211,7 +211,7 @@ export function Notebooks() {
                         border: "none",
                         background: "transparent",
                         padding: 0,
-                        fontSize: 13,
+                        fontSize: "var(--fs-base)",
                         fontWeight: 500,
                         color: "var(--text)",
                         display: "flex",
@@ -223,7 +223,7 @@ export function Notebooks() {
                       {n}
                     </button>
                   </td>
-                  <td className="mono" style={{ ...td, color: "var(--text-dim)", fontSize: 11.5 }}>
+                  <td className="mono" style={{ ...td, color: "var(--text-dim)", fontSize: "var(--fs-small)" }}>
                     ~/notebooks/{n}.json
                   </td>
                   <td style={{ ...td, textAlign: "right" }}>
@@ -236,7 +236,7 @@ export function Notebooks() {
                         border: "none",
                         background: "transparent",
                         color: "var(--text-faint)",
-                        fontSize: 12,
+                        fontSize: "var(--fs-meta)",
                         padding: "2px 6px",
                         borderRadius: 6,
                       }}
@@ -265,7 +265,7 @@ export function Notebooks() {
                   border: "none",
                   borderRadius: 11,
                   fontWeight: 600,
-                  fontSize: 13,
+                  fontSize: "var(--fs-base)",
                   padding: "9px 18px",
                 }}
               >
@@ -283,7 +283,7 @@ const th: CSSProperties = {
   textAlign: "left",
   background: "var(--surface-alt)",
   borderBottom: "1px solid var(--border)",
-  fontSize: 11,
+  fontSize: "var(--fs-label)",
   fontWeight: 600,
   letterSpacing: "0.5px",
   textTransform: "uppercase",
@@ -294,5 +294,5 @@ const th: CSSProperties = {
 const td: CSSProperties = {
   padding: "10px 16px",
   borderBottom: "1px solid var(--border-soft)",
-  fontSize: 13,
+  fontSize: "var(--fs-base)",
 };

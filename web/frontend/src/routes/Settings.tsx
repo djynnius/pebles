@@ -11,9 +11,11 @@ import { api, errorText, type User } from "../api";
 import { CloudModelsWarning } from "../components/CloudModels";
 import { Empty, EmptyAction, ErrorBlock, Loading } from "../components/State";
 import {
+  Badge,
   Field,
   FormMessage,
   InlineConfirm,
+  SmallButton,
   TextInput,
   passwordProblem,
 } from "../components/Form";
@@ -92,15 +94,15 @@ export function Settings({ user, onSignOut }: { user: User; onSignOut: () => voi
               color: "var(--deep-text)",
               display: "grid",
               placeItems: "center",
-              fontSize: 12.5,
+              fontSize: "var(--fs-body)",
               fontWeight: 600,
             }}
           >
             {initials}
           </span>
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 13.5, fontWeight: 600 }}>{user.username}</div>
-            <div className="mono" style={{ fontSize: 11, color: "var(--text-dim)" }}>
+            <div style={{ fontSize: "var(--fs-lead)", fontWeight: 600 }}>{user.username}</div>
+            <div className="mono" style={{ fontSize: "var(--fs-label)", color: "var(--text-dim)" }}>
               uid {user.uid}
             </div>
           </div>
@@ -114,7 +116,7 @@ export function Settings({ user, onSignOut }: { user: User; onSignOut: () => voi
           <>
             <div
               style={{
-                fontSize: 10.5,
+                fontSize: "var(--fs-eyebrow)",
                 letterSpacing: "0.8px",
                 textTransform: "uppercase",
                 color: "var(--text-faint)",
@@ -139,7 +141,7 @@ export function Settings({ user, onSignOut }: { user: User; onSignOut: () => voi
             background: "var(--surface)",
             color: "var(--text-mid)",
             borderRadius: 11,
-            fontSize: 13,
+            fontSize: "var(--fs-base)",
             padding: "8px 12px",
           }}
         >
@@ -149,7 +151,7 @@ export function Settings({ user, onSignOut }: { user: User; onSignOut: () => voi
 
       {/* ---- pane ---------------------------------------------------------- */}
       <div style={{ flex: 1, minWidth: 0, padding: "34px 40px 60px", maxWidth: 900 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 600, letterSpacing: "-0.4px", marginBottom: 20 }}>
+        <h1 style={{ fontSize: "var(--fs-h2)", fontWeight: 600, letterSpacing: "-0.4px", marginBottom: 20 }}>
           {ALL_TABS.find((t) => t.id === tab)?.label}
         </h1>
         {tab === "profile" && <ProfilePane user={user} />}
@@ -176,7 +178,7 @@ function TabButton({ label, on, onClick }: { label: string; on: boolean; onClick
         border: "none",
         borderRadius: 10,
         padding: "8px 10px",
-        fontSize: 13.5,
+        fontSize: "var(--fs-lead)",
         background: on ? "var(--surface)" : "transparent",
         color: on ? "var(--text)" : "var(--text-muted)",
         fontWeight: on ? 600 : 400,
@@ -437,7 +439,7 @@ function GitPane() {
   return (
     <>
       {status && (
-        <p role="status" style={{ color: "var(--ok-ink)", fontSize: 12.5, marginBottom: 12 }}>
+        <p role="status" style={{ color: "var(--ok-ink)", fontSize: "var(--fs-body)", marginBottom: 12 }}>
           {status}
         </p>
       )}
@@ -472,13 +474,13 @@ function GitPane() {
       <Card style={{ padding: 18 }}>
         {pubkey ? (
           <>
-            <div style={{ fontSize: 12.5, color: "var(--text-mid)", marginBottom: 8 }}>
+            <div style={{ fontSize: "var(--fs-body)", color: "var(--text-mid)", marginBottom: 8 }}>
               Add this public key to your git host:
             </div>
             <pre
               className="mono"
               style={{
-                fontSize: 11.5,
+                fontSize: "var(--fs-small)",
                 background: "var(--surface-alt)",
                 border: "1px solid var(--border)",
                 borderRadius: 12,
@@ -491,7 +493,7 @@ function GitPane() {
             </pre>
           </>
         ) : (
-          <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginBottom: 10 }}>
+          <div style={{ fontSize: "var(--fs-body)", color: "var(--text-dim)", marginBottom: 10 }}>
             No key yet — generate an ed25519 pair in your <code>~/.ssh</code>.
           </div>
         )}
@@ -560,7 +562,7 @@ function GitPane() {
       </Card>
 
       {repos.length === 0 ? (
-        <p style={{ fontSize: 12.5, color: "var(--text-dim)" }}>
+        <p style={{ fontSize: "var(--fs-body)", color: "var(--text-dim)" }}>
           No repositories yet — clone one into <code>~/repos</code>.
         </p>
       ) : (
@@ -618,14 +620,14 @@ function Repo({ name, open, onToggle }: { name: string; open: boolean; onToggle:
           border: "none",
           background: "transparent",
           padding: "12px 18px",
-          fontSize: 13,
+          fontSize: "var(--fs-base)",
           color: "var(--text)",
         }}
       >
         <span style={{ color: "var(--text-faint)", width: 10 }}>{open ? "▾" : "▸"}</span>
         <span className="mono">{name}</span>
         {status && (
-          <span className="mono" style={{ fontSize: 11.5, color: "var(--text-dim)" }}>
+          <span className="mono" style={{ fontSize: "var(--fs-small)", color: "var(--text-dim)" }}>
             {status.branch || "detached"} · ↑{status.ahead} ↓{status.behind} ·{" "}
             {status.files.length} changed
           </span>
@@ -638,7 +640,7 @@ function Repo({ name, open, onToggle }: { name: string; open: boolean; onToggle:
             <div
               className="mono"
               style={{
-                fontSize: 11.5,
+                fontSize: "var(--fs-small)",
                 color: "var(--text-mid)",
                 background: "var(--surface-alt)",
                 border: "1px solid var(--border)",
@@ -687,7 +689,7 @@ function Repo({ name, open, onToggle }: { name: string; open: boolean; onToggle:
             <pre
               className="mono"
               style={{
-                fontSize: 11.5,
+                fontSize: "var(--fs-small)",
                 background: "var(--deep-soft)",
                 color: "var(--deep-text-2)",
                 borderRadius: 12,
@@ -795,7 +797,7 @@ function NkoyoPane({ admin }: { admin: boolean }) {
   return (
     <>
       {status && (
-        <p role="status" style={{ color: "var(--ok-ink)", fontSize: 12.5, marginBottom: 12 }}>
+        <p role="status" style={{ color: "var(--ok-ink)", fontSize: "var(--fs-body)", marginBottom: 12 }}>
           {status}
         </p>
       )}
@@ -810,7 +812,7 @@ function NkoyoPane({ admin }: { admin: boolean }) {
             readOnly={!admin}
             placeholder="http://10.0.0.7:11434"
             className="mono"
-            style={{ ...input, resize: "vertical", fontSize: 12.5 }}
+            style={{ ...input, resize: "vertical", fontSize: "var(--fs-body)" }}
           />
         </Labelled>
         {cloudModels.length > 0 && <CloudModelsWarning models={cloudModels} />}
@@ -865,7 +867,7 @@ function NkoyoPane({ admin }: { admin: boolean }) {
             </button>
           </div>
         ) : (
-          <div style={{ fontSize: 12.5, color: "var(--text-dim)" }}>
+          <div style={{ fontSize: "var(--fs-body)", color: "var(--text-dim)" }}>
             Only admins can change the assistant&apos;s models.
           </div>
         )}
@@ -881,7 +883,7 @@ function NkoyoPane({ admin }: { admin: boolean }) {
           <SectionTitle>Detected</SectionTitle>
           <Card style={{ overflow: "hidden" }}>
             {detected.length === 0 ? (
-              <div style={{ padding: 18, fontSize: 12.5, color: "var(--text-dim)" }}>
+              <div style={{ padding: 18, fontSize: "var(--fs-body)", color: "var(--text-dim)" }}>
                 No Ollama endpoint answered on the fleet.
               </div>
             ) : (
@@ -890,10 +892,10 @@ function NkoyoPane({ admin }: { admin: boolean }) {
                   key={d.endpoint}
                   style={{ padding: "12px 18px", borderBottom: "1px solid var(--border-soft)" }}
                 >
-                  <div className="mono" style={{ fontSize: 12.5 }}>
+                  <div className="mono" style={{ fontSize: "var(--fs-body)" }}>
                     {d.endpoint}
                   </div>
-                  <div className="mono" style={{ fontSize: 11.5, color: "var(--text-dim)" }}>
+                  <div className="mono" style={{ fontSize: "var(--fs-small)", color: "var(--text-dim)" }}>
                     {d.models.join(", ") || "no models"}
                   </div>
                 </div>
@@ -908,20 +910,269 @@ function NkoyoPane({ admin }: { admin: boolean }) {
 
 /* ---- skills -------------------------------------------------------------- */
 
+interface SkillInfo {
+  name: string;
+  source: "personal" | "workspace";
+  description: string;
+  removable: boolean;
+}
+
+/** Mirrors the server: ^[a-z0-9][a-z0-9-]{0,63}$. */
+const SKILL_NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+const SKILL_TEMPLATE = (name: string, what: string) =>
+  `---
+name: ${name || "my-skill"}
+description: ${what.split("\n")[0] || "One sentence on when Nkoyo should use this skill."}
+---
+
+# ${name || "my-skill"}
+
+## When to use
+
+## Steps
+1.
+`;
+
 function SkillsPane() {
+  const [skills, setSkills] = useState<SkillInfo[] | null>(null);
+  const [error, setError] = useState("");
+
+  const [spec, setSpec] = useState("");
+  const [installing, setInstalling] = useState(false);
+  const [installMsg, setInstallMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+
+  const [removing, setRemoving] = useState<string | null>(null);
+  const [removeBusy, setRemoveBusy] = useState(false);
+  const [removeError, setRemoveError] = useState("");
+
+  /** The skill being viewed/edited, or a new one being written. */
+  const [editor, setEditor] = useState<
+    { mode: "new" } | { mode: "open"; name: string; source: SkillInfo["source"] } | null
+  >(null);
+
+  const load = useCallback(() => {
+    api
+      .get<SkillInfo[]>("/skills")
+      .then((list) => {
+        setSkills(list);
+        setError("");
+      })
+      .catch((e) => setError(errorText(e)));
+  }, []);
+  useEffect(load, [load]);
+
+  const install = (e: FormEvent) => {
+    e.preventDefault();
+    const s = spec.trim();
+    if (!s || installing) return;
+    setInstalling(true);
+    setInstallMsg(null);
+    api
+      .post<{ installed: string[] }>("/skills/install", { spec: s })
+      .then((r) => {
+        const names = r.installed ?? [];
+        setInstallMsg({
+          tone: "ok",
+          text: names.length
+            ? `Installed ${names.join(", ")}.`
+            : "Nothing new was installed.",
+        });
+        setSpec("");
+        load();
+      })
+      .catch((err) => setInstallMsg({ tone: "err", text: errorText(err) }))
+      .finally(() => setInstalling(false));
+  };
+
+  const remove = (name: string) => {
+    setRemoveBusy(true);
+    setRemoveError("");
+    api
+      .del(`/skills/${encodeURIComponent(name)}`)
+      .then(() => {
+        setRemoving(null);
+        if (editor?.mode === "open" && editor.name === name) setEditor(null);
+        load();
+      })
+      .catch((e) => setRemoveError(errorText(e)))
+      .finally(() => setRemoveBusy(false));
+  };
+
   return (
     <>
       <Card style={{ padding: 18 }}>
-        <div style={{ fontSize: 13, color: "var(--text-mid)", marginBottom: 10 }}>
-          Skills are folders of instructions Nkoyo reads before it plans. Drop a{" "}
-          <code>SKILL.md</code> into either directory and it loads on the next turn:
-        </div>
-        <div className="mono" style={{ fontSize: 12, color: "var(--text)", lineHeight: 1.9 }}>
-          ~/.pebbles/skills/&lt;name&gt;/SKILL.md
-          <br />
-          /opt/pebbles/skills/&lt;name&gt;/SKILL.md
+        <div style={{ fontSize: "var(--fs-base)", color: "var(--text-mid)" }}>
+          Skills are folders of instructions Nkoyo reads before it plans. Yours live in{" "}
+          <code>~/.pebbles/skills/&lt;name&gt;/SKILL.md</code>; workspace skills ship with Pebbles
+          and are read-only. Changes load on Nkoyo&apos;s next turn.
         </div>
       </Card>
+
+      <SectionTitle>Installed skills</SectionTitle>
+      {error && <ErrorBlock title="Couldn't list skills" error={error} />}
+      {skills === null ? (
+        error ? null : <Loading />
+      ) : skills.length === 0 ? (
+        <Empty
+          title="No skills yet"
+          body="Install one from a git repository below, or write your own."
+          action={<EmptyAction onClick={() => setEditor({ mode: "new" })}>Create a skill</EmptyAction>}
+        />
+      ) : (
+        <Card style={{ overflow: "hidden" }}>
+          {skills.map((sk, i) => {
+            const on = editor?.mode === "open" && editor.name === sk.name;
+            return (
+              <div
+                key={`${sk.source}:${sk.name}`}
+                style={{ borderBottom: i === skills.length - 1 ? "none" : "1px solid var(--border-soft)" }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    padding: "12px 18px",
+                    background: on ? "var(--surface-alt)" : "transparent",
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setEditor(on ? null : { mode: "open", name: sk.name, source: sk.source })
+                    }
+                    title={sk.source === "workspace" ? "View this skill" : "View or edit this skill"}
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      textAlign: "left",
+                      border: "none",
+                      background: "transparent",
+                      padding: 0,
+                      color: "var(--text)",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <span className="mono" style={{ fontSize: "var(--fs-body)", fontWeight: 600 }}>
+                        {sk.name}
+                      </span>
+                      <Badge tone={sk.source === "personal" ? "accent" : "dim"}>{sk.source}</Badge>
+                    </div>
+                    <div
+                      style={{
+                        fontSize: "var(--fs-meta)",
+                        color: "var(--text-dim)",
+                        marginTop: 3,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {sk.description || "No description."}
+                    </div>
+                  </button>
+                  <SmallButton
+                    onClick={() =>
+                      setEditor(on ? null : { mode: "open", name: sk.name, source: sk.source })
+                    }
+                  >
+                    {on ? "Close" : sk.source === "workspace" ? "View" : "Open"}
+                  </SmallButton>
+                  {sk.removable && sk.source === "personal" && (
+                    <SmallButton
+                      danger
+                      onClick={() => {
+                        setRemoveError("");
+                        setRemoving(removing === sk.name ? null : sk.name);
+                      }}
+                    >
+                      Remove
+                    </SmallButton>
+                  )}
+                </div>
+                {removing === sk.name && (
+                  <div style={{ padding: "0 18px 12px" }}>
+                    <InlineConfirm
+                      message={`Remove the skill “${sk.name}” from ~/.pebbles/skills?`}
+                      confirmLabel="Remove"
+                      busyLabel="Removing…"
+                      busy={removeBusy}
+                      onConfirm={() => remove(sk.name)}
+                      onCancel={() => setRemoving(null)}
+                      error={removeError}
+                    />
+                  </div>
+                )}
+                {on && editor?.mode === "open" && (
+                  <div style={{ padding: "0 18px 16px" }}>
+                    <SkillEditor
+                      key={editor.name}
+                      existing={{ name: editor.name, source: editor.source }}
+                      onSaved={load}
+                      onClose={() => setEditor(null)}
+                    />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </Card>
+      )}
+
+      <SectionTitle>Install a skill</SectionTitle>
+      <Card style={{ padding: 18 }}>
+        <form onSubmit={install} style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: 240 }}>
+            <TextInput
+              value={spec}
+              onChange={setSpec}
+              placeholder="owner/repo or owner/repo/skill-name"
+              ariaLabel="Skill to install"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={!spec.trim() || installing}
+            style={{ ...accent, opacity: !spec.trim() || installing ? 0.6 : 1 }}
+          >
+            {installing ? "Installing…" : "Install"}
+          </button>
+        </form>
+        <Note>
+          Use the same names <code>npx skills add</code> takes — <code>owner/repo</code> installs every
+          skill in the repository, <code>owner/repo/skill-name</code> just one. A full git URL works too.
+          The repository is cloned as you, with your own git credentials.
+        </Note>
+        {installMsg && (
+          <div style={{ marginTop: 8 }}>
+            <FormMessage tone={installMsg.tone}>{installMsg.text}</FormMessage>
+          </div>
+        )}
+      </Card>
+
+      <SectionTitle>Create a custom skill</SectionTitle>
+      {editor?.mode === "new" ? (
+        <Card style={{ padding: 18 }}>
+          <SkillEditor
+            onSaved={(name) => {
+              load();
+              setEditor({ mode: "open", name, source: "personal" });
+            }}
+            onClose={() => setEditor(null)}
+          />
+        </Card>
+      ) : (
+        <Card style={{ padding: 18, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <span style={{ flex: 1, minWidth: 220, fontSize: "var(--fs-body)", color: "var(--text-mid)" }}>
+            Describe what the skill should do and Nkoyo drafts the SKILL.md — or write it yourself.
+          </span>
+          <button type="button" onClick={() => setEditor({ mode: "new" })} style={accent}>
+            New skill
+          </button>
+        </Card>
+      )}
+
       <SectionTitle>Tool grades</SectionTitle>
       <Card style={{ padding: 18, display: "grid", gap: 8 }}>
         <Legend tone="var(--ok)" label="Enabled" text="read-only tools run without asking" />
@@ -936,9 +1187,181 @@ function SkillsPane() {
   );
 }
 
+/**
+ * Create (no `existing`) or open a skill. Workspace skills are view-only.
+ * New skills start from a description → "Draft with Nkoyo", or a blank
+ * template via "Write it myself"; either way the SKILL.md stays editable.
+ */
+function SkillEditor({
+  existing,
+  onSaved,
+  onClose,
+}: {
+  existing?: { name: string; source: SkillInfo["source"] };
+  onSaved: (name: string) => void;
+  onClose: () => void;
+}) {
+  const readOnly = existing?.source === "workspace";
+  const [name, setName] = useState(existing?.name ?? "");
+  const [what, setWhat] = useState("");
+  const [content, setContent] = useState<string | null>(existing ? null : "");
+  /** New skills show the SKILL.md box once drafted or "Write it myself". */
+  const [writing, setWriting] = useState(!!existing);
+  const [busy, setBusy] = useState("");
+  const [msg, setMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+
+  const existingName = existing?.name;
+  useEffect(() => {
+    if (!existingName) return;
+    api
+      .get<{ name: string; source: string; content: string }>(
+        `/skills/${encodeURIComponent(existingName)}`,
+      )
+      .then((r) => setContent(r.content ?? ""))
+      .catch((e) => setMsg({ tone: "err", text: errorText(e) }));
+  }, [existingName]);
+
+  const nameOk = SKILL_NAME_RE.test(name);
+
+  const draft = () => {
+    if (!nameOk || !what.trim() || busy) return;
+    setBusy("Drafting…");
+    setMsg(null);
+    api
+      .post<{ content: string }>("/skills/draft", { name, description: what.trim() })
+      .then((r) => {
+        setContent(r.content ?? "");
+        setWriting(true);
+      })
+      .catch((e) => setMsg({ tone: "err", text: errorText(e) }))
+      .finally(() => setBusy(""));
+  };
+
+  const save = () => {
+    if (!nameOk || !content?.trim() || busy) return;
+    setBusy("Saving…");
+    setMsg(null);
+    api
+      .post<{ ok: boolean; name: string }>("/skills", { name, content })
+      .then((r) => {
+        setMsg({ tone: "ok", text: `Saved to ~/.pebbles/skills/${r.name ?? name}/SKILL.md.` });
+        onSaved(r.name ?? name);
+      })
+      .catch((e) => setMsg({ tone: "err", text: errorText(e) }))
+      .finally(() => setBusy(""));
+  };
+
+  return (
+    <div style={{ display: "grid", gap: 12 }}>
+      {!existing && (
+        <>
+          <Field label="Skill name" hint="Lowercase letters, digits and dashes — e.g. monthly-report.">
+            <TextInput value={name} onChange={(v) => setName(v.toLowerCase())} placeholder="monthly-report" autoFocus />
+          </Field>
+          {name && !nameOk && <FormMessage tone="err">That name won&apos;t work as a folder name.</FormMessage>}
+          <Field label="Describe what the skill should do">
+            <textarea
+              value={what}
+              onChange={(e) => setWhat(e.target.value)}
+              rows={4}
+              placeholder="When I ask for the monthly report, query sales.orders for last month, summarise revenue by region, and write the result to reports/<month>.md."
+              style={{ ...textarea, fontFamily: "inherit" }}
+            />
+          </Field>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={draft}
+              disabled={!nameOk || !what.trim() || !!busy}
+              style={{ ...accent, opacity: !nameOk || !what.trim() || busy ? 0.6 : 1 }}
+            >
+              {busy === "Drafting…" ? "Drafting…" : writing ? "Redraft with Nkoyo" : "Draft with Nkoyo"}
+            </button>
+            {!writing && (
+              <button
+                type="button"
+                onClick={() => {
+                  setContent((c) => (c ? c : SKILL_TEMPLATE(name, what.trim())));
+                  setWriting(true);
+                }}
+                style={ghost}
+              >
+                Write it myself
+              </button>
+            )}
+            <button type="button" onClick={onClose} style={ghost} disabled={!!busy}>
+              Cancel
+            </button>
+          </div>
+        </>
+      )}
+
+      {writing && (
+        <Field label={readOnly ? "SKILL.md (workspace — read-only)" : "SKILL.md"}>
+          {content === null ? (
+            msg ? null : <Loading />
+          ) : (
+            <textarea
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+              readOnly={readOnly}
+              rows={16}
+              spellCheck={false}
+              className="mono"
+              style={{
+                ...textarea,
+                fontSize: "var(--fs-meta)",
+                lineHeight: 1.6,
+                background: readOnly ? "var(--surface-alt)" : "var(--surface)",
+              }}
+            />
+          )}
+        </Field>
+      )}
+
+      {msg && <FormMessage tone={msg.tone}>{msg.text}</FormMessage>}
+
+      {writing && !readOnly && content !== null && (
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            type="button"
+            onClick={save}
+            disabled={!nameOk || !content.trim() || !!busy}
+            style={{ ...accent, opacity: !nameOk || !content.trim() || busy ? 0.6 : 1 }}
+          >
+            {busy === "Saving…" ? "Saving…" : "Save skill"}
+          </button>
+          {existing && (
+            <button type="button" onClick={onClose} style={ghost}>
+              Close
+            </button>
+          )}
+        </div>
+      )}
+      {readOnly && (
+        <Note>
+          Workspace skills are built into Pebbles. To change one, copy its text into a new skill of your own.
+        </Note>
+      )}
+    </div>
+  );
+}
+
+const textarea: CSSProperties = {
+  width: "100%",
+  padding: "10px 12px",
+  border: "1px solid var(--border)",
+  borderRadius: 12,
+  background: "var(--surface)",
+  color: "var(--text)",
+  fontSize: "var(--fs-base)",
+  outline: "none",
+  resize: "vertical",
+};
+
 function Legend({ tone, label, text }: { tone: string; label: string; text: string }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12.5 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: "var(--fs-body)" }}>
       <span style={{ width: 8, height: 8, borderRadius: "50%", background: tone }} />
       <span style={{ fontWeight: 600, width: 80 }}>{label}</span>
       <span style={{ color: "var(--text-dim)" }}>{text}</span>
@@ -1007,7 +1430,7 @@ function TokensPane() {
         <button type="button" onClick={mint} style={accent}>
           Mint join token
         </button>
-        <span style={{ fontSize: 12, color: "var(--text-dim)" }}>
+        <span style={{ fontSize: "var(--fs-meta)", color: "var(--text-dim)" }}>
           Single-use, 24 h expiry — an engine trades it for cluster membership.
         </span>
       </div>
@@ -1024,11 +1447,11 @@ function TokensPane() {
             marginBottom: 16,
           }}
         >
-          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--accent-tint-ink)" }}>
+          <div style={{ fontSize: "var(--fs-meta)", fontWeight: 600, color: "var(--accent-tint-ink)" }}>
             Copy this now — it is shown once and never stored in plaintext.
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
-            <code style={{ fontSize: 12.5, wordBreak: "break-all", flex: 1 }}>{minted.token}</code>
+            <code style={{ fontSize: "var(--fs-body)", wordBreak: "break-all", flex: 1 }}>{minted.token}</code>
             <button
               type="button"
               onClick={() => {
@@ -1042,7 +1465,7 @@ function TokensPane() {
               {copied ? "Copied" : "Copy"}
             </button>
           </div>
-          <div className="mono" style={{ fontSize: 11, color: "var(--accent-tint-ink)", marginTop: 6 }}>
+          <div className="mono" style={{ fontSize: "var(--fs-label)", color: "var(--accent-tint-ink)", marginTop: 6 }}>
             id {minted.id} · expires {when(minted.expires_at)}
           </div>
         </div>
@@ -1059,7 +1482,7 @@ function TokensPane() {
                 gap: 12,
                 padding: "12px 18px",
                 borderBottom: "1px solid var(--border-soft)",
-                fontSize: 12.5,
+                fontSize: "var(--fs-body)",
               }}
             >
               <span className="mono" style={{ minWidth: 90 }}>
@@ -1070,7 +1493,7 @@ function TokensPane() {
                 style={{
                   padding: "3px 9px",
                   borderRadius: 20,
-                  fontSize: 10.5,
+                  fontSize: "var(--fs-eyebrow)",
                   fontWeight: 600,
                   background: t.used ? "var(--track)" : "var(--ok-tint)",
                   color: t.used ? "var(--text-dim)" : "var(--ok-ink)",
@@ -1172,7 +1595,7 @@ function RuntimePane() {
                 gap: 12,
                 padding: "12px 18px",
                 borderBottom: "1px solid var(--border-soft)",
-                fontSize: 12.5,
+                fontSize: "var(--fs-body)",
               }}
             >
               <span className="mono" style={{ minWidth: 140 }}>
@@ -1281,7 +1704,7 @@ function ApprovalsPane() {
                 gap: 12,
                 padding: "12px 18px",
                 borderBottom: "1px solid var(--border-soft)",
-                fontSize: 12.5,
+                fontSize: "var(--fs-body)",
               }}
             >
               <span className="mono" style={{ minWidth: 140 }}>
@@ -1338,7 +1761,7 @@ function Card({ children, style }: { children: ReactNode; style?: CSSProperties 
 
 function SectionTitle({ children }: { children: ReactNode }) {
   return (
-    <h2 style={{ fontSize: 15, fontWeight: 600, margin: "22px 0 10px" }}>{children}</h2>
+    <h2 style={{ fontSize: "var(--fs-lg)", fontWeight: 600, margin: "22px 0 10px" }}>{children}</h2>
   );
 }
 
@@ -1360,11 +1783,11 @@ function FieldRow({
         gap: 16,
         padding: "12px 18px",
         borderBottom: last ? "none" : "1px solid var(--border-soft)",
-        fontSize: 13,
+        fontSize: "var(--fs-base)",
       }}
     >
       <span style={{ width: 180, color: "var(--text-muted)" }}>{label}</span>
-      <span className={mono ? "mono" : undefined} style={{ fontSize: mono ? 12.5 : 13 }}>
+      <span className={mono ? "mono" : undefined} style={{ fontSize: mono ? "var(--fs-body)" : "var(--fs-base)" }}>
         {value}
       </span>
     </div>
@@ -1376,7 +1799,7 @@ function Labelled({ label, children }: { label: string; children: ReactNode }) {
     <div>
       <div
         style={{
-          fontSize: 11,
+          fontSize: "var(--fs-label)",
           letterSpacing: "0.6px",
           textTransform: "uppercase",
           color: "var(--text-faint)",
@@ -1392,7 +1815,7 @@ function Labelled({ label, children }: { label: string; children: ReactNode }) {
 
 function Note({ children }: { children: ReactNode }) {
   return (
-    <p style={{ fontSize: 11.5, color: "var(--text-dim)", lineHeight: 1.7, padding: "10px 0 0" }}>
+    <p style={{ fontSize: "var(--fs-small)", color: "var(--text-dim)", lineHeight: 1.7, padding: "10px 0 0" }}>
       {children}
     </p>
   );
@@ -1405,7 +1828,7 @@ const input: CSSProperties = {
   borderRadius: 12,
   background: "var(--surface)",
   color: "var(--text)",
-  fontSize: 13,
+  fontSize: "var(--fs-base)",
   outline: "none",
 };
 
@@ -1414,7 +1837,7 @@ const ghost: CSSProperties = {
   color: "var(--text-mid)",
   border: "1px solid var(--border)",
   borderRadius: 11,
-  fontSize: 12.5,
+  fontSize: "var(--fs-body)",
   padding: "8px 14px",
 };
 
@@ -1424,6 +1847,6 @@ const accent: CSSProperties = {
   border: "none",
   borderRadius: 11,
   fontWeight: 600,
-  fontSize: 12.5,
+  fontSize: "var(--fs-body)",
   padding: "8px 16px",
 };

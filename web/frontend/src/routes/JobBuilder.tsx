@@ -205,12 +205,12 @@ export function JobBuilder() {
 
   return (
     <div style={{ maxWidth: 1080, margin: "0 auto", padding: "34px 40px 60px" }}>
-      <div className="mono" style={{ fontSize: 11.5, color: "var(--text-dim)", marginBottom: 8 }}>
+      <div className="mono" style={{ fontSize: "var(--fs-small)", color: "var(--text-dim)", marginBottom: 8 }}>
         <button type="button" onClick={() => nav("/jobs")} style={crumbBtn}>
           ‹ Jobs
         </button>
       </div>
-      <h1 style={{ fontSize: 25, fontWeight: 600, letterSpacing: "-0.5px", marginBottom: 22 }}>
+      <h1 style={{ fontSize: "var(--fs-h2-plus)", fontWeight: 600, letterSpacing: "-0.5px", marginBottom: 22 }}>
         {editing ? `Edit ${editing}` : "New job"}
       </h1>
 
@@ -259,7 +259,7 @@ export function JobBuilder() {
                 alignItems: "center",
                 gap: 8,
                 marginTop: 8,
-                fontSize: 12.5,
+                fontSize: "var(--fs-body)",
                 color: "var(--text-mid)",
               }}
             >
@@ -280,7 +280,7 @@ export function JobBuilder() {
             on={prefs.overlap}
             onToggle={() => setPrefs((p) => ({ ...p, overlap: !p.overlap }))}
           />
-          <p style={{ fontSize: 11, color: "var(--text-dim)" }}>
+          <p style={{ fontSize: "var(--fs-label)", color: "var(--text-dim)" }}>
             These two are remembered in this browser only — the workflow API has no catch-up or
             overlap fields yet, so they do not reach the scheduler.
           </p>
@@ -289,8 +289,8 @@ export function JobBuilder() {
 
       {/* ---- tasks -------------------------------------------------------- */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "24px 0 12px" }}>
-        <h2 style={{ fontSize: 16, fontWeight: 600 }}>Tasks</h2>
-        <span style={{ fontSize: 12, color: "var(--text-dim)" }}>
+        <h2 style={{ fontSize: "var(--fs-xl)", fontWeight: 600 }}>Tasks</h2>
+        <span style={{ fontSize: "var(--fs-meta)", color: "var(--text-dim)" }}>
           Each task runs on an engine as the job owner.
         </span>
         <div style={{ flex: 1 }} />
@@ -307,7 +307,7 @@ export function JobBuilder() {
         {tasks.map((task, i) => (
           <div key={i} style={card}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-              <span style={{ fontSize: 11, color: "var(--text-faint)", letterSpacing: "0.6px" }}>
+              <span style={{ fontSize: "var(--fs-label)", color: "var(--text-faint)", letterSpacing: "0.6px" }}>
                 STEP {i + 1}
               </span>
               <div style={{ flex: 1 }} />
@@ -481,7 +481,7 @@ export function JobBuilder() {
                   spellCheck={false}
                   placeholder={payloadPlaceholder(task)}
                   className="mono"
-                  style={{ ...input, resize: "vertical", lineHeight: 1.6, fontSize: 12.5 }}
+                  style={{ ...input, resize: "vertical", lineHeight: 1.6, fontSize: "var(--fs-body)" }}
                 />
               </Field>
             </div>
@@ -502,7 +502,7 @@ export function JobBuilder() {
             border: "none",
             borderRadius: 11,
             fontWeight: 600,
-            fontSize: 13,
+            fontSize: "var(--fs-base)",
             padding: "9px 20px",
           }}
         >
@@ -531,7 +531,7 @@ function Field({
     <div>
       <div
         style={{
-          fontSize: 11,
+          fontSize: "var(--fs-label)",
           letterSpacing: "0.6px",
           textTransform: "uppercase",
           color: "var(--text-faint)",
@@ -541,7 +541,7 @@ function Field({
         {label}
       </div>
       {children}
-      {hint && <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 6 }}>{hint}</div>}
+      {hint && <div style={{ fontSize: "var(--fs-label)", color: "var(--text-dim)", marginTop: 6 }}>{hint}</div>}
     </div>
   );
 }
@@ -560,7 +560,7 @@ const input: CSSProperties = {
   borderRadius: 12,
   background: "var(--surface)",
   color: "var(--text)",
-  fontSize: 13,
+  fontSize: "var(--fs-base)",
   outline: "none",
 };
 
@@ -569,7 +569,7 @@ const ghost: CSSProperties = {
   color: "var(--text-mid)",
   border: "1px solid var(--border)",
   borderRadius: 11,
-  fontSize: 12.5,
+  fontSize: "var(--fs-body)",
   padding: "8px 14px",
 };
 
@@ -580,7 +580,7 @@ const iconBtn: CSSProperties = {
   border: "1px solid var(--border)",
   background: "var(--surface)",
   color: "var(--text-faint)",
-  fontSize: 12,
+  fontSize: "var(--fs-meta)",
 };
 
 const crumbBtn: CSSProperties = {
@@ -588,6 +588,6 @@ const crumbBtn: CSSProperties = {
   background: "transparent",
   padding: 0,
   font: "inherit",
-  fontSize: 11.5,
+  fontSize: "var(--fs-small)",
   color: "var(--text-dim)",
 };

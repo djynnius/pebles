@@ -43,10 +43,10 @@ function xLabel(v: unknown): string {
   return out.length > 14 ? `${out.slice(0, 13)}…` : out;
 }
 
-const hint: CSSProperties = { fontSize: 11.5, color: "var(--text-dim)" };
+const hint: CSSProperties = { fontSize: "var(--fs-small)", color: "var(--text-dim)" };
 const axisText: CSSProperties = {
   fill: "var(--text-faint)",
-  fontSize: 10,
+  fontSize: "var(--fs-xs)",
   fontFamily: "'IBM Plex Mono', monospace",
 };
 
@@ -57,7 +57,7 @@ function Legend({ items }: { items: { label: string; color: string; note?: strin
         display: "flex",
         flexWrap: "wrap",
         gap: "4px 12px",
-        fontSize: 11,
+        fontSize: "var(--fs-label)",
         color: "var(--text-muted)",
       }}
     >
@@ -287,7 +287,7 @@ export function DonutChart({ rows, height }: { rows: Row[]; height: number }) {
           x={50}
           y={52}
           textAnchor="middle"
-          style={{ fill: "var(--text)", fontSize: 13, fontWeight: 600 }}
+          style={{ fill: "var(--text)", fontSize: "var(--fs-base)", fontWeight: 600 }}
         >
           {compact(total)}
         </text>
@@ -299,7 +299,7 @@ export function DonutChart({ rows, height }: { rows: Row[]; height: number }) {
         {slices.map((s, i) => (
           <div
             key={i}
-            style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, minWidth: 0 }}
+            style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "var(--fs-small)", minWidth: 0 }}
           >
             <span
               style={{ width: 8, height: 8, borderRadius: 2, background: s.color, flex: "0 0 8px" }}
@@ -317,7 +317,7 @@ export function DonutChart({ rows, height }: { rows: Row[]; height: number }) {
             >
               {s.label}
             </span>
-            <span className="mono" style={{ fontSize: 11, color: "var(--text-muted)" }}>
+            <span className="mono" style={{ fontSize: "var(--fs-label)", color: "var(--text-muted)" }}>
               {((s.value / total) * 100).toFixed(1)}%
             </span>
           </div>

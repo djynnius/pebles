@@ -139,6 +139,35 @@
      its two colours are fixed in both themes exactly as the image would be. */
   --avatar-bg: #f4ecdf;
   --avatar-ink: #33342c;
+  /* Overlays: the dim behind a dialog, and the lift under popovers. */
+  --scrim: rgba(20, 22, 16, 0.3);
+  --shadow-pop: 0 8px 26px rgba(20, 22, 16, 0.22);
+}
+
+/* Type scale. Components size text with these tokens rather than raw px so
+   the whole app can be re-scaled here in one place. Each step sits one notch
+   above the prototype's original size (noted in the comment) for legibility. */
+:root {
+  --fs-2xs: 10px; /* was 9–9.5 */
+  --fs-xs: 11px; /* was 10 */
+  --fs-eyebrow: 11.5px; /* was 10.5 — uppercase labels, pills */
+  --fs-label: 12px; /* was 11 */
+  --fs-small: 12.5px; /* was 11.5 — meta, mono paths */
+  --fs-meta: 13px; /* was 12 */
+  --fs-body: 13.5px; /* was 12.5 — controls, dense body */
+  --fs-base: 14px; /* was 13 — body copy */
+  --fs-lead: 14.5px; /* was 13.5 — nav, chat */
+  --fs-md: 15px; /* was 14 */
+  --fs-lg: 16px; /* was 15 — section titles */
+  --fs-xl: 17px; /* was 16 */
+  --fs-h3: 23px; /* was 22 */
+  --fs-h2: 25px; /* was 24 — page titles */
+  --fs-h2-plus: 26px; /* was 25 */
+  --fs-h1: 27px; /* was 26 */
+  --fs-display: 32px; /* was 30 */
+  --fs-hero: 36px; /* was 34 */
+  /* Glyph icons in the sidebar and rails. */
+  --icon-nav: 16.5px;
 }
 
 * {
@@ -160,7 +189,7 @@ html[data-pb-theme="dark"] body {
 body {
   color: var(--text);
   font-family: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
-  font-size: 14px;
+  font-size: var(--fs-base);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
@@ -218,4 +247,17 @@ textarea {
 }
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* The sidebar's nav list scrolls on short viewports; a thin thumb that reads
+   on the dark rail rather than the paper-toned default. */
+.pb-rail-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--deep-border) transparent;
+}
+.pb-rail-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.pb-rail-scroll::-webkit-scrollbar-thumb {
+  background: var(--deep-border);
 }

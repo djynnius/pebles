@@ -107,7 +107,8 @@ pub fn router(role: Role, state: AppState) -> Router {
             .route("/workflows/{name}/runs/{run_id}", get(workflow_run_detail))
             .route("/nkoyo/config", get(nkoyo_config).post(nkoyo_config_save))
             .route("/nkoyo/rescan", post(nkoyo_rescan))
-            .route("/nkoyo/chat", post(nkoyo_chat)),
+            .route("/nkoyo/chat", post(nkoyo_chat))
+            .route("/nkoyo/skill-draft", post(nkoyo_skill_draft)),
         Role::Engine => health_routes(role),
     }
     .with_state(state)
@@ -1285,24 +1286,96 @@ async fn nkoyo_chat(
     };
 
     let asker_name = body.username.clone();
+    let asker_user = user.clone();
+    let config_dir = state.config_dir.clone();
     let run_op = |op: Value| {
         let broker = broker.clone();
         let asker = asker_name.clone();
+        let asker_user = asker_user.clone();
+        let config_dir = config_dir.clone();
         async move {
-            // Catalog listing is pebblesd-level metadata, not a kernel op.
-            if op["op"] == "list_catalogs" {
-                // Only what THIS user can open (REQ-45: Nkoyo sees no more
-                // than its user).
-                let who = asker.clone();
-                let names = tokio::task::spawn_blocking(move || catalog::accessible_catalogs(&who))
+            let exec = |op: Value| {
+                let broker = broker.clone();
+                async move {
+                    match (broker, session) {
+                        (Some(broker), Some(sid)) => {
+                            broker.exec(sid, op).await.map_err(|e| e.to_string())
+                        }
+                        _ => Err("no engine session available for tools".to_string()),
+                    }
+                }
+            };
+            match op["op"].as_str().unwrap_or_default() {
+                // Catalog listing is pebblesd-level metadata, not a kernel op.
+                "list_catalogs" => {
+                    // Only what THIS user can open (REQ-45: Nkoyo sees no more
+                    // than its user).
+                    let who = asker.clone();
+                    let names =
+                        tokio::task::spawn_blocking(move || catalog::accessible_catalogs(&who))
+                            .await
+                            .map_err(|e| e.to_string())?
+                            .map_err(|e| e.to_string())?;
+                    Ok(serde_json::json!({"ok": true, "catalogs": names}))
+                }
+                // Owned by the asker — exactly what the Catalog screen does.
+                "create_catalog" => {
+                    let name = op["name"].as_str().unwrap_or_default().to_string();
+                    let info = tokio::task::spawn_blocking(move || {
+                        catalog::create_catalog(&name, &asker_user)
+                    })
                     .await
                     .map_err(|e| e.to_string())?
                     .map_err(|e| e.to_string())?;
-                return Ok(serde_json::json!({"ok": true, "catalogs": names}));
-            }
-            match (broker, session) {
-                (Some(broker), Some(sid)) => broker.exec(sid, op).await.map_err(|e| e.to_string()),
-                _ => Err("no engine session available for tools".to_string()),
+                    tracing::info!(catalog = %info.name, owner = %info.owner, "catalog created by Nkoyo");
+                    Ok(serde_json::json!({"ok": true, "catalog": info.name}))
+                }
+                // Written through the user's session (their uid), never over
+                // an existing notebook.
+                "create_notebook" => {
+                    let name = op["name"].as_str().unwrap_or_default();
+                    let existing = exec(serde_json::json!({"op": "list", "path": "notebooks"}))
+                        .await
+                        .unwrap_or_default();
+                    let taken = existing["entries"]
+                        .as_array()
+                        .is_some_and(|e| e.iter().any(|n| n == &format!("{name}.json")));
+                    if taken {
+                        return Err(format!("a notebook named {name:?} already exists"));
+                    }
+                    let mut written = exec(serde_json::json!({
+                        "op": "write", "path": op["path"], "content": op["content"],
+                    }))
+                    .await?;
+                    written["opens_at"] = format!("/notebooks/{name}").into();
+                    Ok(written)
+                }
+                // Jobs run AS their owner: always the asker, never overwritten.
+                "create_job" => {
+                    let wf: crate::jobs::Workflow = serde_json::from_value(serde_json::json!({
+                        "name": op["name"],
+                        "username": asker,
+                        "schedule": op["schedule"],
+                        "tasks": op["tasks"],
+                    }))
+                    .map_err(|e| format!("invalid job: {e}"))?;
+                    let name = wf.name.clone();
+                    tokio::task::spawn_blocking(move || {
+                        if crate::jobs::get(&config_dir, &wf.name).is_ok() {
+                            return Err(format!("a job named {:?} already exists", wf.name));
+                        }
+                        crate::jobs::save(&config_dir, &wf).map_err(|e| e.to_string())?;
+                        if let Err(err) = crate::jobs::register(&config_dir, &wf.name) {
+                            tracing::warn!(workflow = %wf.name, %err, "DAG registration failed");
+                        }
+                        Ok(())
+                    })
+                    .await
+                    .map_err(|e| e.to_string())??;
+                    tracing::info!(workflow = %name, owner = %asker, "job created by Nkoyo");
+                    Ok(serde_json::json!({"ok": true, "job": name, "opens_at": "/jobs"}))
+                }
+                _ => exec(op).await,
             }
         }
     };
@@ -1331,6 +1404,35 @@ async fn nkoyo_chat(
             StatusCode::SERVICE_UNAVAILABLE,
             "no Ollama endpoints configured — add one under Settings → Nkoyo \
              (models run locally; nothing leaves your hosts)",
+        )),
+        Err(msg) => Err(error(StatusCode::BAD_GATEWAY, msg)),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct SkillDraftBody {
+    username: String,
+    name: String,
+    description: String,
+}
+
+/// Settings → Agent skills: draft a SKILL.md from a description. No tools and
+/// no session — the model only sees what the user typed.
+async fn nkoyo_skill_draft(
+    State(state): State<AppState>,
+    Json(body): Json<SkillDraftBody>,
+) -> ApiResult<Value> {
+    let cfg = crate::nkoyo::load(&state.config_dir);
+    tracing::info!(user = %body.username, skill = %body.name, "skill draft requested");
+    match crate::nkoyo::draft_skill(&state.cluster.http, &cfg, &body.name, &body.description).await
+    {
+        Ok(content) => Ok(Json(serde_json::json!({
+            "content": content,
+            "model": cfg.coder_model,
+        }))),
+        Err(msg) if msg.starts_with("no Ollama endpoints") => Err(error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no Ollama endpoints configured — add one under Settings → Nkoyo",
         )),
         Err(msg) => Err(error(StatusCode::BAD_GATEWAY, msg)),
     }

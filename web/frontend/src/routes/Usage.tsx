@@ -70,7 +70,7 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
         display: "flex",
         padding: "12px 18px",
         borderBottom: "1px solid var(--border-soft)",
-        fontSize: 13,
+        fontSize: "var(--fs-base)",
       }}
     >
       <span style={{ width: 200, color: "var(--text-muted)" }}>{label}</span>
@@ -83,7 +83,7 @@ function Bar({ label, used, total }: { label: string; used: number; total: numbe
   const pct = total ? Math.min(100, (100 * used) / total) : 0;
   return (
     <div style={{ padding: "12px 18px", borderBottom: "1px solid var(--border-soft)" }}>
-      <div style={{ display: "flex", fontSize: 13, marginBottom: 6 }}>
+      <div style={{ display: "flex", fontSize: "var(--fs-base)", marginBottom: 6 }}>
         <span style={{ width: 200, color: "var(--text-muted)" }}>{label}</span>
         <span>
           {gb(used)} GB used of {gb(total)} GB

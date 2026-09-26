@@ -108,7 +108,7 @@ export function EngineConfig({ user }: { user: User }) {
 
   return (
     <div style={{ maxWidth: 1080, margin: "0 auto", padding: "34px 40px 60px" }}>
-      <div className="mono" style={{ fontSize: 11.5, color: "var(--text-dim)", marginBottom: 8 }}>
+      <div className="mono" style={{ fontSize: "var(--fs-small)", color: "var(--text-dim)", marginBottom: 8 }}>
         <button type="button" onClick={() => nav("/engines")} style={crumbBtn}>
           ‹ Engines
         </button>
@@ -141,12 +141,12 @@ export function EngineConfig({ user }: { user: User }) {
         <>
           {/* A stale ?engine= used to silently show a different engine. */}
           {wanted && wanted !== engine.name && (
-            <p style={{ fontSize: 12, color: "var(--warn)", marginBottom: 10 }}>
+            <p style={{ fontSize: "var(--fs-meta)", color: "var(--warn)", marginBottom: 10 }}>
               “{wanted}” is not registered — showing {engine.name} instead.
             </p>
           )}
           <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
-            <h1 style={{ fontSize: 25, fontWeight: 600, letterSpacing: "-0.5px" }}>{engine.name}</h1>
+            <h1 style={{ fontSize: "var(--fs-h2-plus)", fontWeight: 600, letterSpacing: "-0.5px" }}>{engine.name}</h1>
             {engines && engines.length > 1 && (
               <select
                 value={engine.name}
@@ -158,7 +158,7 @@ export function EngineConfig({ user }: { user: User }) {
                   border: "1px solid var(--border)",
                   background: "var(--surface-alt)",
                   color: "var(--accent-deep)",
-                  fontSize: 11.5,
+                  fontSize: "var(--fs-small)",
                 }}
               >
                 {engines.map((e) => (
@@ -187,7 +187,7 @@ export function EngineConfig({ user }: { user: User }) {
             />
           </div>
 
-          <h2 style={{ fontSize: 16, fontWeight: 600, margin: "24px 0 12px" }}>Access control</h2>
+          <h2 style={{ fontSize: "var(--fs-xl)", fontWeight: 600, margin: "24px 0 12px" }}>Access control</h2>
           <div
             style={{
               ...card,
@@ -198,7 +198,7 @@ export function EngineConfig({ user }: { user: User }) {
               flexWrap: "wrap",
             }}
           >
-            <span style={{ width: 180, fontSize: 13, color: "var(--text-muted)" }}>
+            <span style={{ width: 180, fontSize: "var(--fs-base)", color: "var(--text-muted)" }}>
               Who can open sessions
             </span>
             <EngineAccess
@@ -211,7 +211,7 @@ export function EngineConfig({ user }: { user: User }) {
             <p
               style={{
                 flexBasis: "100%",
-                fontSize: 11.5,
+                fontSize: "var(--fs-small)",
                 color: "var(--text-dim)",
                 lineHeight: 1.7,
               }}
@@ -222,7 +222,7 @@ export function EngineConfig({ user }: { user: User }) {
             </p>
           </div>
 
-          <h2 style={{ fontSize: 16, fontWeight: 600, margin: "24px 0 12px" }}>Session policy</h2>
+          <h2 style={{ fontSize: "var(--fs-xl)", fontWeight: 600, margin: "24px 0 12px" }}>Session policy</h2>
           <div style={{ ...card, padding: 18, display: "grid", gap: 12 }}>
             <Switch
               label="Accept new sessions"
@@ -234,7 +234,7 @@ export function EngineConfig({ user }: { user: User }) {
               on={prefs.dedicated}
               onToggle={() => toggle("dedicated")}
             />
-            <p style={{ fontSize: 11.5, color: "var(--text-dim)", lineHeight: 1.7 }}>
+            <p style={{ fontSize: "var(--fs-small)", color: "var(--text-dim)", lineHeight: 1.7 }}>
               These two are remembered in this browser only. Real per-engine limits are set by the
               engine container's environment —{" "}
               <code>PEBBLES_ENGINE_MEMORY_BYTES</code>, <code>PEBBLES_SESSION_MEMORY_BYTES</code> —
@@ -245,7 +245,7 @@ export function EngineConfig({ user }: { user: User }) {
 
           {admin && (
           <>
-          <h2 style={{ fontSize: 16, fontWeight: 600, margin: "24px 0 12px" }}>Danger zone</h2>
+          <h2 style={{ fontSize: "var(--fs-xl)", fontWeight: 600, margin: "24px 0 12px" }}>Danger zone</h2>
           <div
             style={{
               ...card,
@@ -257,7 +257,7 @@ export function EngineConfig({ user }: { user: User }) {
               flexWrap: "wrap",
             }}
           >
-            <div style={{ flex: 1, minWidth: 240, fontSize: 12.5, color: "var(--text-mid)" }}>
+            <div style={{ flex: 1, minWidth: 240, fontSize: "var(--fs-body)", color: "var(--text-mid)" }}>
               Deregistering invalidates this engine's credentials. It can rejoin later with a fresh
               join token.
             </div>
@@ -274,7 +274,7 @@ export function EngineConfig({ user }: { user: User }) {
                 border: "1px solid var(--err)",
                 borderRadius: 11,
                 fontWeight: 600,
-                fontSize: 12.5,
+                fontSize: "var(--fs-body)",
                 padding: "8px 16px",
               }}
             >
@@ -324,14 +324,14 @@ function Row({
         gap: 16,
         padding: "12px 18px",
         borderBottom: last ? "none" : "1px solid var(--border-soft)",
-        fontSize: 13,
+        fontSize: "var(--fs-base)",
       }}
     >
       <span style={{ width: 180, color: "var(--text-muted)" }}>{label}</span>
       <span
         className={mono ? "mono" : undefined}
         title={title}
-        style={{ fontSize: mono ? 12.5 : 13, color }}
+        style={{ fontSize: mono ? "var(--fs-body)" : "var(--fs-base)", color }}
       >
         {value}
       </span>
@@ -350,6 +350,6 @@ const crumbBtn: CSSProperties = {
   background: "transparent",
   padding: 0,
   font: "inherit",
-  fontSize: 11.5,
+  fontSize: "var(--fs-small)",
   color: "var(--text-dim)",
 };

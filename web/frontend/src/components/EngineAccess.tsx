@@ -45,7 +45,7 @@ export function EngineAccess({
 
   if (!admin) {
     return (
-      <span className="mono" style={{ fontSize: 12.5 }}>
+      <span className="mono" style={{ fontSize: "var(--fs-body)" }}>
         {accessLabel(current)}
       </span>
     );

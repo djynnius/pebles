@@ -64,6 +64,7 @@ class FakeDaemon:
             return {"id": None, "ok": True, "uid": 70000}
         if op == "sql":
             sql = payload["sql"]
+            self.__dict__.setdefault("sql_log", []).append(sql)
             if sql.startswith("SUMMARIZE"):
                 return {
                     "id": None,
@@ -112,11 +113,11 @@ class FakeDaemon:
                     ],
                 }
             if "information_schema.schemata" in sql:
-                return {
-                    "id": None,
-                    "ok": True,
-                    "rows": [{"schema_name": "bronze"}, {"schema_name": "main"}],
-                }
+                rows = [{"schema_name": "bronze"}, {"schema_name": "main"}]
+                if "schema_name = '" in sql:  # an existence probe
+                    wanted = sql.split("schema_name = '")[1].split("'")[0]
+                    rows = [r for r in rows if r["schema_name"] == wanted]
+                return {"id": None, "ok": True, "rows": rows}
             if "information_schema.tables" in sql:
                 return {
                     "id": None,
@@ -158,7 +159,10 @@ class FakeDaemon:
                 return {"id": None, "ok": False, "error": "No such file"}
             return {"id": None, "ok": True, "content": content}
         if op == "shell":
-            return {"id": None, "ok": True, "stdout": "", "stderr": "", "exit_code": 0}
+            self.__dict__.setdefault("shell_log", []).append(payload["command"])
+            return getattr(
+                self, "shell_reply", {"id": None, "ok": True, "stdout": "", "stderr": "", "exit_code": 0}
+            )
         if op == "git":
             sub = payload["args"][0]
             if sub == "status":
@@ -199,11 +203,9 @@ class FakeDaemon:
                 self.files.pop(payload.get("path", ""), None)
             return {"id": None, "ok": True}
         if op == "list":
-            entries = sorted(
-                p.split("/", 1)[1]
-                for p in self.files
-                if p.startswith(payload["path"] + "/")
-            )
+            # direct children only, like the kernel's read_dir
+            prefix = payload["path"] + "/"
+            entries = sorted({p[len(prefix):].split("/")[0] for p in self.files if p.startswith(prefix)})
             return {"id": None, "ok": True, "entries": entries}
         raise AssertionError(f"unexpected op {op}")
 
@@ -1271,3 +1273,118 @@ def test_downloads_are_byte_exact_for_binary_and_large_files():
            content_type="multipart/form-data")
     got = c.get("/api/files/download?path=data.bin")
     assert got.status_code == 200 and got.data == blob
+
+
+# ---- batch 6: catalog context actions, new file, skills ---------------------
+
+
+def _owned_catalog(d):
+    d.catalogs.append({"name": "claims", "owner": "maya", "database": "ducklake_claims"})
+    return signed_in_as("maya", d)
+
+
+def test_create_schema_quotes_and_refuses_duplicates():
+    d = FakeDaemon()
+    c = _owned_catalog(d)
+    r = c.post("/api/catalogs/claims/schemas", json={"name": "silver"})
+    assert r.status_code == 200 and r.get_json()["schema"] == "silver"
+    assert 'CREATE SCHEMA "claims"."silver"' in d.sql_log
+    # the fake reports bronze/main as existing
+    assert c.post("/api/catalogs/claims/schemas", json={"name": "bronze"}).status_code == 409
+    assert c.post("/api/catalogs/claims/schemas", json={"name": "x; DROP"}).status_code == 422
+
+
+def test_schema_rename_is_one_copy_then_drop_transaction():
+    d = FakeDaemon()
+    c = _owned_catalog(d)
+    r = c.post("/api/catalogs/claims/schemas/bronze/rename", json={"to": "raw"})
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()["tables_moved"] == 1
+    script = d.sql_log[-1]
+    assert script.startswith("BEGIN; CREATE SCHEMA") and script.endswith("COMMIT")
+    assert 'CREATE TABLE "claims"."raw"."claims" AS SELECT * FROM "claims"."bronze"."claims"' in script
+    assert 'DROP SCHEMA "claims"."bronze"' in script
+    assert c.post("/api/catalogs/claims/schemas/main/rename", json={"to": "x"}).status_code == 422
+    assert c.post("/api/catalogs/claims/schemas/bronze/rename", json={"to": "main"}).status_code == 409
+
+
+def test_table_rename_and_load_from_file():
+    d = FakeDaemon()
+    c = _owned_catalog(d)
+    r = c.post("/api/catalogs/claims/tables/bronze/claims/rename", json={"to": "claims_v2"})
+    assert r.status_code == 200
+    assert 'ALTER TABLE "claims"."bronze"."claims" RENAME TO "claims_v2"' in d.sql_log
+    r = c.post(
+        "/api/catalogs/claims/schemas/bronze/tables",
+        json={"path": "uploads/Member Roster.csv"},
+    )
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()["table"] == "member_roster"
+    assert any("read_csv_auto('uploads/Member Roster.csv')" in q for q in d.sql_log)
+    bad = c.post("/api/catalogs/claims/schemas/bronze/tables", json={"path": "notes.docx"})
+    assert bad.status_code == 422
+
+
+def test_catalog_actions_respect_access():
+    d = FakeDaemon()
+    d.catalogs.append({"name": "claims", "owner": "maya", "database": "ducklake_claims"})
+    c = signed_in_as("tomas", d)
+    assert c.post("/api/catalogs/claims/schemas", json={"name": "s"}).status_code == 403
+
+
+def test_new_file_creates_empty_and_never_overwrites():
+    d = FakeDaemon()
+    c = signed_in_as("maya", d)
+    r = c.post("/api/files/new", json={"dir": "notes", "name": "todo.md"})
+    assert r.status_code == 200 and d.files["notes/todo.md"] == ""
+    assert c.post("/api/files/new", json={"dir": "notes", "name": "todo.md"}).status_code == 409
+    assert c.post("/api/files/new", json={"dir": "", "name": "../x"}).status_code == 422
+    assert c.post("/api/files/new", json={"dir": "", "name": ".pgpass"}).status_code == 422
+
+
+def test_skills_list_save_view_and_remove():
+    d = FakeDaemon()
+    d.files["/opt/pebbles/skills/pebbles-guide/SKILL.md"] = (
+        "---\nname: pebbles-guide\ndescription: How Pebbles works.\n---\n# Guide"
+    )
+    c = signed_in_as("maya", d)
+    assert c.post("/api/skills", json={"name": "hedis", "content": "# HEDIS rules"}).status_code == 200
+    skills = {s["name"]: s for s in c.get("/api/skills").get_json()}
+    assert skills["hedis"]["source"] == "personal" and skills["hedis"]["removable"]
+    assert skills["hedis"]["description"] == "HEDIS rules"
+    assert skills["pebbles-guide"]["description"] == "How Pebbles works."
+    assert not skills["pebbles-guide"]["removable"]
+    assert c.get("/api/skills/hedis").get_json()["content"] == "# HEDIS rules"
+    assert c.delete("/api/skills/pebbles-guide").status_code == 403
+    assert c.delete("/api/skills/hedis").status_code == 200
+    assert c.post("/api/skills", json={"name": "Bad Name", "content": "x"}).status_code == 422
+
+
+def test_skill_install_resolves_names_and_reports_what_landed():
+    d = FakeDaemon()
+    c = signed_in_as("maya", d)
+    d.shell_reply = {"id": None, "ok": True, "stdout": "INSTALLED pdf\n", "stderr": ""}
+    r = c.post("/api/skills/install", json={"spec": "anthropics/skills/pdf"})
+    assert r.status_code == 200 and r.get_json()["installed"] == ["pdf"]
+    script = d.shell_log[-1]
+    assert "git clone -q --depth 1 https://github.com/anthropics/skills.git" in script
+    assert "[ -n pdf ]" in script
+    # nothing matched
+    d.shell_reply = {"id": None, "ok": True, "stdout": "", "stderr": ""}
+    assert c.post("/api/skills/install", json={"spec": "o/r"}).status_code == 404
+    # clone failure surfaces git's last line
+    d.shell_reply = {"id": None, "ok": False, "stdout": "", "stderr": "fatal: repository not found"}
+    r = c.post("/api/skills/install", json={"spec": "o/missing"})
+    assert r.status_code == 502 and "repository not found" in r.get_json()["error"]
+    # shell metacharacters never reach the script
+    for bad in ("o/r; rm -rf ~", "$(id)/x", "https://h/x y"):
+        assert c.post("/api/skills/install", json={"spec": bad}).status_code == 422
+
+
+def test_skill_draft_passes_through_to_nkoyo():
+    d = FakeDaemon()
+    d.nkoyo_skill_draft = lambda u, n, desc: {"content": f"---\nname: {n}\n---\n{desc}"}
+    c = signed_in_as("maya", d)
+    r = c.post("/api/skills/draft", json={"name": "hedis", "description": "HEDIS measures"})
+    assert r.status_code == 200 and "HEDIS measures" in r.get_json()["content"]
+    assert c.post("/api/skills/draft", json={"name": "hedis", "description": ""}).status_code == 422

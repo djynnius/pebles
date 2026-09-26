@@ -125,7 +125,7 @@ Priorities: **P0** = MVP, cannot ship without · **P1** = v1.0 release · **P2**
 | ID | Requirement | Priority |
 |---|---|---|
 | REQ-24 | Lake storage is **DuckLake**: plain files with the catalog in Postgres on the main. Tables carry snapshots with **time travel**. | P0 |
-| REQ-25 | Create Catalog via form **or** SQL (`CREATE CATALOG` / `CREATE SCHEMA` / `GRANT`); the form shows the equivalent SQL live. Both paths are the same operation. | P0 |
+| REQ-25 | Create Catalog via form **or** SQL (`CREATE CATALOG` / `CREATE SCHEMA` / `GRANT`); the form shows the equivalent SQL live. Both paths are the same operation. The Catalog tree has right-click actions: new schema, upload a file as a table, rename schema/table (schema rename copies tables — time-travel history does not carry over; catalog rename is deferred). | P0 |
 | REQ-26 | Catalog storage roots must be reachable from every engine; engine registration verifies reachability and fails loudly if the lake path is absent. Multi-host storage guidance (NFS / object storage) documented; design pending (§9). | P0 (verify) / P1 (multi-host design) |
 | REQ-27 | UI vocabulary: **Lake**, **Engine**, `catalog / schema / table`. "DuckDB" appears only in detail views. Usage screens show host resource use, never "credits". | P0 |
 
@@ -164,8 +164,8 @@ Priorities: **P0** = MVP, cannot ship without · **P1** = v1.0 release · **P2**
 | ID | Requirement | Priority |
 |---|---|---|
 | REQ-43 | Nkoyo is an **agent harness** on local models: Ollama endpoints auto-detected across the fleet, rescan + manual add; separate models for planning, code/SQL, embeddings; max-steps cap. **No data leaves the hosts.** | P1 |
-| REQ-44 | Folder-based skills: `~/.pebbles/skills` (personal), `/opt/pebbles/skills` (workspace); a skill = `SKILL.md` + scripts, hot-loaded next turn; org skills can be enforced. | P1 |
-| REQ-45 | Tool permissions graded always-on / ask-first / blocked; Nkoyo can never exceed the invoking user's own grants. Git tools default to ask-first. | P1 |
+| REQ-44 | Folder-based skills: `~/.pebbles/skills` (personal), `/opt/pebbles/skills` (workspace); a skill = `SKILL.md` + scripts, hot-loaded next turn; org skills can be enforced. Users install skills **by name** (`owner/repo[/skill]`, as `npx skills add` names them, or a git URL) — fetched with git as the user, no package code executed, mirror-able for air-gapped sites — or describe one and have Nkoyo draft it for review. A built-in `pebbles-guide` skill teaches Nkoyo the product so it answers how-to questions. Built-in skills are inlined in Nkoyo's prompt; installed skills are indexed (name + description) and read on demand. | P1 |
+| REQ-45 | Tool permissions graded always-on / ask-first / blocked; Nkoyo can never exceed the invoking user's own grants. Git tools default to ask-first. Ask-first action tools cover creating catalogs, schemas, notebooks and jobs (owned by and run as the user; never overwriting). | P1 |
 | REQ-46 | **Auto ETL**: drop a raw dataset → profile → propose star schema → propose cleaning steps → **user approves** → load. Nothing runs before Approve & run; low-confidence steps arrive unticked with confidence shown; result saveable as a repeatable pipeline and committable to a repo. | P1 |
 | REQ-47 | Nkoyo placement: tucked away everywhere except pinned open on the notebook route above 1280 px. | P1 |
 

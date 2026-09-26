@@ -13,6 +13,7 @@ import functools
 import json
 import os
 import re
+import shlex
 import time
 
 from flask import Response, jsonify, request, session
@@ -53,6 +54,17 @@ GIT_ACTIONS = {
 CLOUD_MODEL = re.compile(r"(:cloud$|-cloud$|:cloud\b)")
 #: home files Pebbles provisions itself (the catalog TCP credential, M2.5b)
 MANAGED_FILES = {".pgpass"}
+#: agent skill folder names (~/.pebbles/skills/<name>/SKILL.md)
+SKILL_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
+#: `owner/repo` or `owner/repo/skill` — the names `npx skills add` takes
+SKILL_SPEC = re.compile(r"^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(?:/([A-Za-z0-9_.-]+))?$")
+#: or a plain git URL
+SKILL_URL = re.compile(r"^(https://[A-Za-z0-9.-]+(?::\d+)?/[A-Za-z0-9._/~-]+|git@[A-Za-z0-9.-]+:[A-Za-z0-9._/~-]+)$")
+#: where `owner/repo` resolves; point at an internal mirror when air-gapped
+SKILLS_GIT_BASE = os.environ.get("PEBBLES_SKILLS_GIT_BASE", "https://github.com").rstrip("/")
+#: skills baked into the image (read-only for everyone)
+WORKSPACE_SKILLS = "/opt/pebbles/skills"
+PERSONAL_SKILLS = ".pebbles/skills"
 
 
 def _managed_path(path: str) -> bool:
@@ -91,6 +103,27 @@ def _parse_status(porcelain: str) -> dict:
                 {"path": line[2:], "staged": False, "unstaged": True, "untracked": True}
             )
     return info
+
+
+def _skill_description(text: str) -> str:
+    """The front-matter `description:`, else the first prose line of SKILL.md."""
+    lines = text.splitlines()
+    if lines and lines[0].strip() == "---":
+        for line in lines[1:]:
+            if line.strip() == "---":
+                break
+            if line.lower().startswith("description:"):
+                return line.split(":", 1)[1].strip().strip("\"'")
+    for line in lines:
+        clean = line.strip().lstrip("#").strip()
+        if clean and clean != "---" and ":" not in clean[:20]:
+            return clean[:200]
+    return ""
+
+
+def _q(ident: str) -> str:
+    """Quote a validated SQL identifier."""
+    return '"' + ident.replace('"', '""') + '"'
 
 
 def _sse(event: str, data: dict) -> str:
@@ -596,6 +629,119 @@ def register_api(app, client: PebblesdClient) -> None:
             }
         )
 
+    def _schema_exists(username: str, cat: str, schema: str) -> bool:
+        return bool(_rows(
+            username,
+            "SELECT 1 FROM information_schema.schemata "
+            f"WHERE catalog_name = '{cat}' AND schema_name = '{schema}'",
+            cat,
+        ))
+
+    def _schema_tables(username: str, cat: str, schema: str) -> list:
+        return [
+            r.get("table_name")
+            for r in _rows(
+                username,
+                "SELECT table_name FROM information_schema.tables "
+                f"WHERE table_catalog = '{cat}' AND table_schema = '{schema}' "
+                "ORDER BY table_name",
+                cat,
+            )
+            if r.get("table_name")
+        ]
+
+    def _catalog_write(user: dict, cat: str, *idents: str):
+        """Shared guard for the catalog-mutation routes: valid identifiers and
+        an openable catalog. Postgres grants decide the rest, as the user."""
+        if not all(IDENT.match(i or "") for i in (cat, *idents)):
+            return jsonify({"error": "names must be letters, digits and _ (not starting with a digit)"}), 422
+        return _catalog_denied(user, cat)
+
+    def _sql_result(got: dict, ok_body: dict):
+        if not got.get("ok"):
+            return jsonify({"error": got.get("error", "the statement failed")}), 422
+        return jsonify({"ok": True, **ok_body})
+
+    @app.post("/api/catalogs/<cat>/schemas")
+    @authed
+    def api_schema_create(user, cat):  # pyright: ignore[reportUnusedFunction]
+        name = ((request.get_json(silent=True) or {}).get("name") or "").strip()
+        denied = _catalog_write(user, cat, name)
+        if denied:
+            return denied
+        if _schema_exists(user["username"], cat, name):
+            return jsonify({"error": f"{cat}.{name} already exists"}), 409
+        got = _run_sql(user["username"], f"CREATE SCHEMA {_q(cat)}.{_q(name)}", cat)
+        return _sql_result(got, {"catalog": cat, "schema": name})
+
+    @app.post("/api/catalogs/<cat>/schemas/<schema>/rename")
+    @authed
+    def api_schema_rename(user, cat, schema):  # pyright: ignore[reportUnusedFunction]
+        """DuckDB 1.5 has neither ALTER SCHEMA … RENAME nor SET SCHEMA, so a
+        rename is copy-then-drop in ONE transaction (all or nothing). The
+        copies are new tables: their time-travel history does not come along —
+        the UI says so before asking."""
+        to = ((request.get_json(silent=True) or {}).get("to") or "").strip()
+        denied = _catalog_write(user, cat, schema, to)
+        if denied:
+            return denied
+        if schema == "main":
+            return jsonify({"error": "the main schema can't be renamed"}), 422
+        username = user["username"]
+        if not _schema_exists(username, cat, schema):
+            return jsonify({"error": f"no schema {cat}.{schema}"}), 404
+        if _schema_exists(username, cat, to):
+            return jsonify({"error": f"{cat}.{to} already exists"}), 409
+        tables = _schema_tables(username, cat, schema)
+        src, dst = f"{_q(cat)}.{_q(schema)}", f"{_q(cat)}.{_q(to)}"
+        stmts = ["BEGIN", f"CREATE SCHEMA {dst}"]
+        stmts += [f"CREATE TABLE {dst}.{_q(t)} AS SELECT * FROM {src}.{_q(t)}" for t in tables]
+        stmts += [f"DROP TABLE {src}.{_q(t)}" for t in tables]
+        stmts += [f"DROP SCHEMA {src}", "COMMIT"]
+        got = _run_sql(username, "; ".join(stmts), cat)
+        return _sql_result(got, {"schema": to, "tables_moved": len(tables)})
+
+    @app.post("/api/catalogs/<cat>/tables/<schema>/<table>/rename")
+    @authed
+    def api_table_rename(user, cat, schema, table):  # pyright: ignore[reportUnusedFunction]
+        to = ((request.get_json(silent=True) or {}).get("to") or "").strip()
+        denied = _catalog_write(user, cat, schema, table, to)
+        if denied:
+            return denied
+        if to in _schema_tables(user["username"], cat, schema):
+            return jsonify({"error": f"{cat}.{schema}.{to} already exists"}), 409
+        got = _run_sql(
+            user["username"],
+            f"ALTER TABLE {_q(cat)}.{_q(schema)}.{_q(table)} RENAME TO {_q(to)}",
+            cat,
+        )
+        return _sql_result(got, {"table": to})
+
+    @app.post("/api/catalogs/<cat>/schemas/<schema>/tables")
+    @authed
+    def api_table_from_file(user, cat, schema):  # pyright: ignore[reportUnusedFunction]
+        """Load an uploaded home file (csv/tsv/parquet/json…) as a new table."""
+        body = request.get_json(silent=True) or {}
+        path = (body.get("path") or "").strip()
+        name = (body.get("name") or "").strip() or autoetl.base_name({"path": path})
+        denied = _catalog_write(user, cat, schema, name)
+        if denied:
+            return denied
+        source = autoetl.source_expr({"kind": "file", "path": path})
+        if source is None:
+            return jsonify({"error": "pick a CSV, TSV, Parquet or JSON file in your home"}), 422
+        username = user["username"]
+        if not _schema_exists(username, cat, schema):
+            return jsonify({"error": f"no schema {cat}.{schema}"}), 404
+        if name in _schema_tables(username, cat, schema):
+            return jsonify({"error": f"{cat}.{schema}.{name} already exists"}), 409
+        target = f"{_q(cat)}.{_q(schema)}.{_q(name)}"
+        got = _run_sql(username, f"CREATE TABLE {target} AS SELECT * FROM {source}", cat)
+        if not got.get("ok"):
+            return jsonify({"error": got.get("error", "load failed")}), 422
+        count = _rows(username, f"SELECT count(*) AS n FROM {target}", cat)
+        return jsonify({"ok": True, "table": name, "rows": count[0].get("n") if count else None})
+
     # ---- SQL ---------------------------------------------------------------
 
     @app.post("/api/sql")
@@ -683,6 +829,23 @@ def register_api(app, client: PebblesdClient) -> None:
         if not target:
             return jsonify({"error": "bad path"}), 422
         return jsonify(_session_op(user["username"], {"op": "mkdir", "path": target}))
+
+    @app.post("/api/files/new")
+    @authed
+    def api_files_new(user):  # pyright: ignore[reportUnusedFunction]
+        body = request.get_json(silent=True) or {}
+        name = (body.get("name") or "").strip()
+        target = _safe_rel(f"{body.get('dir', '')}/{name}")
+        if not target or not name or "/" in name or _managed_path(target):
+            return jsonify({"error": "bad file name"}), 422
+        parent = os.path.dirname(target) or "."
+        listing = _session_op(user["username"], {"op": "list", "path": parent})
+        if name in (listing.get("entries") or []):
+            return jsonify({"error": f"{target} already exists"}), 409
+        got = _session_op(user["username"], {"op": "write", "path": target, "content": ""})
+        if not got.get("ok"):
+            return jsonify({"error": got.get("error", "couldn't create the file")}), 422
+        return jsonify({"ok": True, "path": target})
 
     @app.post("/api/files/delete")
     @authed
@@ -1243,6 +1406,139 @@ def register_api(app, client: PebblesdClient) -> None:
         # prefix matches first, then alphabetical
         hits.sort(key=lambda h: (not h["name"].lower().startswith(q), h["name"].lower()))
         return jsonify(hits[:SEARCH_MAX])
+
+    # ---- agent skills (REQ-44) ------------------------------------------------
+
+    def _skill_dir(source: str) -> str:
+        return WORKSPACE_SKILLS if source == "workspace" else PERSONAL_SKILLS
+
+    def _skills_in(username: str, source: str) -> list:
+        base = _skill_dir(source)
+        listing = _session_op(username, {"op": "list", "path": base})
+        out = []
+        for name in listing.get("entries") or []:
+            got = _session_op(username, {"op": "read", "path": f"{base}/{name}/SKILL.md"})
+            if not got.get("ok"):
+                continue
+            out.append({
+                "name": name,
+                "source": source,
+                "description": _skill_description(got.get("content", "")),
+                "removable": source == "personal",
+            })
+        return out
+
+    @app.get("/api/skills")
+    @authed
+    def api_skills(user):  # pyright: ignore[reportUnusedFunction]
+        username = user["username"]
+        return jsonify(_skills_in(username, "personal") + _skills_in(username, "workspace"))
+
+    @app.get("/api/skills/<name>")
+    @authed
+    def api_skill_get(user, name):  # pyright: ignore[reportUnusedFunction]
+        if not SKILL_NAME.match(name):
+            return jsonify({"error": "bad skill name"}), 422
+        for source in ("personal", "workspace"):
+            got = _session_op(
+                user["username"], {"op": "read", "path": f"{_skill_dir(source)}/{name}/SKILL.md"}
+            )
+            if got.get("ok"):
+                return jsonify({"name": name, "source": source, "content": got.get("content", "")})
+        return jsonify({"error": f"no skill {name!r}"}), 404
+
+    @app.post("/api/skills")
+    @authed
+    def api_skill_save(user):  # pyright: ignore[reportUnusedFunction]
+        body = request.get_json(silent=True) or {}
+        name = (body.get("name") or "").strip()
+        content = body.get("content") or ""
+        if not SKILL_NAME.match(name):
+            return jsonify({"error": "skill names are lowercase letters, digits, - _ ."}), 422
+        if not content.strip():
+            return jsonify({"error": "the skill is empty"}), 422
+        got = _session_op(
+            user["username"],
+            {"op": "write", "path": f"{PERSONAL_SKILLS}/{name}/SKILL.md", "content": content},
+        )
+        if not got.get("ok"):
+            return jsonify({"error": got.get("error", "couldn't save the skill")}), 422
+        return jsonify({"ok": True, "name": name})
+
+    @app.delete("/api/skills/<name>")
+    @authed
+    def api_skill_delete(user, name):  # pyright: ignore[reportUnusedFunction]
+        if not SKILL_NAME.match(name):
+            return jsonify({"error": "bad skill name"}), 422
+        username = user["username"]
+        mine = _session_op(username, {"op": "list", "path": PERSONAL_SKILLS})
+        if name not in (mine.get("entries") or []):
+            builtin = _session_op(username, {"op": "list", "path": WORKSPACE_SKILLS})
+            if name in (builtin.get("entries") or []):
+                return jsonify({"error": "built-in skills can't be removed"}), 403
+            return jsonify({"error": f"no skill {name!r}"}), 404
+        return jsonify(_session_op(username, {"op": "delete", "path": f"{PERSONAL_SKILLS}/{name}"}))
+
+    @app.post("/api/skills/install")
+    @authed
+    def api_skill_install(user):  # pyright: ignore[reportUnusedFunction]
+        """Install by name, like `npx skills add owner/repo[/skill]` — but with
+        git, as the user (their keys / PAT), and no package code executed: we
+        only copy folders that contain a SKILL.md into ~/.pebbles/skills."""
+        spec = ((request.get_json(silent=True) or {}).get("spec") or "").strip()
+        only = ""
+        if (m := SKILL_SPEC.match(spec)) and not spec.startswith(("https:", "git@")):
+            owner, repo, only = m.group(1), m.group(2), m.group(3) or ""
+            url = f"{SKILLS_GIT_BASE}/{owner}/{repo.removesuffix('.git')}.git"
+        elif SKILL_URL.match(spec):
+            url = spec
+        else:
+            return jsonify({"error": "enter owner/repo, owner/repo/skill, or a git URL"}), 422
+        script = f"""set -e
+mkdir -p ~/{PERSONAL_SKILLS}
+tmp=$(mktemp -d ~/.pebbles/.skill-install.XXXXXX)
+trap 'rm -rf "$tmp"' EXIT
+GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND='ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new' \
+  git clone -q --depth 1 {shlex.quote(url)} "$tmp/repo"
+root_name=$(basename {shlex.quote(url)} .git)
+find "$tmp/repo" -name SKILL.md -not -path '*/.git/*' | while read -r md; do
+  dir=$(dirname "$md")
+  name=$(basename "$dir")
+  [ "$dir" = "$tmp/repo" ] && name=$root_name
+  name=$(printf '%s' "$name" | tr 'A-Z' 'a-z')
+  case "$name" in ''|*[!a-z0-9_.-]*) continue ;; esac
+  [ -n {shlex.quote(only)} ] && [ "$name" != {shlex.quote(only.lower())} ] && continue
+  rm -rf ~/{PERSONAL_SKILLS}/"$name"
+  cp -R "$dir" ~/{PERSONAL_SKILLS}/"$name"
+  rm -rf ~/{PERSONAL_SKILLS}/"$name"/.git
+  echo "INSTALLED $name"
+done
+"""
+        got = _session_op(user["username"], {"op": "shell", "command": script})
+        if not got.get("ok"):
+            detail = (got.get("stderr") or got.get("error") or "").strip().splitlines()
+            return jsonify({"error": f"couldn't fetch {spec}: {detail[-1] if detail else 'git failed'}"}), 502
+        installed = [
+            line.split(" ", 1)[1]
+            for line in (got.get("stdout") or "").splitlines()
+            if line.startswith("INSTALLED ")
+        ]
+        if not installed:
+            what = f"a skill named {only!r}" if only else "any SKILL.md"
+            return jsonify({"error": f"{spec} doesn't contain {what}"}), 404
+        return jsonify({"installed": installed})
+
+    @app.post("/api/skills/draft")
+    @authed
+    def api_skill_draft(user):  # pyright: ignore[reportUnusedFunction]
+        body = request.get_json(silent=True) or {}
+        name = (body.get("name") or "").strip()
+        description = (body.get("description") or "").strip()
+        if not SKILL_NAME.match(name):
+            return jsonify({"error": "skill names are lowercase letters, digits, - _ ."}), 422
+        if not description:
+            return jsonify({"error": "describe what the skill should do"}), 422
+        return jsonify(client.nkoyo_skill_draft(user["username"], name, description))
 
     # ---- settings (git identity & keys) -----------------------------------------
 

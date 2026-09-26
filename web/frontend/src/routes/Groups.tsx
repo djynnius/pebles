@@ -108,7 +108,7 @@ function GroupsList() {
 
   return (
     <Page title="Groups" eyebrow="Admin">
-      <p style={{ color: "var(--text-dim)", fontSize: 12.5, marginTop: -8, marginBottom: 18 }}>
+      <p style={{ color: "var(--text-dim)", fontSize: "var(--fs-body)", marginTop: -8, marginBottom: 18 }}>
         Groups are UNIX groups on the main container; every grant (catalogs, engines) targets a
         group — a "user only" grant uses that user's personal primary group.
       </p>
@@ -193,7 +193,7 @@ function GroupRows({
       <tr>
         <Td>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-            <span className="mono" style={{ fontSize: 12.5 }}>
+            <span className="mono" style={{ fontSize: "var(--fs-body)" }}>
               {g.name}
             </span>
             {special && <Badge tone="accent">Admins</Badge>}
@@ -203,7 +203,7 @@ function GroupRows({
         <Td>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
             {g.members.length === 0 && (
-              <span style={{ color: "var(--text-dim)", fontSize: 12 }}>No members</span>
+              <span style={{ color: "var(--text-dim)", fontSize: "var(--fs-meta)" }}>No members</span>
             )}
             {g.members.map((m) => (
               <Chip
@@ -220,7 +220,7 @@ function GroupRows({
                 value=""
                 disabled={groupBusy}
                 onChange={(e) => e.target.value && onAdd(e.target.value)}
-                style={{ ...selectStyle, padding: "4px 8px", fontSize: 12 }}
+                style={{ ...selectStyle, padding: "4px 8px", fontSize: "var(--fs-meta)" }}
               >
                 <option value="">
                   {busy === `${g.name}:add` ? "Adding…" : "+ Add member"}
@@ -254,7 +254,7 @@ function GroupRows({
               onCancel={onCancelDelete}
               error={deleteError}
             >
-              <div style={{ fontSize: 11.5, color: "var(--text-mid)", marginTop: 4, fontWeight: 400 }}>
+              <div style={{ fontSize: "var(--fs-small)", color: "var(--text-mid)", marginTop: 4, fontWeight: 400 }}>
                 Members lose any access granted through this group. Their accounts and files are
                 untouched.
               </div>
@@ -289,7 +289,7 @@ function Chip({
         border: "1px solid var(--border)",
         background: "var(--surface-alt)",
         color: "var(--text-mid)",
-        fontSize: 11.5,
+        fontSize: "var(--fs-small)",
         opacity: removing ? 0.5 : 1,
       }}
     >
@@ -305,7 +305,7 @@ function Chip({
             border: "none",
             background: "transparent",
             color: "var(--text-dim)",
-            fontSize: 13,
+            fontSize: "var(--fs-base)",
             lineHeight: 1,
             padding: "0 5px",
             borderRadius: 10,

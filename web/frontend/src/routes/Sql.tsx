@@ -235,7 +235,7 @@ export function Sql() {
             borderBottom: "1px solid var(--border)",
           }}
         >
-          <span className="mono" style={{ fontSize: 13, fontWeight: 600 }}>
+          <span className="mono" style={{ fontSize: "var(--fs-base)", fontWeight: 600 }}>
             {doc.name}
           </span>
           <select
@@ -248,7 +248,7 @@ export function Sql() {
               border: "1px solid var(--border)",
               background: "var(--surface-alt)",
               color: "var(--accent-deep)",
-              fontSize: 11.5,
+              fontSize: "var(--fs-small)",
             }}
           >
             <option value="">no catalog</option>
@@ -272,7 +272,7 @@ export function Sql() {
               border: "none",
               borderRadius: 11,
               fontWeight: 600,
-              fontSize: 12.5,
+              fontSize: "var(--fs-body)",
               padding: "8px 16px",
             }}
           >
@@ -303,7 +303,7 @@ export function Sql() {
               flexWrap: "wrap",
               padding: "9px 18px",
               borderBottom: "1px solid var(--border)",
-              fontSize: 12,
+              fontSize: "var(--fs-meta)",
               color: "var(--text-muted)",
             }}
           >
@@ -365,7 +365,7 @@ export function Sql() {
                   borderRadius: 12,
                   padding: "12px 14px",
                   color: "var(--err)",
-                  fontSize: 12.5,
+                  fontSize: "var(--fs-body)",
                 }}
                 className="mono"
               >
@@ -374,7 +374,7 @@ export function Sql() {
             )}
             {!error && rows && rows.length > 0 && <ResultGrid rows={rows} />}
             {!error && rows && rows.length === 0 && (
-              <div style={{ fontSize: 12.5, color: "var(--text-dim)" }}>
+              <div style={{ fontSize: "var(--fs-body)", color: "var(--text-dim)" }}>
                 The query returned no rows.
               </div>
             )}
@@ -529,7 +529,7 @@ function AddToDashboard({
         </>
       ) : (
         <>
-          <div style={{ fontSize: 12.5, fontWeight: 600 }}>Add this query to a dashboard</div>
+          <div style={{ fontSize: "var(--fs-body)", fontWeight: 600 }}>Add this query to a dashboard</div>
           <label style={popLabel}>
             Dashboard
             <select
@@ -596,7 +596,7 @@ const popLabel: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: 4,
-  fontSize: 11,
+  fontSize: "var(--fs-label)",
   color: "var(--text-faint)",
 };
 
@@ -607,7 +607,7 @@ const popInput: CSSProperties = {
   border: "1px solid var(--border)",
   background: "var(--surface-alt)",
   color: "var(--text)",
-  fontSize: 12.5,
+  fontSize: "var(--fs-body)",
   outline: "none",
 };
 
@@ -678,7 +678,7 @@ function Editor({
 const code: CSSProperties = {
   display: "block",
   padding: "14px 18px",
-  fontSize: 13,
+  fontSize: "var(--fs-base)",
   lineHeight: "22px",
   whiteSpace: "pre-wrap",
   overflowWrap: "break-word",
@@ -745,7 +745,7 @@ const ghost: CSSProperties = {
   color: "var(--text-mid)",
   border: "1px solid var(--border)",
   borderRadius: 11,
-  fontSize: 12.5,
+  fontSize: "var(--fs-body)",
   padding: "8px 14px",
 };
 
@@ -753,6 +753,6 @@ const ghostSmall: CSSProperties = {
   background: "transparent",
   border: "none",
   fontFamily: "inherit",
-  fontSize: 12,
+  fontSize: "var(--fs-meta)",
   padding: 0,
 };

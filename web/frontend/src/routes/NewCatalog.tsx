@@ -84,12 +84,12 @@ export function NewCatalog({ user }: { user: User }) {
 
   return (
     <div style={{ maxWidth: 1080, margin: "0 auto", padding: "34px 40px 60px" }}>
-      <div className="mono" style={{ fontSize: 11.5, color: "var(--text-dim)", marginBottom: 8 }}>
+      <div className="mono" style={{ fontSize: "var(--fs-small)", color: "var(--text-dim)", marginBottom: 8 }}>
         <button type="button" onClick={() => navigate("/catalog")} style={crumbBtn}>
           ‹ Catalog
         </button>
       </div>
-      <h1 style={{ fontSize: 25, fontWeight: 600, letterSpacing: "-0.5px", marginBottom: 22 }}>
+      <h1 style={{ fontSize: "var(--fs-h2-plus)", fontWeight: 600, letterSpacing: "-0.5px", marginBottom: 22 }}>
         Create catalog
       </h1>
 
@@ -125,14 +125,14 @@ export function NewCatalog({ user }: { user: User }) {
                 border: `1px solid ${name && !valid ? "var(--err)" : "var(--accent)"}`,
                 borderRadius: 12,
                 background: "var(--surface)",
-                fontSize: 14,
+                fontSize: "var(--fs-md)",
                 color: "var(--text)",
                 outline: "none",
               }}
             />
             <div
               style={{
-                fontSize: 11,
+                fontSize: "var(--fs-label)",
                 color: name && !valid ? "var(--err)" : "var(--text-dim)",
                 marginTop: 6,
               }}
@@ -164,21 +164,21 @@ export function NewCatalog({ user }: { user: User }) {
                 />
               ))}
             </div>
-            <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 6 }}>
+            <div style={{ fontSize: "var(--fs-label)", color: "var(--text-dim)", marginTop: 6 }}>
               An empty schema is valid — these just seed the medallion layout.
             </div>
           </Field>
 
           <Field label="Access grants">
             {groupsError ? (
-              <div style={{ fontSize: 12, color: "var(--err)" }}>
+              <div style={{ fontSize: "var(--fs-meta)", color: "var(--err)" }}>
                 Couldn't load groups — {groupsError} You can still create the catalog and grant
                 access later from its Permissions tab.
               </div>
             ) : groups === null ? (
-              <div style={{ fontSize: 12, color: "var(--text-dim)" }}>Loading groups…</div>
+              <div style={{ fontSize: "var(--fs-meta)", color: "var(--text-dim)" }}>Loading groups…</div>
             ) : groups.length === 0 ? (
-              <div style={{ fontSize: 12, color: "var(--text-dim)" }}>
+              <div style={{ fontSize: "var(--fs-meta)", color: "var(--text-dim)" }}>
                 No groups yet. Grants target UNIX groups — create one under Groups first.
               </div>
             ) : (
@@ -211,7 +211,7 @@ export function NewCatalog({ user }: { user: User }) {
                 border: "none",
                 borderRadius: 11,
                 fontWeight: 600,
-                fontSize: 13,
+                fontSize: "var(--fs-base)",
                 padding: "9px 18px",
                 cursor: valid && !busy ? "pointer" : "not-allowed",
               }}
@@ -247,7 +247,7 @@ export function NewCatalog({ user }: { user: User }) {
           >
             <span
               style={{
-                fontSize: 10.5,
+                fontSize: "var(--fs-eyebrow)",
                 fontWeight: 600,
                 letterSpacing: "0.8px",
                 textTransform: "uppercase",
@@ -264,7 +264,7 @@ export function NewCatalog({ user }: { user: User }) {
                 border: "1px solid var(--deep-border)",
                 borderRadius: 11,
                 color: "var(--deep-text-2)",
-                fontSize: 11.5,
+                fontSize: "var(--fs-small)",
                 padding: "6px 12px",
               }}
             >
@@ -276,7 +276,7 @@ export function NewCatalog({ user }: { user: User }) {
             style={{
               margin: 0,
               padding: "16px 18px",
-              fontSize: 12.5,
+              fontSize: "var(--fs-body)",
               lineHeight: 1.8,
               color: "var(--deep-text)",
               whiteSpace: "pre-wrap",
@@ -316,7 +316,7 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
     <div>
       <div
         style={{
-          fontSize: 10.5,
+          fontSize: "var(--fs-eyebrow)",
           fontWeight: 600,
           letterSpacing: "0.8px",
           textTransform: "uppercase",
@@ -341,7 +341,7 @@ function ReadOnly({ children, mono }: { children: ReactNode; mono?: boolean }) {
         borderRadius: 11,
         background: "var(--surface-alt)",
         color: "var(--text-mid)",
-        fontSize: 13,
+        fontSize: "var(--fs-base)",
         overflowWrap: "break-word",
       }}
     >
@@ -362,17 +362,17 @@ function Check({
   hint?: string;
 }) {
   return (
-    <label style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 13, cursor: "pointer" }}>
+    <label style={{ display: "flex", alignItems: "center", gap: 9, fontSize: "var(--fs-base)", cursor: "pointer" }}>
       <input
         type="checkbox"
         checked={checked}
         onChange={onChange}
         style={{ accentColor: "var(--accent)", width: 15, height: 15 }}
       />
-      <span className="mono" style={{ fontSize: 12.5 }}>
+      <span className="mono" style={{ fontSize: "var(--fs-body)" }}>
         {label}
       </span>
-      {hint && <span style={{ fontSize: 11, color: "var(--text-dim)" }}>{hint}</span>}
+      {hint && <span style={{ fontSize: "var(--fs-label)", color: "var(--text-dim)" }}>{hint}</span>}
     </label>
   );
 }
@@ -382,7 +382,7 @@ const ghost: CSSProperties = {
   color: "var(--text-mid)",
   border: "1px solid var(--border)",
   borderRadius: 11,
-  fontSize: 12.5,
+  fontSize: "var(--fs-body)",
   padding: "9px 16px",
 };
 
@@ -391,6 +391,6 @@ const crumbBtn: CSSProperties = {
   background: "transparent",
   padding: 0,
   font: "inherit",
-  fontSize: 11.5,
+  fontSize: "var(--fs-small)",
   color: "var(--text-dim)",
 };

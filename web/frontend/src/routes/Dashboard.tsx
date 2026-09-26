@@ -377,10 +377,10 @@ export function Dashboard() {
             <button type="button" onClick={() => nav("/dashboards")} style={crumbBtn}>
               ‹ Dashboards
             </button>
-            <h1 style={{ fontSize: 24, fontWeight: 600, letterSpacing: "-0.4px", marginTop: 2 }}>
+            <h1 style={{ fontSize: "var(--fs-h2)", fontWeight: 600, letterSpacing: "-0.4px", marginTop: 2 }}>
               {name}
             </h1>
-            <div className="mono" style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 3 }}>
+            <div className="mono" style={{ fontSize: "var(--fs-label)", color: "var(--text-dim)", marginTop: 3 }}>
               ~/dashboards/{name}.json · {tiles.length} widget{tiles.length === 1 ? "" : "s"}
               {dirty && <span style={{ color: "var(--accent-ink)" }}> · unsaved changes</span>}
             </div>
@@ -398,7 +398,7 @@ export function Dashboard() {
                 border: "1px solid var(--border)",
                 background: "var(--surface-alt)",
                 color: "var(--accent-deep)",
-                fontSize: 11.5,
+                fontSize: "var(--fs-small)",
               }}
             >
               <option value="">no catalog</option>
@@ -436,7 +436,7 @@ export function Dashboard() {
                   border: "none",
                   borderRadius: 11,
                   fontWeight: 600,
-                  fontSize: 12.5,
+                  fontSize: "var(--fs-body)",
                   padding: "8px 16px",
                 }}
               >
@@ -484,13 +484,13 @@ export function Dashboard() {
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span style={filterEyebrow}>Filters</span>
-                  <span style={{ fontSize: 11.5, color: "var(--text-dim)" }}>
+                  <span style={{ fontSize: "var(--fs-small)", color: "var(--text-dim)" }}>
                     Tile SQL references a filter as {"{{name}}"} — its value is substituted as a
                     quoted string.
                   </span>
                 </div>
                 {doc.filters.length === 0 && (
-                  <div style={{ fontSize: 12, color: "var(--text-dim)" }}>No filters yet.</div>
+                  <div style={{ fontSize: "var(--fs-meta)", color: "var(--text-dim)" }}>No filters yet.</div>
                 )}
                 {doc.filters.map((f, i) => (
                   <div
@@ -554,7 +554,7 @@ export function Dashboard() {
                 <span style={{ ...filterEyebrow, alignSelf: "center" }}>Filters</span>
                 {doc.filters.map((f) => (
                   <label key={f.name} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                    <span style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{f.label}</span>
+                    <span style={{ fontSize: "var(--fs-eyebrow)", color: "var(--text-faint)" }}>{f.label}</span>
                     <input
                       value={filterValue(f)}
                       onChange={(e) =>
@@ -591,7 +591,7 @@ export function Dashboard() {
                 padding: "48px 20px",
                 textAlign: "center",
                 color: "var(--text-dim)",
-                fontSize: 13,
+                fontSize: "var(--fs-base)",
               }}
             >
               {doc ? (
@@ -650,7 +650,7 @@ export function Dashboard() {
                       cursor: "grab",
                     }}
                   >
-                    <span style={{ color: "var(--text-faint)", fontSize: 11 }}>⠿</span>
+                    <span style={{ color: "var(--text-faint)", fontSize: "var(--fs-label)" }}>⠿</span>
                     <input
                       value={t.title}
                       onChange={(e) => setTile(i, { title: e.target.value })}
@@ -661,14 +661,14 @@ export function Dashboard() {
                         border: "none",
                         background: "transparent",
                         color: "var(--text)",
-                        fontSize: 12.5,
+                        fontSize: "var(--fs-body)",
                         fontWeight: 600,
                         outline: "none",
                       }}
                     />
                     <span
                       className="mono"
-                      style={{ fontSize: 9.5, color: "var(--text-faint)", letterSpacing: "0.5px" }}
+                      style={{ fontSize: "var(--fs-2xs)", color: "var(--text-faint)", letterSpacing: "0.5px" }}
                     >
                       {t.kind.toUpperCase()}
                     </span>
@@ -688,7 +688,7 @@ export function Dashboard() {
                           borderRadius: 6,
                           background: "transparent",
                           color: "var(--text-faint)",
-                          fontSize: 13,
+                          fontSize: "var(--fs-base)",
                           lineHeight: 1,
                         }}
                       >
@@ -767,11 +767,11 @@ export function Dashboard() {
                           padding: "8px 10px",
                           background: "var(--surface)",
                           color: "var(--text)",
-                          fontSize: 12,
+                          fontSize: "var(--fs-meta)",
                           lineHeight: "18px",
                         }}
                       />
-                      <div style={{ fontSize: 10.5, color: "var(--text-dim)", marginTop: 5 }}>
+                      <div style={{ fontSize: "var(--fs-eyebrow)", color: "var(--text-dim)", marginTop: 5 }}>
                         Use {"{{name}}"} to reference a filter (substituted as a quoted value)
                         {doc && doc.filters.length > 0 && (
                           <span className="mono">
@@ -792,7 +792,7 @@ export function Dashboard() {
                             borderRadius: 8,
                             background: "var(--surface)",
                             color: "var(--text-muted)",
-                            fontSize: 11,
+                            fontSize: "var(--fs-label)",
                             padding: "3px 7px",
                           }}
                         >
@@ -812,7 +812,7 @@ export function Dashboard() {
                             border: "none",
                             borderRadius: 9,
                             fontWeight: 600,
-                            fontSize: 11.5,
+                            fontSize: "var(--fs-small)",
                             padding: "5px 12px",
                           }}
                         >
@@ -844,7 +844,7 @@ function TileBody({ tile, out, span }: { tile: Tile; out?: Out; span: Span }) {
   }
   if (out.error) {
     return (
-      <div className="mono" style={{ fontSize: 11.5, color: "var(--err)", whiteSpace: "pre-wrap" }}>
+      <div className="mono" style={{ fontSize: "var(--fs-small)", color: "var(--err)", whiteSpace: "pre-wrap" }}>
         {out.error}
       </div>
     );
@@ -859,7 +859,7 @@ function TileBody({ tile, out, span }: { tile: Tile; out?: Out; span: Span }) {
       <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", height: "100%" }}>
         <div
           style={{
-            fontSize: 34,
+            fontSize: "var(--fs-hero)",
             fontWeight: 650,
             letterSpacing: "-1px",
             lineHeight: 1.1,
@@ -870,7 +870,7 @@ function TileBody({ tile, out, span }: { tile: Tile; out?: Out; span: Span }) {
         </div>
         <div
           style={{
-            fontSize: 11,
+            fontSize: "var(--fs-label)",
             letterSpacing: "0.6px",
             textTransform: "uppercase",
             color: "var(--text-faint)",
@@ -915,7 +915,7 @@ function Bars({ rows }: { rows: Row[] }) {
             style={{
               width: 92,
               flex: "0 0 92px",
-              fontSize: 11.5,
+              fontSize: "var(--fs-small)",
               color: "var(--text-mid)",
               overflow: "hidden",
               textOverflow: "ellipsis",
@@ -937,7 +937,7 @@ function Bars({ rows }: { rows: Row[] }) {
           </div>
           <div
             className="mono"
-            style={{ fontSize: 11, color: "var(--text-muted)", flex: "0 0 auto" }}
+            style={{ fontSize: "var(--fs-label)", color: "var(--text-muted)", flex: "0 0 auto" }}
           >
             {format(r[valueKey])}
           </div>
@@ -969,7 +969,7 @@ function MenuItem({
         border: "none",
         background: "transparent",
         padding: "7px 14px",
-        fontSize: 12.5,
+        fontSize: "var(--fs-body)",
         fontFamily: "inherit",
         color: danger ? "var(--err)" : "var(--text-mid)",
       }}
@@ -997,7 +997,7 @@ function Stepper({
         alignItems: "center",
         gap: 8,
         padding: "4px 14px",
-        fontSize: 12,
+        fontSize: "var(--fs-meta)",
         color: "var(--text-muted)",
       }}
     >
@@ -1005,7 +1005,7 @@ function Stepper({
       <button type="button" aria-label={`${label} smaller`} onClick={() => onStep(-1)} style={step}>
         −
       </button>
-      <span className="mono" style={{ fontSize: 11, minWidth: 24, textAlign: "center" }}>
+      <span className="mono" style={{ fontSize: "var(--fs-label)", minWidth: 24, textAlign: "center" }}>
         {value}/{max}
       </span>
       <button type="button" aria-label={`${label} larger`} onClick={() => onStep(1)} style={step}>
@@ -1069,10 +1069,10 @@ function format(v: unknown): string {
   return cell(v);
 }
 
-const hint: CSSProperties = { fontSize: 11.5, color: "var(--text-dim)" };
+const hint: CSSProperties = { fontSize: "var(--fs-small)", color: "var(--text-dim)" };
 
 const filterEyebrow: CSSProperties = {
-  fontSize: 10.5,
+  fontSize: "var(--fs-eyebrow)",
   fontWeight: 600,
   letterSpacing: "0.6px",
   textTransform: "uppercase",
@@ -1086,7 +1086,7 @@ const filterInput: CSSProperties = {
   border: "1px solid var(--border)",
   background: "var(--surface-alt)",
   color: "var(--text)",
-  fontSize: 12,
+  fontSize: "var(--fs-meta)",
   outline: "none",
 };
 
@@ -1095,7 +1095,7 @@ const ghost: CSSProperties = {
   color: "var(--text-mid)",
   border: "1px solid var(--border)",
   borderRadius: 11,
-  fontSize: 12.5,
+  fontSize: "var(--fs-body)",
   padding: "8px 14px",
 };
 
@@ -1104,7 +1104,7 @@ const crumbBtn: CSSProperties = {
   background: "transparent",
   padding: 0,
   font: "inherit",
-  fontSize: 11.5,
+  fontSize: "var(--fs-small)",
   color: "var(--text-dim)",
 };
 
@@ -1125,7 +1125,7 @@ const step: CSSProperties = {
   borderRadius: 6,
   background: "var(--surface)",
   color: "var(--text-mid)",
-  fontSize: 12,
+  fontSize: "var(--fs-meta)",
   lineHeight: 1,
   padding: 0,
 };

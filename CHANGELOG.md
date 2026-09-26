@@ -6,6 +6,38 @@ All notable changes to Pebbles are documented here. The format follows
 
 ## [Unreleased]
 
+### Added (skills, catalog actions, Nkoyo that knows Pebbles)
+- **Install agent skills by name** (Settings → Agent skills): type `owner/repo`
+  or `owner/repo/skill` — the names `npx skills add` takes — or a git URL.
+  Pebbles clones it with git *as you* (your SSH key / PAT) and copies every
+  folder with a `SKILL.md` into `~/.pebbles/skills`; no Node, no package code
+  runs. `PEBBLES_SKILLS_GIT_BASE` points `owner/repo` at an internal mirror for
+  air-gapped installs. View, edit and remove your skills there too.
+- **Custom skills**: describe what you want and Nkoyo drafts the `SKILL.md`
+  (your coder model, no tools, no data access) for you to edit and save — or
+  write it yourself.
+- **Nkoyo knows Pebbles**: a built-in `pebbles-guide` skill covers every
+  screen and the common how-tos, and four new approval-gated tools let it act
+  for you: create a catalog, create a schema, create a notebook, create a job
+  (always owned by and run as you; never overwrites). Installed skills are
+  listed to Nkoyo by name and description and read in full only when a request
+  matches one — in the live test a large inlined PDF skill derailed unrelated
+  answers.
+- **Catalog right-click menus**: New schema (catalog), Upload table… and
+  Rename schema… (schema), Rename table… (table); plus a **New schema** button
+  (pick the catalog, name it) on the table view. Upload table loads a CSV,
+  TSV, Parquet or JSON file straight into the schema. Table rename keeps
+  history; schema rename copies the tables into the new schema in one
+  transaction (DuckDB 1.5 can't rename a schema), so **their time-travel
+  history does not carry over** — the dialog says so. Catalog rename comes
+  later.
+- **Files**: type icons (folder, Python, R, notebook, JSON, a grid for
+  CSV/TSV/Parquet) instead of dots, and **New file** in the New folder menu.
+- **Larger type and icons** app-wide (body 13 → 14 px, one step up across the
+  scale, sidebar glyphs ~20% bigger), now driven by `--fs-*` tokens in
+  `theme.css`. The sidebar nav scrolls on its own so the Admin section never
+  hides behind the Account footer.
+
 ### Added (UAT Phase 5 — polish)
 - **Global search (⌘K)** across notebooks, dashboards, your jobs, and the
   catalogs and tables you can open — never ones you can't, so search can't
@@ -16,6 +48,9 @@ All notable changes to Pebbles are documented here. The format follows
   removed); each job's status dot shows its latest run.
 
 ### Fixed
+- **Nkoyo answers were cut off after 10 s.** The web tier called pebblesd's
+  chat route with the generic 10 s socket timeout, but one agent turn is
+  several model round-trips; it now allows up to 10 minutes.
 - **Admin controls missing right after sign-in.** The sign-in reply didn't
   carry the `admin` flag (only `/api/me` did), so the Admin nav (Users,
   Groups), "Register engine" and the join-token settings stayed hidden until

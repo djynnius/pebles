@@ -25,7 +25,7 @@ export function Ingest() {
             border: "none",
             borderRadius: 11,
             fontWeight: 600,
-            fontSize: 13,
+            fontSize: "var(--fs-base)",
             padding: "8px 16px",
             cursor: "not-allowed",
           }}
@@ -37,7 +37,7 @@ export function Ingest() {
       <Card style={{ padding: 22, marginBottom: 16 }}>
         <div
           style={{
-            fontSize: 11,
+            fontSize: "var(--fs-label)",
             letterSpacing: "0.6px",
             textTransform: "uppercase",
             color: "var(--text-faint)",
@@ -46,10 +46,10 @@ export function Ingest() {
         >
           Connections
         </div>
-        <div style={{ fontSize: 13.5, color: "var(--text-mid)", marginBottom: 6 }}>
+        <div style={{ fontSize: "var(--fs-lead)", color: "var(--text-mid)", marginBottom: 6 }}>
           No connections yet.
         </div>
-        <div style={{ fontSize: 12.5, color: "var(--text-dim)" }}>
+        <div style={{ fontSize: "var(--fs-body)", color: "var(--text-dim)" }}>
           Upload files via{" "}
           <button type="button" onClick={() => nav("/files")} style={link}>
             Files
@@ -77,11 +77,11 @@ export function Ingest() {
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ color: "var(--accent)", fontSize: 15 }}>✦</span>
-          <span style={{ fontSize: 14, fontWeight: 600 }}>Auto ETL</span>
+          <span style={{ color: "var(--accent)", fontSize: "var(--fs-lg)" }}>✦</span>
+          <span style={{ fontSize: "var(--fs-md)", fontWeight: 600 }}>Auto ETL</span>
           <span style={{ marginLeft: "auto", color: "var(--text-faint)" }}>→</span>
         </div>
-        <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 6 }}>
+        <div style={{ fontSize: "var(--fs-body)", color: "var(--text-dim)", marginTop: 6 }}>
           Profile a table and build a star schema.
         </div>
       </button>
@@ -94,6 +94,6 @@ const link: React.CSSProperties = {
   background: "transparent",
   padding: 0,
   font: "inherit",
-  fontSize: 12.5,
+  fontSize: "var(--fs-body)",
   color: "var(--accent-ink)",
 };

@@ -120,6 +120,27 @@ delete, reset password, make admin), **Groups** (create, delete, members) and
 **Engines** (who may use each engine). Everyone changes their own password
 under Settings → Security. The last admin can't be removed or disabled.
 
+## Catalog actions
+
+Right-click in the **Catalog** tree: a catalog offers **New schema**; a schema
+offers **Upload table…** (CSV, TSV, Parquet or JSON → a new table) and
+**Rename schema…**; a table offers **Rename table…**. A table's page also has
+a **New schema** button. Renaming a table keeps its history; renaming a schema
+copies its tables into the new schema (DuckDB can't rename schemas yet), so
+their time-travel history starts over. Catalogs can't be renamed yet.
+
+## Agent skills
+
+Settings → **Agent skills** lists the skills Nkoyo reads (yours in
+`~/.pebbles/skills`, built-in ones like `pebbles-guide` in
+`/opt/pebbles/skills`). **Install** takes `owner/repo`, `owner/repo/skill`
+(e.g. `anthropics/skills/pdf`) or a git URL and clones it with *your* git
+credentials; set `PEBBLES_SKILLS_GIT_BASE=https://git.internal` on the main to
+resolve `owner/repo` against a mirror when you're air-gapped. **Create** lets
+you describe a skill and have Nkoyo draft the `SKILL.md`, then edit and save
+it. Nkoyo can also create catalogs, schemas, notebooks and jobs for you — each
+one only after you approve it in the chat.
+
 **Session memory.** Each signed-in user gets one engine session (512 MB by
 default, reused across their browser tabs and logins, released on sign-out).
 The engine's total budget defaults to 75% of the container's memory; set

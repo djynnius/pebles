@@ -218,7 +218,104 @@ pub fn tools() -> Vec<Tool> {
                 "required": ["sql"]
             }),
         },
+        Tool {
+            name: "create_catalog",
+            description: "Create a new lake catalog owned by the user (ask first). \
+                          Name: letters, digits, underscore; not starting with a digit.",
+            op: "create_catalog",
+            default_grade: ToolGrade::AskFirst,
+            parameters: json!({
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"]
+            }),
+        },
+        Tool {
+            name: "create_schema",
+            description: "Create a schema inside a catalog the user can write to (ask first).",
+            op: "sql",
+            default_grade: ToolGrade::AskFirst,
+            parameters: json!({
+                "type": "object",
+                "properties": {"catalog": {"type": "string"}, "name": {"type": "string"}},
+                "required": ["catalog", "name"]
+            }),
+        },
+        Tool {
+            name: "create_notebook",
+            description: "Create a notebook in the user's ~/notebooks (ask first). Cells run \
+                          top to bottom; type is sql, python, r or md. Never overwrites.",
+            op: "create_notebook",
+            default_grade: ToolGrade::AskFirst,
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "lowercase, digits, - and _"},
+                    "catalog": {"type": "string"},
+                    "cells": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "type": {"type": "string", "enum": CELL_TYPES},
+                                "source": {"type": "string"}
+                            },
+                            "required": ["type", "source"]
+                        }
+                    }
+                },
+                "required": ["name", "cells"]
+            }),
+        },
+        Tool {
+            name: "create_job",
+            description: "Create a job (a workflow of tasks that runs as the user, manually \
+                          or on a cron schedule) — ask first. Never overwrites an existing job.",
+            op: "create_job",
+            default_grade: ToolGrade::AskFirst,
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "lowercase, digits, - and _"},
+                    "schedule": {"type": "string", "description": "cron, or omit for manual"},
+                    "tasks": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "task_type": {"type": "string", "enum": ["sql", "python", "r", "shell", "notebook"]},
+                                "payload": {"type": "string", "description": "the code, or a notebook path for notebook tasks"},
+                                "catalog": {"type": "string"},
+                                "depends_on": {"type": "array", "items": {"type": "string"}}
+                            },
+                            "required": ["id", "task_type", "payload"]
+                        }
+                    }
+                },
+                "required": ["name", "tasks"]
+            }),
+        },
     ]
+}
+
+/// Notebook cell types (web `notebooks.CELL_TYPES`).
+const CELL_TYPES: [&str; 4] = ["sql", "python", "r", "md"];
+
+/// Unquoted SQL identifier (catalog/schema names), as the web tier enforces.
+fn is_ident(s: &str) -> bool {
+    let mut chars = s.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && s.len() <= 63
+}
+
+/// Notebook/job document names (web `DOC_NAME`).
+fn is_doc_name(s: &str) -> bool {
+    let mut chars = s.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+        && s.len() <= 64
 }
 
 /// A read-only SQL guard for the always-on `sql_query` tool: the first keyword
@@ -248,29 +345,87 @@ pub fn grade_of(cfg: &NkoyoConfig, tool: &Tool) -> ToolGrade {
         .unwrap_or(tool.default_grade)
 }
 
-/// Load folder-based skills (REQ-44): `SKILL.md` files under the personal and
-/// workspace skill dirs. Returns their concatenated text for the system prompt.
+/// Full built-in skill text Nkoyo carries in its prompt; past this, even
+/// built-in skills are indexed.
+const SKILL_TEXT_BUDGET: usize = 24 * 1024;
+
+/// Load folder-based skills (REQ-44) into the prompt section. Built-in
+/// (workspace, e.g. pebbles-guide) skills are inlined while they fit the
+/// budget; the user's installed skills are always an *index* — name,
+/// description, path — that Nkoyo reads with read_file when one applies. A
+/// large installed skill (a PDF toolkit, say) inlined on every turn drowned
+/// the guide and derailed unrelated answers in the live test.
 pub fn load_skills(home: &Path) -> String {
-    let dirs = [
-        home.join(".pebbles/skills"),
-        PathBuf::from("/opt/pebbles/skills"),
-    ];
-    let mut out = String::new();
-    for dir in dirs {
+    let read = |dir: PathBuf| -> Vec<(String, PathBuf, String)> {
         let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
+            return Vec::new();
         };
-        for entry in entries.flatten() {
-            let skill_md = entry.path().join("SKILL.md");
-            if let Ok(text) = std::fs::read_to_string(&skill_md) {
-                out.push_str("\n\n## Skill: ");
-                out.push_str(&entry.file_name().to_string_lossy());
-                out.push('\n');
-                out.push_str(text.trim());
+        let mut found: Vec<_> = entries.flatten().collect();
+        found.sort_by_key(|e| e.file_name());
+        found
+            .into_iter()
+            .filter_map(|entry| {
+                let skill_md = entry.path().join("SKILL.md");
+                let text = std::fs::read_to_string(&skill_md).ok()?;
+                let name = entry.file_name().to_string_lossy().into_owned();
+                Some((name, skill_md, text.trim().to_string()))
+            })
+            .collect()
+    };
+    let index_line = |name: &str, path: &Path, text: &str| {
+        format!(
+            "- {name}: {} (read_file {})",
+            skill_description(text),
+            path.display()
+        )
+    };
+    let mut out = String::new();
+    let mut indexed = Vec::new();
+    let mut used = 0;
+    for (name, path, text) in read(PathBuf::from("/opt/pebbles/skills")) {
+        if used + text.len() <= SKILL_TEXT_BUDGET {
+            used += text.len();
+            out.push_str("\n\n## Skill: ");
+            out.push_str(&name);
+            out.push('\n');
+            out.push_str(&text);
+        } else {
+            indexed.push(index_line(&name, &path, &text));
+        }
+    }
+    for (name, path, text) in read(home.join(".pebbles/skills")) {
+        indexed.push(index_line(&name, &path, &text));
+    }
+    if !indexed.is_empty() {
+        out.push_str(
+            "\n\n## The user's skills\nOnly when a request matches one of these, \
+             read its SKILL.md with read_file first and follow it; otherwise ignore them.\n",
+        );
+        out.push_str(&indexed.join("\n"));
+    }
+    out
+}
+
+/// A skill's front-matter `description:`, else its first prose line.
+fn skill_description(text: &str) -> String {
+    let mut lines = text.lines();
+    if lines.next().map(str::trim) == Some("---") {
+        for line in lines.by_ref() {
+            if line.trim() == "---" {
+                break;
+            }
+            if let Some(d) = line.strip_prefix("description:") {
+                return d.trim().trim_matches(['"', '\'']).to_string();
             }
         }
     }
-    out
+    text.lines()
+        .map(|l| l.trim().trim_start_matches('#').trim())
+        .find(|l| !l.is_empty() && *l != "---")
+        .unwrap_or_default()
+        .chars()
+        .take(200)
+        .collect()
 }
 
 /// Map a requested tool call to its session-kernel op payload, enforcing the
@@ -308,6 +463,20 @@ pub fn plan_tool_call(
             }
             serde_json::json!({"op": "sql", "sql": sql, "catalog": args["catalog"]})
         }
+        ("sql", "create_schema") => {
+            let (catalog, schema) = (
+                args["catalog"].as_str().unwrap_or_default(),
+                args["name"].as_str().unwrap_or_default(),
+            );
+            if !is_ident(catalog) || !is_ident(schema) {
+                return Err("catalog and schema names are letters, digits and _".into());
+            }
+            serde_json::json!({
+                "op": "sql",
+                "sql": format!("CREATE SCHEMA \"{catalog}\".\"{schema}\""),
+                "catalog": catalog,
+            })
+        }
         ("sql", _) => {
             serde_json::json!({"op": "sql", "sql": args["sql"], "catalog": args["catalog"]})
         }
@@ -315,6 +484,54 @@ pub fn plan_tool_call(
         ("read", _) => serde_json::json!({"op": "read", "path": args["path"]}),
         ("write", _) => {
             serde_json::json!({"op": "write", "path": args["path"], "content": args["content"]})
+        }
+        ("create_catalog", _) => {
+            let name = args["name"].as_str().unwrap_or_default();
+            if !is_ident(name) {
+                return Err("catalog names are letters, digits and _".into());
+            }
+            serde_json::json!({"op": "create_catalog", "name": name})
+        }
+        ("create_notebook", _) => {
+            let name = args["name"].as_str().unwrap_or_default();
+            if !is_doc_name(name) {
+                return Err("notebook names are lowercase letters, digits, - and _".into());
+            }
+            let cells: Vec<serde_json::Value> = args["cells"]
+                .as_array()
+                .map(|cells| {
+                    cells
+                        .iter()
+                        .filter(|c| CELL_TYPES.contains(&c["type"].as_str().unwrap_or("")))
+                        .map(|c| serde_json::json!({"type": c["type"], "source": c["source"].as_str().unwrap_or_default()}))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if cells.is_empty() {
+                return Err("a notebook needs at least one sql/python/r/md cell".into());
+            }
+            let catalog = args["catalog"].as_str().filter(|c| is_ident(c));
+            let doc = serde_json::json!({"catalog": catalog, "cells": cells});
+            serde_json::json!({
+                "op": "create_notebook",
+                "name": name,
+                "path": format!("notebooks/{name}.json"),
+                "content": doc.to_string(),
+            })
+        }
+        ("create_job", _) => {
+            let name = args["name"].as_str().unwrap_or_default();
+            if !is_doc_name(name) {
+                return Err("job names are lowercase letters, digits, - and _".into());
+            }
+            // The owner is filled in by the caller from the asker — the model
+            // never chooses whom a job runs as (REQ-41/45).
+            serde_json::json!({
+                "op": "create_job",
+                "name": name,
+                "schedule": args["schedule"].as_str().filter(|s| !s.trim().is_empty()),
+                "tasks": args["tasks"],
+            })
         }
         _ => return Err(format!("tool {name:?} has no runner")),
     };
@@ -328,8 +545,68 @@ pub fn system_prompt(username: &str, skills: &str) -> String {
         "You are Nkoyo, the data assistant inside Pebbles. You are helping {username}. \
          Every tool you call runs as {username} in their own session — you can never \
          see or touch anything they cannot. Prefer read-only tools; use the lake and \
-         their files to answer concretely. Keep answers concise.{skills}"
+         their files to answer concretely. When they ask how to do something in \
+         Pebbles, answer from the pebbles-guide skill with the exact screens and \
+         clicks; offer to do it for them when a tool can. Tools that change \
+         anything (create_*, write_file, sql_exec) need their approval: say what \
+         you will do and ask, rather than calling the tool unannounced. Keep \
+         answers concise.{skills}"
     )
+}
+
+/// SKILL.md drafting (Settings → Agent skills): one plain completion on the
+/// coder model — no tools, no data access; the user reviews before saving.
+pub async fn draft_skill(
+    http: &reqwest::Client,
+    cfg: &NkoyoConfig,
+    name: &str,
+    description: &str,
+) -> Result<String, String> {
+    let endpoint = cfg
+        .endpoints
+        .first()
+        .ok_or_else(|| "no Ollama endpoints configured".to_string())?;
+    let system = "You write agent skills for Nkoyo, the assistant inside Pebbles (a \
+        self-hosted data platform: catalogs/schemas/tables in a DuckDB lake, notebooks, \
+        SQL editor, dashboards, jobs). A skill is one Markdown file, SKILL.md: YAML \
+        front matter with `name` and a one-line `description` (when to use it), then \
+        concise instructions, conventions and examples. Output ONLY the file content.";
+    let prompt = format!("Skill name: {name}\n\nWhat it should do:\n{description}");
+    let resp = http
+        .post(format!("{endpoint}/api/chat"))
+        .timeout(std::time::Duration::from_secs(120))
+        .json(&serde_json::json!({
+            "model": cfg.coder_model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+            "stream": false,
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("{endpoint}: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "{endpoint}: HTTP {} for model {}",
+            resp.status(),
+            cfg.coder_model
+        ));
+    }
+    let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    Ok(strip_fence(
+        body["message"]["content"].as_str().unwrap_or_default(),
+    ))
+}
+
+/// Models like to wrap a file in ``` fences; the SKILL.md is the inside.
+fn strip_fence(text: &str) -> String {
+    let t = text.trim();
+    if let Some(rest) = t.strip_prefix("```") {
+        let body = rest.split_once('\n').map(|(_, b)| b).unwrap_or("");
+        return body.trim_end().trim_end_matches("```").trim().to_string();
+    }
+    t.to_string()
 }
 
 /// Ollama tool schema for the `tools` request param.
@@ -506,6 +783,64 @@ mod tests {
     }
 
     #[test]
+    fn create_tools_are_ask_first_and_validate_names() {
+        let cfg = NkoyoConfig::default();
+        for tool in [
+            "create_catalog",
+            "create_schema",
+            "create_notebook",
+            "create_job",
+        ] {
+            let t = tools().into_iter().find(|t| t.name == tool).unwrap();
+            assert_eq!(grade_of(&cfg, &t), ToolGrade::AskFirst, "{tool}");
+        }
+        let ok = |name: &str, args: serde_json::Value| {
+            plan_tool_call(&cfg, &[name.to_string()], name, &args)
+        };
+        let op = ok(
+            "create_schema",
+            serde_json::json!({"catalog": "claims", "name": "raw"}),
+        )
+        .unwrap();
+        assert_eq!(op["sql"], "CREATE SCHEMA \"claims\".\"raw\"");
+        // Injection through a name is refused, not quoted around.
+        assert!(ok(
+            "create_schema",
+            serde_json::json!({"catalog": "c", "name": "x\"; DROP"})
+        )
+        .is_err());
+        assert!(ok("create_catalog", serde_json::json!({"name": "1bad"})).is_err());
+        let nb = ok(
+            "create_notebook",
+            serde_json::json!({"name": "q1", "cells": [{"type": "sql", "source": "SELECT 1"}, {"type": "bash", "source": "rm"}]}),
+        )
+        .unwrap();
+        assert_eq!(nb["path"], "notebooks/q1.json");
+        let doc: serde_json::Value = serde_json::from_str(nb["content"].as_str().unwrap()).unwrap();
+        assert_eq!(doc["cells"].as_array().unwrap().len(), 1); // unknown cell type dropped
+        assert!(ok(
+            "create_notebook",
+            serde_json::json!({"name": "../x", "cells": []})
+        )
+        .is_err());
+        let job = ok(
+            "create_job",
+            serde_json::json!({"name": "nightly", "tasks": []}),
+        )
+        .unwrap();
+        assert!(job.get("username").is_none()); // owner is never model-chosen
+    }
+
+    #[test]
+    fn skill_drafts_lose_their_code_fence() {
+        assert_eq!(
+            strip_fence("```markdown\n---\nname: x\n---\nbody\n```"),
+            "---\nname: x\n---\nbody"
+        );
+        assert_eq!(strip_fence("  plain  "), "plain");
+    }
+
+    #[test]
     fn skills_load_from_home_dir() {
         let dir = tempfile::tempdir().unwrap();
         let skill = dir.path().join(".pebbles/skills/claims-helper");
@@ -513,7 +848,22 @@ mod tests {
         std::fs::write(skill.join("SKILL.md"), "Use the claims catalog for HEDIS.").unwrap();
         let loaded = load_skills(dir.path());
         assert!(loaded.contains("claims-helper"));
-        assert!(loaded.contains("HEDIS"));
+        assert!(loaded.contains("HEDIS")); // no front matter: first line is the description
+    }
+
+    #[test]
+    fn personal_skills_are_indexed_not_inlined() {
+        let dir = tempfile::tempdir().unwrap();
+        let skill = dir.path().join(".pebbles/skills/pdf");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: pdf\ndescription: Work with PDF files.\n---\nhuge body",
+        )
+        .unwrap();
+        let loaded = load_skills(dir.path());
+        assert!(loaded.contains("- pdf: Work with PDF files. (read_file "));
+        assert!(!loaded.contains("huge body"));
     }
 
     #[test]

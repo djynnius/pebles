@@ -94,6 +94,9 @@ class PebblesdClient:
     #: (a first `import matplotlib` builds its font cache for 10–30 s) — the
     #: generic 10 s socket timeout failed every slow-but-healthy cell.
     EXEC_TIMEOUT = 150.0
+    #: An agent turn is several model round-trips (each up to 120 s in
+    #: pebblesd) plus tool calls — a 10 s socket timeout cut every real answer.
+    NKOYO_TIMEOUT = 600.0
 
     def exec_in_session(self, session_id: int, payload: dict) -> dict:
         return self._expect(
@@ -275,6 +278,16 @@ class PebblesdClient:
             "POST",
             "/nkoyo/chat",
             {"username": username, "messages": messages, "approved": approved or []},
+            timeout=self.NKOYO_TIMEOUT,
+        )
+
+    def nkoyo_skill_draft(self, username: str, name: str, description: str) -> dict:
+        """SKILL.md draft from a plain-language description (no tools run)."""
+        return self._expect(
+            "POST",
+            "/nkoyo/skill-draft",
+            {"username": username, "name": name, "description": description},
+            timeout=self.NKOYO_TIMEOUT,
         )
 
     def cancel_reservation(self, engine: str | None = None) -> dict:

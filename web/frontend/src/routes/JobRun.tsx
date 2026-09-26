@@ -73,27 +73,27 @@ export function JobRun() {
 
   return (
     <div style={{ maxWidth: 1080, margin: "0 auto", padding: "34px 40px 60px" }}>
-      <div className="mono" style={{ fontSize: 11.5, color: "var(--text-dim)", marginBottom: 8 }}>
+      <div className="mono" style={{ fontSize: "var(--fs-small)", color: "var(--text-dim)", marginBottom: 8 }}>
         <button type="button" onClick={() => nav("/jobs")} style={crumbBtn}>
           ‹ Jobs
         </button>
       </div>
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
-        <h1 style={{ fontSize: 25, fontWeight: 600, letterSpacing: "-0.5px" }}>{name}</h1>
-        <span className="mono" style={{ fontSize: 12, color: "var(--text-dim)" }}>
+        <h1 style={{ fontSize: "var(--fs-h2-plus)", fontWeight: 600, letterSpacing: "-0.5px" }}>{name}</h1>
+        <span className="mono" style={{ fontSize: "var(--fs-meta)", color: "var(--text-dim)" }}>
           {runId}
         </span>
         {current && (
-          <span style={{ fontSize: 12, fontWeight: 600, color: runColor(current.state) }}>
+          <span style={{ fontSize: "var(--fs-meta)", fontWeight: 600, color: runColor(current.state) }}>
             {current.state}
           </span>
         )}
         {live && (
-          <span style={{ fontSize: 11.5, color: "var(--text-dim)" }}>refreshing every 5 s…</span>
+          <span style={{ fontSize: "var(--fs-small)", color: "var(--text-dim)" }}>refreshing every 5 s…</span>
         )}
       </div>
       {current && (
-        <div className="mono" style={{ fontSize: 11.5, color: "var(--text-dim)", marginTop: 4 }}>
+        <div className="mono" style={{ fontSize: "var(--fs-small)", color: "var(--text-dim)", marginTop: 4 }}>
           {stamp(current.start)} → {stamp(current.end)}{" "}
           {duration(current.start, current.end) && `· ${duration(current.start, current.end)}`}
         </div>
@@ -103,7 +103,7 @@ export function JobRun() {
       <div style={{ ...card, padding: 18, marginTop: 20 }}>
         <div
           style={{
-            fontSize: 11,
+            fontSize: "var(--fs-label)",
             letterSpacing: "0.6px",
             textTransform: "uppercase",
             color: "var(--text-faint)",
@@ -138,27 +138,27 @@ export function JobRun() {
             })}
           </div>
         ) : stripError ? (
-          <div style={{ fontSize: 12.5, color: "var(--err)" }}>
+          <div style={{ fontSize: "var(--fs-body)", color: "var(--err)" }}>
             Couldn't read the run history — {stripError}
           </div>
         ) : runs === null ? (
           <Loading label="Loading run history…" />
         ) : (
-          <div style={{ fontSize: 12.5, color: "var(--text-dim)" }}>
+          <div style={{ fontSize: "var(--fs-body)", color: "var(--text-dim)" }}>
             No run history yet — this job has never been triggered.
           </div>
         )}
-        <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 10 }}>
+        <div style={{ fontSize: "var(--fs-label)", color: "var(--text-dim)", marginTop: 10 }}>
           Oldest ← → latest · click a bar to open that run
         </div>
       </div>
 
       {/* ---- task timeline ------------------------------------------------ */}
-      <h2 style={{ fontSize: 16, fontWeight: 600, margin: "24px 0 12px" }}>Tasks</h2>
+      <h2 style={{ fontSize: "var(--fs-xl)", fontWeight: 600, margin: "24px 0 12px" }}>Tasks</h2>
       {error && <ErrorBlock title="Couldn't read this run" error={error} />}
       {tasks === null && !error && <Loading />}
       {tasks !== null && tasks.length === 0 && !error && (
-        <p style={{ color: "var(--text-dim)", fontSize: 13 }}>
+        <p style={{ color: "var(--text-dim)", fontSize: "var(--fs-base)" }}>
           This run has no task instances yet — Airflow creates them as the DAG starts.
         </p>
       )}
@@ -180,7 +180,7 @@ export function JobRun() {
                   border: "none",
                   background: "transparent",
                   padding: "12px 18px",
-                  fontSize: 13,
+                  fontSize: "var(--fs-base)",
                   color: "var(--text)",
                 }}
               >
@@ -199,13 +199,13 @@ export function JobRun() {
                 <span className="mono" style={{ minWidth: 200 }}>
                   {t.task_id}
                 </span>
-                <span className="mono" style={{ fontSize: 11.5, color: "var(--text-dim)" }}>
+                <span className="mono" style={{ fontSize: "var(--fs-small)", color: "var(--text-dim)" }}>
                   {stamp(t.start)} → {stamp(t.end)}
                 </span>
-                <span style={{ fontSize: 11.5, color: "var(--text-dim)" }}>
+                <span style={{ fontSize: "var(--fs-small)", color: "var(--text-dim)" }}>
                   {duration(t.start, t.end)}
                 </span>
-                <span style={{ marginLeft: "auto", fontSize: 11.5, color: runColor(t.state) }}>
+                <span style={{ marginLeft: "auto", fontSize: "var(--fs-small)", color: runColor(t.state) }}>
                   {t.state || "unknown"}
                 </span>
               </button>
@@ -229,7 +229,7 @@ function Log({ text }: { text: string }) {
         background: "var(--deep-soft)",
         color: "var(--deep-text-2)",
         borderRadius: 12,
-        fontSize: 11.5,
+        fontSize: "var(--fs-small)",
         lineHeight: 1.8,
         maxHeight: 340,
         overflow: "auto",
@@ -272,6 +272,6 @@ const crumbBtn: CSSProperties = {
   background: "transparent",
   padding: 0,
   font: "inherit",
-  fontSize: 11.5,
+  fontSize: "var(--fs-small)",
   color: "var(--text-dim)",
 };

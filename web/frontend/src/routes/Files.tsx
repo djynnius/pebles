@@ -3,6 +3,7 @@ import { api, errorText, type User } from "../api";
 import { InlineConfirm, InlinePanel, SmallButton, TextInput } from "../components/Form";
 import { Switch } from "../components/Page";
 import { ErrorBlock } from "../components/State";
+import { FileIcon, fileKind } from "../components/FileIcon";
 import { Workbench } from "../components/Workbench";
 
 /*
@@ -47,7 +48,8 @@ function readShowHidden(): boolean {
 type Pending =
   | { kind: "delete"; item: FileItem }
   | { kind: "rename"; item: FileItem }
-  | { kind: "mkdir" };
+  | { kind: "mkdir" }
+  | { kind: "newfile" };
 
 interface Menu {
   x: number;
@@ -144,6 +146,10 @@ export function Files({ user }: { user: User }) {
     setPendingName("");
     setPending({ kind: "mkdir" });
   };
+  const onNewFile = () => {
+    setPendingName("");
+    setPending({ kind: "newfile" });
+  };
   const submitPending = () => {
     if (!pending || pendingBusy) return;
     if (pending.kind === "delete") {
@@ -160,6 +166,8 @@ export function Files({ user }: { user: User }) {
       void act(
         api.post("/files/rename", { path: rel(pending.item.name), to: path ? `${path}/${name}` : name }),
       );
+    } else if (pending.kind === "newfile") {
+      void act(api.post("/files/new", { dir: path, name }));
     } else {
       void act(api.post("/files/mkdir", { dir: path, name }));
     }
@@ -212,19 +220,19 @@ export function Files({ user }: { user: User }) {
                     border: "none",
                     borderRadius: 8,
                     padding: "7px 10px",
-                    fontSize: 12.5,
+                    fontSize: "var(--fs-body)",
                     fontFamily: "inherit",
                     fontWeight: on ? 600 : 400,
                     background: on ? "var(--accent-tint)" : "transparent",
                     color: on ? "var(--accent-tint-ink)" : "var(--text-mid)",
                   }}
                 >
-                  <span style={{ fontSize: 12, width: 12 }}>{s.glyph}</span>
+                  <span style={{ fontSize: "var(--fs-meta)", width: 12 }}>{s.glyph}</span>
                   {s.label}
                 </button>
               );
             })}
-            <div style={{ padding: "10px 10px 0", fontSize: 11, color: "var(--text-dim)" }}>
+            <div style={{ padding: "10px 10px 0", fontSize: "var(--fs-label)", color: "var(--text-dim)" }}>
               Right-click a file for actions
             </div>
           </div>
@@ -237,7 +245,7 @@ export function Files({ user }: { user: User }) {
         ) : (
           <>
             {/* breadcrumb */}
-            <div className="mono" style={{ fontSize: 11.5, color: "var(--text-dim)", marginBottom: 10 }}>
+            <div className="mono" style={{ fontSize: "var(--fs-small)", color: "var(--text-dim)", marginBottom: 10 }}>
               <button type="button" onClick={() => setPath("")} style={crumbBtn}>
                 Home
               </button>
@@ -266,10 +274,10 @@ export function Files({ user }: { user: User }) {
               }}
             >
               <div style={{ flex: 1, minWidth: 220 }}>
-                <h1 style={{ fontSize: 24, fontWeight: 600, letterSpacing: "-0.4px" }}>
+                <h1 style={{ fontSize: "var(--fs-h2)", fontWeight: 600, letterSpacing: "-0.4px" }}>
                   {crumbs.length ? crumbs[crumbs.length - 1] : "Home"}
                 </h1>
-                <div className="mono" style={{ fontSize: 11.5, color: "var(--text-dim)", marginTop: 4 }}>
+                <div className="mono" style={{ fontSize: "var(--fs-small)", color: "var(--text-dim)", marginTop: 4 }}>
                   /home/{user.username}
                   {path ? `/${path}` : ""} · uid {user.uid} ·{" "}
                   {items ? `${visible.length} item${visible.length === 1 ? "" : "s"}` : "…"}
@@ -308,7 +316,7 @@ export function Files({ user }: { user: User }) {
                       border: "none",
                       borderRadius: 11,
                       fontWeight: 600,
-                      fontSize: 12.5,
+                      fontSize: "var(--fs-body)",
                       padding: "8px 16px",
                     }}
                   >
@@ -321,6 +329,13 @@ export function Files({ user }: { user: User }) {
                         onClick={() => {
                           setNewMenu(false);
                           onNewFolder();
+                        }}
+                      />
+                      <MenuItem
+                        label="New file…"
+                        onClick={() => {
+                          setNewMenu(false);
+                          onNewFile();
                         }}
                       />
                       <MenuItem
@@ -360,7 +375,7 @@ export function Files({ user }: { user: User }) {
                 border: "1px solid var(--border)",
               }}
             >
-              <span style={{ color: "var(--text-faint)", fontSize: 12 }}>⌕</span>
+              <span style={{ color: "var(--text-faint)", fontSize: "var(--fs-meta)" }}>⌕</span>
               <input
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
@@ -371,7 +386,7 @@ export function Files({ user }: { user: User }) {
                   border: "none",
                   background: "transparent",
                   color: "var(--text)",
-                  fontSize: 12.5,
+                  fontSize: "var(--fs-body)",
                   outline: "none",
                 }}
               />
@@ -391,7 +406,7 @@ export function Files({ user }: { user: User }) {
                 onCancel={() => setPending(null)}
               />
             )}
-            {(pending?.kind === "rename" || pending?.kind === "mkdir") && (
+            {(pending?.kind === "rename" || pending?.kind === "mkdir" || pending?.kind === "newfile") && (
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
@@ -400,15 +415,31 @@ export function Files({ user }: { user: User }) {
               >
                 <InlinePanel>
                   <span style={{ color: "var(--text-mid)", flex: "0 0 auto" }}>
-                    {pending.kind === "rename" ? `Rename “${pending.item.name}” to` : "New folder"}
+                    {pending.kind === "rename"
+                      ? `Rename “${pending.item.name}” to`
+                      : pending.kind === "newfile"
+                        ? "New file"
+                        : "New folder"}
                   </span>
                   <div style={{ flex: "1 1 220px", minWidth: 180 }}>
                     <TextInput
                       value={pendingName}
                       onChange={setPendingName}
                       autoFocus
-                      ariaLabel={pending.kind === "rename" ? "New name" : "Folder name"}
-                      placeholder={pending.kind === "rename" ? undefined : "folder-name"}
+                      ariaLabel={
+                        pending.kind === "rename"
+                          ? "New name"
+                          : pending.kind === "newfile"
+                            ? "File name"
+                            : "Folder name"
+                      }
+                      placeholder={
+                        pending.kind === "rename"
+                          ? undefined
+                          : pending.kind === "newfile"
+                            ? "analysis.py"
+                            : "folder-name"
+                      }
                       style={{ padding: "6px 10px", borderRadius: 9 }}
                     />
                   </div>
@@ -468,14 +499,12 @@ export function Files({ user }: { user: User }) {
                             background: "transparent",
                             padding: 0,
                             fontFamily: "inherit",
-                            fontSize: 13,
+                            fontSize: "var(--fs-base)",
                             color: "var(--text)",
                             cursor: item.dir ? "pointer" : "default",
                           }}
                         >
-                          <span style={{ color: "var(--text-faint)", fontSize: 12 }}>
-                            {item.dir ? "▸" : "▪"}
-                          </span>
+                          <FileIcon kind={fileKind(item.name, item.dir, path)} />
                           {item.name}
                           {managed(item) && (
                             <span
@@ -485,7 +514,7 @@ export function Files({ user }: { user: User }) {
                                 borderRadius: 20,
                                 background: "var(--track)",
                                 color: "var(--text-dim)",
-                                fontSize: 10,
+                                fontSize: "var(--fs-xs)",
                                 fontWeight: 600,
                                 letterSpacing: "0.3px",
                               }}
@@ -502,7 +531,7 @@ export function Files({ user }: { user: User }) {
                       <td style={{ ...td, color: "var(--text-dim)" }}>
                         {new Date(item.mtime * 1000).toLocaleString()}
                         {!item.dir && (
-                          <span style={{ marginLeft: 8, fontSize: 11.5 }}>{size(item.size)}</span>
+                          <span style={{ marginLeft: 8, fontSize: "var(--fs-small)" }}>{size(item.size)}</span>
                         )}
                       </td>
                       <td style={{ ...td, textAlign: "right", width: 40 }}>
@@ -518,7 +547,7 @@ export function Files({ user }: { user: User }) {
                             border: "none",
                             background: "transparent",
                             color: "var(--text-faint)",
-                            fontSize: 14,
+                            fontSize: "var(--fs-md)",
                             padding: "0 4px",
                           }}
                         >
@@ -588,7 +617,7 @@ export function Files({ user }: { user: User }) {
             </>
           )}
           {managed(menu.item) && (
-            <div style={{ padding: "8px 14px", fontSize: 11.5, color: "var(--text-dim)" }}>
+            <div style={{ padding: "8px 14px", fontSize: "var(--fs-small)", color: "var(--text-dim)" }}>
               Managed by Pebbles
             </div>
           )}
@@ -618,7 +647,7 @@ function MenuItem({
         border: "none",
         background: "transparent",
         padding: "8px 14px",
-        fontSize: 12.5,
+        fontSize: "var(--fs-body)",
         fontFamily: "inherit",
         color: danger ? "var(--err)" : "var(--text-mid)",
       }}
@@ -631,8 +660,8 @@ function MenuItem({
 function SectionStub({ label }: { label: string }) {
   return (
     <div style={{ maxWidth: 420, margin: "90px auto 0", textAlign: "center" }}>
-      <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>{label} is empty</div>
-      <div style={{ fontSize: 12.5, color: "var(--text-dim)" }}>
+      <div style={{ fontSize: "var(--fs-lg)", fontWeight: 600, marginBottom: 6 }}>{label} is empty</div>
+      <div style={{ fontSize: "var(--fs-body)", color: "var(--text-dim)" }}>
         Only your home directory is live today — {label.toLowerCase()} arrives with sharing.
       </div>
     </div>
@@ -670,7 +699,7 @@ const crumbBtn: CSSProperties = {
   background: "transparent",
   padding: 0,
   font: "inherit",
-  fontSize: 11.5,
+  fontSize: "var(--fs-small)",
   color: "var(--text-dim)",
 };
 
@@ -678,7 +707,7 @@ const th: CSSProperties = {
   textAlign: "left",
   background: "var(--surface-alt)",
   borderBottom: "1px solid var(--border)",
-  fontSize: 11,
+  fontSize: "var(--fs-label)",
   fontWeight: 600,
   letterSpacing: "0.5px",
   textTransform: "uppercase",
@@ -689,7 +718,7 @@ const th: CSSProperties = {
 const td: CSSProperties = {
   padding: "10px 16px",
   borderBottom: "1px solid var(--border-soft)",
-  fontSize: 13,
+  fontSize: "var(--fs-base)",
 };
 
 const ghost: CSSProperties = {
@@ -697,6 +726,6 @@ const ghost: CSSProperties = {
   color: "var(--text-mid)",
   border: "1px solid var(--border)",
   borderRadius: 11,
-  fontSize: 12.5,
+  fontSize: "var(--fs-body)",
   padding: "8px 14px",
 };

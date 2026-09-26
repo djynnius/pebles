@@ -57,7 +57,7 @@ export function Home({ user }: { user: User }) {
     <div style={{ maxWidth: 1080, margin: "0 auto", padding: "34px 40px 60px" }}>
       <div
         style={{
-          fontSize: 11,
+          fontSize: "var(--fs-label)",
           letterSpacing: "0.8px",
           textTransform: "uppercase",
           color: "var(--text-faint)",
@@ -66,7 +66,7 @@ export function Home({ user }: { user: User }) {
       >
         {new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}
       </div>
-      <h1 style={{ fontSize: 30, fontWeight: 600, letterSpacing: "-0.5px", marginBottom: 24 }}>
+      <h1 style={{ fontSize: "var(--fs-display)", fontWeight: 600, letterSpacing: "-0.5px", marginBottom: 24 }}>
         {greeting()}, {user.username}
       </h1>
 
@@ -93,11 +93,11 @@ export function Home({ user }: { user: User }) {
             padding: 16,
           }}
         >
-          <div style={{ fontSize: 11, letterSpacing: "0.7px", textTransform: "uppercase", color: "var(--accent)", minHeight: 30 }}>
+          <div style={{ fontSize: "var(--fs-label)", letterSpacing: "0.7px", textTransform: "uppercase", color: "var(--accent)", minHeight: 30 }}>
             Licence cost
           </div>
-          <div style={{ fontSize: 26, fontWeight: 600 }}>
-            $0 <span style={{ fontSize: 13, color: "var(--deep-muted)" }}>/ month</span>
+          <div style={{ fontSize: "var(--fs-h1)", fontWeight: 600 }}>
+            $0 <span style={{ fontSize: "var(--fs-base)", color: "var(--deep-muted)" }}>/ month</span>
           </div>
         </div>
       </div>
@@ -118,7 +118,7 @@ export function Home({ user }: { user: User }) {
             border: "none",
             background: "transparent",
             color: "var(--text)",
-            fontSize: 14,
+            fontSize: "var(--fs-md)",
             outline: "none",
           }}
         />
@@ -131,7 +131,7 @@ export function Home({ user }: { user: User }) {
             border: "none",
             borderRadius: 11,
             fontWeight: 600,
-            fontSize: 13,
+            fontSize: "var(--fs-base)",
             padding: "8px 16px",
           }}
         >
@@ -152,7 +152,7 @@ export function Home({ user }: { user: User }) {
         ) : recents === null ? (
           <Loading style={{ padding: 18 }} />
         ) : recents.length === 0 ? (
-          <div style={{ padding: 18, color: "var(--text-dim)", fontSize: 13 }}>
+          <div style={{ padding: 18, color: "var(--text-dim)", fontSize: "var(--fs-base)" }}>
             Your recent notebooks, queries, and dashboards will appear here.
           </div>
         ) : (
@@ -200,7 +200,7 @@ function RecentRow({ item, first, onOpen }: { item: Recent; first: boolean; onOp
         background: hover ? "var(--hover)" : "transparent",
         padding: "10px 18px",
         color: "var(--text)",
-        fontSize: 13,
+        fontSize: "var(--fs-base)",
       }}
     >
       <span
@@ -211,7 +211,7 @@ function RecentRow({ item, first, onOpen }: { item: Recent; first: boolean; onOp
       </span>
       <span
         className="mono"
-        style={{ fontSize: 12.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}
+        style={{ fontSize: "var(--fs-body)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}
       >
         {item.name}
       </span>
@@ -219,7 +219,7 @@ function RecentRow({ item, first, onOpen }: { item: Recent; first: boolean; onOp
         <span
           className="mono"
           style={{
-            fontSize: 11,
+            fontSize: "var(--fs-label)",
             color: "var(--accent-deep)",
             border: "1px solid var(--border)",
             borderRadius: 8,
@@ -230,10 +230,10 @@ function RecentRow({ item, first, onOpen }: { item: Recent; first: boolean; onOp
           {item.catalog}
         </span>
       )}
-      <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--text-dim)", flexShrink: 0 }}>
+      <span style={{ marginLeft: "auto", fontSize: "var(--fs-meta)", color: "var(--text-dim)", flexShrink: 0 }}>
         {relativeTime(item.at)}
       </span>
-      <span style={{ width: 72, textAlign: "right", fontSize: 11.5, color: "var(--text-faint)", flexShrink: 0 }}>
+      <span style={{ width: 72, textAlign: "right", fontSize: "var(--fs-small)", color: "var(--text-faint)", flexShrink: 0 }}>
         {KIND_NAME[item.kind]}
       </span>
     </button>
@@ -243,11 +243,11 @@ function RecentRow({ item, first, onOpen }: { item: Recent; first: boolean; onOp
 function Kpi({ label, value, qualifier }: { label: string; value: string; qualifier: string }) {
   return (
     <Card style={{ padding: 16 }}>
-      <div style={{ fontSize: 11, letterSpacing: "0.7px", textTransform: "uppercase", color: "var(--text-faint)", minHeight: 30 }}>
+      <div style={{ fontSize: "var(--fs-label)", letterSpacing: "0.7px", textTransform: "uppercase", color: "var(--text-faint)", minHeight: 30 }}>
         {label}
       </div>
-      <div style={{ fontSize: 26, fontWeight: 600 }}>
-        {value} <span style={{ fontSize: 13, color: "var(--text-dim)" }}>{qualifier}</span>
+      <div style={{ fontSize: "var(--fs-h1)", fontWeight: 600 }}>
+        {value} <span style={{ fontSize: "var(--fs-base)", color: "var(--text-dim)" }}>{qualifier}</span>
       </div>
     </Card>
   );

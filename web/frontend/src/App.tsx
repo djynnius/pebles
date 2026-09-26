@@ -126,7 +126,7 @@ function Boot() {
     >
       <div style={{ display: "grid", justifyItems: "center", gap: 10 }}>
         <Wordmark size={34} tone="surface" />
-        <span style={{ fontSize: 12, color: "var(--text-dim)" }}>Starting…</span>
+        <span style={{ fontSize: "var(--fs-meta)", color: "var(--text-dim)" }}>Starting…</span>
       </div>
     </div>
   );

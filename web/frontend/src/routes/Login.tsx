@@ -52,14 +52,14 @@ export function Login({
         }}
       >
         <Wordmark size={52} />
-        <h2 style={{ fontSize: 22, fontWeight: 600, maxWidth: 360, lineHeight: 1.4 }}>
+        <h2 style={{ fontSize: "var(--fs-h3)", fontWeight: 600, maxWidth: 360, lineHeight: 1.4 }}>
           Your lake, your engines, your hardware.
         </h2>
         <p style={{ color: "var(--deep-muted)", maxWidth: 380, lineHeight: 1.7 }}>
           A complete data platform on hardware you already own. No licence cost, no
           metered compute, no data leaving your network.
         </p>
-        <p className="mono" style={{ fontSize: 11, color: "var(--deep-faint)", marginTop: 24 }}>
+        <p className="mono" style={{ fontSize: "var(--fs-label)", color: "var(--deep-faint)", marginTop: 24 }}>
           v{APP_VERSION} · self-hosted
         </p>
       </div>
@@ -67,7 +67,7 @@ export function Login({
       {/* right form */}
       <div style={{ flex: 1, display: "grid", placeItems: "center", padding: 24 }}>
         <form onSubmit={submit} style={{ width: 370, maxWidth: "100%" }}>
-          <h1 style={{ fontSize: 24, fontWeight: 600, marginBottom: 6 }}>Sign in</h1>
+          <h1 style={{ fontSize: "var(--fs-h2)", fontWeight: 600, marginBottom: 6 }}>Sign in</h1>
           <p style={{ color: "var(--text-dim)", marginBottom: 24 }}>
             Use your Pebbles username and password.
           </p>
@@ -81,7 +81,7 @@ export function Login({
                 borderRadius: 10,
                 background: "var(--warn-tint)",
                 color: "var(--warn)",
-                fontSize: 12.5,
+                fontSize: "var(--fs-body)",
               }}
             >
               You were signed out — your session expired. Sign in to pick up where you left off.
@@ -119,13 +119,13 @@ export function Login({
                     color: "var(--deep-text)",
                     display: "grid",
                     placeItems: "center",
-                    fontSize: 12,
+                    fontSize: "var(--fs-meta)",
                     fontWeight: 600,
                   }}
                 >
                   {username.slice(0, 2).toUpperCase()}
                 </span>
-                <span className="mono" style={{ fontSize: 13 }}>
+                <span className="mono" style={{ fontSize: "var(--fs-base)" }}>
                   {username}
                 </span>
                 <button
@@ -140,7 +140,7 @@ export function Login({
                     border: "none",
                     background: "transparent",
                     color: "var(--accent-ink)",
-                    fontSize: 12,
+                    fontSize: "var(--fs-meta)",
                     padding: 0,
                   }}
                 >
@@ -176,7 +176,7 @@ export function Login({
                 background: "var(--accent-tint)",
                 border: "1px solid var(--err)",
                 color: "var(--err)",
-                fontSize: 13,
+                fontSize: "var(--fs-base)",
               }}
             >
               {error}
@@ -190,7 +190,7 @@ export function Login({
 
 const label: React.CSSProperties = {
   display: "block",
-  fontSize: 11,
+  fontSize: "var(--fs-label)",
   letterSpacing: "0.6px",
   textTransform: "uppercase",
   color: "var(--text-faint)",
@@ -203,7 +203,7 @@ const input: React.CSSProperties = {
   borderRadius: 12,
   background: "var(--surface)",
   color: "var(--text)",
-  fontSize: 14,
+  fontSize: "var(--fs-md)",
   fontFamily: "'IBM Plex Mono', monospace",
   outline: "none",
 };
@@ -216,7 +216,7 @@ const cta: React.CSSProperties = {
   background: "var(--accent)",
   color: "var(--on-accent)",
   fontWeight: 600,
-  fontSize: 14,
+  fontSize: "var(--fs-md)",
 };
 const ctaBusy: React.CSSProperties = {
   background: "var(--track)",

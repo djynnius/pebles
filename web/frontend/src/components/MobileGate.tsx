@@ -19,12 +19,12 @@ export function MobileGate() {
       }}
     >
       <Wordmark size={40} />
-      <h1 style={{ fontSize: 24, fontWeight: 700 }}>Pebbles needs a bigger screen.</h1>
+      <h1 style={{ fontSize: "var(--fs-h2)", fontWeight: 700 }}>Pebbles needs a bigger screen.</h1>
       <p style={{ color: "var(--deep-muted)", maxWidth: 340, lineHeight: 1.7 }}>
         Pebbles is a desktop workspace — lakes, notebooks, and pipelines want room
         to breathe. Open it on a laptop or larger display.
       </p>
-      <p className="mono" style={{ fontSize: 11, color: "var(--deep-faint)", marginTop: 12 }}>
+      <p className="mono" style={{ fontSize: "var(--fs-label)", color: "var(--deep-faint)", marginTop: 12 }}>
         v{APP_VERSION} · self-hosted
       </p>
     </div>

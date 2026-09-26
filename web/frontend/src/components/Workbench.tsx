@@ -95,8 +95,8 @@ export function Workbench({ rail, panels, tabs, defaultPanel = null, children }:
               aria-pressed={on}
               onClick={() => setOpen((cur) => (cur === item.id ? null : item.id))}
               style={{
-                width: 32,
-                height: 32,
+                width: 34,
+                height: 34,
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
@@ -159,7 +159,7 @@ export function Workbench({ rail, panels, tabs, defaultPanel = null, children }:
           >
             <span
               style={{
-                fontSize: 10.5,
+                fontSize: "var(--fs-eyebrow)",
                 fontWeight: 600,
                 letterSpacing: "0.8px",
                 textTransform: "uppercase",
@@ -180,7 +180,7 @@ export function Workbench({ rail, panels, tabs, defaultPanel = null, children }:
                 borderRadius: 6,
                 background: "transparent",
                 color: "var(--text-faint)",
-                fontSize: 12,
+                fontSize: "var(--fs-meta)",
                 lineHeight: 1,
               }}
             >
@@ -236,7 +236,7 @@ function TabStrip({ tabs }: { tabs: WorkbenchTabs }) {
               flexShrink: 0,
               padding: "9px 12px",
               borderRight: "1px solid var(--border)",
-              fontSize: 12.5,
+              fontSize: "var(--fs-body)",
               whiteSpace: "nowrap",
               cursor: "pointer",
               background: on ? "var(--surface)" : "transparent",
@@ -275,7 +275,7 @@ function TabStrip({ tabs }: { tabs: WorkbenchTabs }) {
             border: "none",
             background: "transparent",
             color: "var(--text-faint)",
-            fontSize: 13,
+            fontSize: "var(--fs-base)",
           }}
         >
           +
@@ -295,7 +295,7 @@ const closeBtn: CSSProperties = {
   borderRadius: 5,
   background: "transparent",
   color: "var(--text-faint)",
-  fontSize: 10,
+  fontSize: "var(--fs-xs)",
   lineHeight: 1,
 };
 
@@ -303,8 +303,8 @@ const closeBtn: CSSProperties = {
 export function RailIcon({ name }: { name: WorkbenchIconName }) {
   return (
     <svg
-      width="16"
-      height="16"
+      width="18"
+      height="18"
       viewBox="0 0 16 16"
       fill="none"
       stroke="currentColor"

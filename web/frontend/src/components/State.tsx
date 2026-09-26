@@ -35,7 +35,7 @@ export function ErrorBlock({
         borderRadius: 12,
         padding: "12px 14px",
         color: "var(--err)",
-        fontSize: 12.5,
+        fontSize: "var(--fs-body)",
         marginBottom: 14,
         ...style,
       }}
@@ -72,13 +72,13 @@ export function Empty({
   const content = (
     <>
       {glyph && (
-        <div style={{ fontSize: 24, color: "var(--text-faint)", marginBottom: 8 }}>{glyph}</div>
+        <div style={{ fontSize: "var(--fs-h2)", color: "var(--text-faint)", marginBottom: 8 }}>{glyph}</div>
       )}
-      <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>{title}</div>
+      <div style={{ fontSize: "var(--fs-lg)", fontWeight: 600, marginBottom: 6 }}>{title}</div>
       {body && (
         <div
           style={{
-            fontSize: 12.5,
+            fontSize: "var(--fs-body)",
             color: "var(--text-dim)",
             maxWidth: 420,
             margin: "0 auto",
@@ -119,7 +119,7 @@ export function Loading({ label = "Loading…", style }: { label?: string; style
   return (
     <div
       aria-live="polite"
-      style={{ fontSize: 12.5, color: "var(--text-dim)", padding: "4px 0", ...style }}
+      style={{ fontSize: "var(--fs-body)", color: "var(--text-dim)", padding: "4px 0", ...style }}
     >
       {label}
     </div>
@@ -138,7 +138,7 @@ export function EmptyAction({ onClick, children }: { onClick: () => void; childr
         border: "none",
         borderRadius: 11,
         fontWeight: 600,
-        fontSize: 13,
+        fontSize: "var(--fs-base)",
         padding: "9px 18px",
       }}
     >

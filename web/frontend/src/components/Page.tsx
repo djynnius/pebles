@@ -21,7 +21,7 @@ export function Page({
           {eyebrow && (
             <div
               style={{
-                fontSize: 11,
+                fontSize: "var(--fs-label)",
                 letterSpacing: "0.8px",
                 textTransform: "uppercase",
                 color: "var(--text-faint)",
@@ -31,7 +31,7 @@ export function Page({
               {eyebrow}
             </div>
           )}
-          <h1 style={{ fontSize: 26, fontWeight: 600, letterSpacing: "-0.5px" }}>{title}</h1>
+          <h1 style={{ fontSize: "var(--fs-h1)", fontWeight: 600, letterSpacing: "-0.5px" }}>{title}</h1>
         </div>
         {actions && <div style={{ display: "flex", gap: 10 }}>{actions}</div>}
       </div>
@@ -78,7 +78,7 @@ export function AccentButton({
         border: "none",
         borderRadius: 11,
         fontWeight: 600,
-        fontSize: 13,
+        fontSize: "var(--fs-base)",
         padding: "8px 16px",
       }}
     >
@@ -128,7 +128,7 @@ export function Switch({
           }}
         />
       </button>
-      <span style={{ fontSize: 13, color: "var(--text-mid)" }}>{label}</span>
+      <span style={{ fontSize: "var(--fs-base)", color: "var(--text-mid)" }}>{label}</span>
     </div>
   );
 }
@@ -155,7 +155,7 @@ export function GhostButton({
         color: "var(--text-mid)",
         border: "1px solid var(--border)",
         borderRadius: 11,
-        fontSize: 12.5,
+        fontSize: "var(--fs-body)",
         padding: "8px 14px",
       }}
     >

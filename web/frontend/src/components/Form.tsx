@@ -13,7 +13,7 @@ export const inputStyle: CSSProperties = {
   borderRadius: 12,
   background: "var(--surface)",
   color: "var(--text)",
-  fontSize: 13,
+  fontSize: "var(--fs-base)",
   fontFamily: "'IBM Plex Mono', monospace",
   outline: "none",
 };
@@ -24,7 +24,7 @@ export const selectStyle: CSSProperties = {
   borderRadius: 11,
   background: "var(--surface)",
   color: "var(--text)",
-  fontSize: 12.5,
+  fontSize: "var(--fs-body)",
 };
 
 /** Uppercase eyebrow label above a control. */
@@ -33,7 +33,7 @@ export function Field({ label, children, hint }: { label: string; children: Reac
     <label style={{ display: "block" }}>
       <div
         style={{
-          fontSize: 11,
+          fontSize: "var(--fs-label)",
           letterSpacing: "0.6px",
           textTransform: "uppercase",
           color: "var(--text-faint)",
@@ -43,7 +43,7 @@ export function Field({ label, children, hint }: { label: string; children: Reac
         {label}
       </div>
       {children}
-      {hint && <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 5 }}>{hint}</div>}
+      {hint && <div style={{ fontSize: "var(--fs-label)", color: "var(--text-dim)", marginTop: 5 }}>{hint}</div>}
     </label>
   );
 }
@@ -98,7 +98,7 @@ export function Badge({ tone, children }: { tone: Tone; children: ReactNode }) {
         display: "inline-block",
         padding: "3px 9px",
         borderRadius: 20,
-        fontSize: 10.5,
+        fontSize: "var(--fs-eyebrow)",
         fontWeight: 600,
         letterSpacing: "0.3px",
         whiteSpace: "nowrap",
@@ -149,7 +149,7 @@ export function SmallButton({
       style={{
         ...look,
         borderRadius: 9,
-        fontSize: 12,
+        fontSize: "var(--fs-meta)",
         padding: "5px 11px",
         whiteSpace: "nowrap",
         opacity: disabled ? 0.5 : 1,
@@ -182,7 +182,7 @@ export function InlinePanel({
         alignItems: "center",
         gap: 10,
         flexWrap: "wrap",
-        fontSize: 12.5,
+        fontSize: "var(--fs-body)",
         ...style,
       }}
     >
@@ -221,7 +221,7 @@ export function InlineConfirm({
         <div style={{ fontWeight: 600 }}>{message}</div>
         {children}
         {error && (
-          <div role="alert" className="mono" style={{ color: "var(--err)", marginTop: 6, fontSize: 12 }}>
+          <div role="alert" className="mono" style={{ color: "var(--err)", marginTop: 6, fontSize: "var(--fs-meta)" }}>
             {error}
           </div>
         )}
@@ -243,7 +243,7 @@ export function FormMessage({ tone, children }: { tone: "ok" | "err"; children: 
       role={tone === "err" ? "alert" : "status"}
       className={tone === "err" ? "mono" : undefined}
       style={{
-        fontSize: 12,
+        fontSize: "var(--fs-meta)",
         color: tone === "ok" ? "var(--ok-ink)" : "var(--err)",
         overflowWrap: "break-word",
       }}

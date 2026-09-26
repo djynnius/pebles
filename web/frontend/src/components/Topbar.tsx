@@ -26,7 +26,7 @@ export function Topbar({ user, onSignOut }: { user: User; onSignOut: () => void 
       <span
         className="mono"
         style={{
-          fontSize: 11.5,
+          fontSize: "var(--fs-small)",
           color: "var(--accent-deep)",
           border: "1px solid var(--border)",
           borderRadius: 8,
@@ -49,7 +49,7 @@ export function Topbar({ user, onSignOut }: { user: User; onSignOut: () => void 
             color: "var(--deep-text)",
             display: "grid",
             placeItems: "center",
-            fontSize: 12,
+            fontSize: "var(--fs-meta)",
             fontWeight: 600,
           }}
         >
@@ -87,7 +87,7 @@ const iconBtn: React.CSSProperties = {
   border: "1px solid var(--border)",
   background: "var(--surface)",
   color: "var(--text-mid)",
-  fontSize: 14,
+  fontSize: "var(--fs-md)",
 };
 
 /* ---- global search (spec §3 topbar) ------------------------------------- */
@@ -233,7 +233,7 @@ function GlobalSearch() {
           borderRadius: 11,
           padding: "0 12px",
           color: "var(--text-faint)",
-          fontSize: 13,
+          fontSize: "var(--fs-base)",
         }}
       >
         <span aria-hidden="true">⌕</span>
@@ -262,10 +262,10 @@ function GlobalSearch() {
             background: "transparent",
             outline: "none",
             color: "var(--text)",
-            fontSize: 13,
+            fontSize: "var(--fs-base)",
           }}
         />
-        <span className="mono" aria-hidden="true" style={{ fontSize: 11 }}>
+        <span className="mono" aria-hidden="true" style={{ fontSize: "var(--fs-label)" }}>
           {IS_MAC ? "⌘K" : "Ctrl K"}
         </span>
       </div>
@@ -307,7 +307,7 @@ function GlobalSearch() {
               <div key={g.kind} role="group" aria-label={KIND_LABEL[g.kind]}>
                 <div
                   style={{
-                    fontSize: 10.5,
+                    fontSize: "var(--fs-eyebrow)",
                     letterSpacing: "0.8px",
                     textTransform: "uppercase",
                     color: "var(--text-faint)",
@@ -342,7 +342,7 @@ function GlobalSearch() {
                         cursor: "pointer",
                         background: on ? "var(--hover)" : "transparent",
                         color: "var(--text)",
-                        fontSize: 13,
+                        fontSize: "var(--fs-base)",
                       }}
                     >
                       <span
@@ -359,7 +359,7 @@ function GlobalSearch() {
                       <span
                         className="mono"
                         style={{
-                          fontSize: 12.5,
+                          fontSize: "var(--fs-body)",
                           overflow: "hidden",
                           textOverflow: "ellipsis",
                           whiteSpace: "nowrap",
@@ -373,7 +373,7 @@ function GlobalSearch() {
                           className="mono"
                           style={{
                             marginLeft: "auto",
-                            fontSize: 11,
+                            fontSize: "var(--fs-label)",
                             color: "var(--text-dim)",
                             flexShrink: 0,
                           }}
@@ -395,6 +395,6 @@ function GlobalSearch() {
 
 const panelNote: React.CSSProperties = {
   padding: "10px 14px",
-  fontSize: 12.5,
+  fontSize: "var(--fs-body)",
   color: "var(--text-dim)",
 };

@@ -22,7 +22,7 @@ export function Table({ head, children }: { head: string[]; children: ReactNode 
                   textAlign: "left",
                   background: "var(--surface-alt)",
                   borderBottom: "1px solid var(--border)",
-                  fontSize: 11,
+                  fontSize: "var(--fs-label)",
                   fontWeight: 600,
                   letterSpacing: "0.5px",
                   textTransform: "uppercase",
@@ -59,7 +59,7 @@ export function Td({
       style={{
         padding: "11px 16px",
         borderBottom: "1px solid var(--border-soft)",
-        fontSize: mono ? 12.5 : 13,
+        fontSize: mono ? "var(--fs-body)" : "var(--fs-base)",
         ...style,
       }}
     >

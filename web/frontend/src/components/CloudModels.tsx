@@ -15,7 +15,7 @@ export function CloudModelsWarning({ models, style }: { models: string[]; style?
         border: "1px solid var(--warn)",
         borderRadius: 10,
         padding: "8px 10px",
-        fontSize: 11.5,
+        fontSize: "var(--fs-small)",
         lineHeight: 1.5,
         overflowWrap: "break-word",
         ...style,

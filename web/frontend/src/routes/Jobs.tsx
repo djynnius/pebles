@@ -222,12 +222,12 @@ export function Jobs() {
               background: "transparent",
               outline: "none",
               color: "var(--text)",
-              fontSize: 12.5,
+              fontSize: "var(--fs-body)",
               width: 180,
             }}
           />
         </div>
-        <span style={{ fontSize: 12, color: "var(--text-dim)" }}>
+        <span style={{ fontSize: "var(--fs-meta)", color: "var(--text-dim)" }}>
           Workflows run on your engines as their owner — no Airflow UI, ever.
         </span>
       </div>
@@ -289,7 +289,7 @@ export function Jobs() {
                       border: "none",
                       background: "transparent",
                       padding: 0,
-                      fontSize: 13,
+                      fontSize: "var(--fs-base)",
                       fontWeight: 500,
                       color: "var(--text)",
                       display: "flex",
@@ -442,7 +442,7 @@ function RunHistory({
             border: "none",
             background: "transparent",
             padding: "8px 16px 8px 52px",
-            fontSize: 12.5,
+            fontSize: "var(--fs-body)",
             color: "var(--text-mid)",
           }}
         >
@@ -458,13 +458,13 @@ function RunHistory({
           <span className="mono" style={{ color: "var(--text)", minWidth: 260 }}>
             {r.run_id}
           </span>
-          <span className="mono" style={{ fontSize: 11.5, color: "var(--text-dim)" }}>
+          <span className="mono" style={{ fontSize: "var(--fs-small)", color: "var(--text-dim)" }}>
             {stamp(r.start)} → {stamp(r.end)}
           </span>
-          <span style={{ fontSize: 11.5, color: "var(--text-dim)" }}>
+          <span style={{ fontSize: "var(--fs-small)", color: "var(--text-dim)" }}>
             {duration(r.start, r.end)}
           </span>
-          <span style={{ marginLeft: "auto", fontSize: 11.5, color: runColor(r.state) }}>
+          <span style={{ marginLeft: "auto", fontSize: "var(--fs-small)", color: runColor(r.state) }}>
             {r.state || "unknown"}
           </span>
         </button>
@@ -478,12 +478,12 @@ const rowBtn: CSSProperties = {
   background: "var(--surface)",
   color: "var(--text-mid)",
   borderRadius: 11,
-  fontSize: 11.5,
+  fontSize: "var(--fs-small)",
   padding: "5px 10px",
 };
 
 const emptyRow: CSSProperties = {
   padding: "12px 16px 12px 52px",
-  fontSize: 12.5,
+  fontSize: "var(--fs-body)",
   color: "var(--text-dim)",
 };

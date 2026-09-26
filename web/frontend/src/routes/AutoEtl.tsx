@@ -239,15 +239,15 @@ export function AutoEtl() {
 
   return (
     <div style={{ maxWidth: 1080, margin: "0 auto", padding: "34px 40px 60px" }}>
-      <div className="mono" style={{ fontSize: 11.5, color: "var(--text-dim)", marginBottom: 8 }}>
+      <div className="mono" style={{ fontSize: "var(--fs-small)", color: "var(--text-dim)", marginBottom: 8 }}>
         <button type="button" onClick={() => nav("/ingest")} style={crumbBtn}>
           ‹ Data Ingestion
         </button>
       </div>
-      <h1 style={{ fontSize: 25, fontWeight: 600, letterSpacing: "-0.5px", marginBottom: 6 }}>
+      <h1 style={{ fontSize: "var(--fs-h2-plus)", fontWeight: 600, letterSpacing: "-0.5px", marginBottom: 6 }}>
         Auto ETL
       </h1>
-      <p style={{ fontSize: 12.5, color: "var(--text-dim)", marginBottom: 22, maxWidth: 640 }}>
+      <p style={{ fontSize: "var(--fs-body)", color: "var(--text-dim)", marginBottom: 22, maxWidth: 640 }}>
         Point it at a raw file or table. It reads the shape of the data, proposes the cleaning and a
         star schema, and waits — nothing is written until you approve the plan.
       </p>
@@ -307,7 +307,7 @@ export function AutoEtl() {
             <div>
               <Label>Target catalog</Label>
               {catalogError && (
-                <div style={{ fontSize: 11.5, color: "var(--err)", marginBottom: 6 }}>
+                <div style={{ fontSize: "var(--fs-small)", color: "var(--err)", marginBottom: 6 }}>
                   {catalogError}
                 </div>
               )}
@@ -339,7 +339,7 @@ export function AutoEtl() {
                   borderRadius: 11,
                   background: "var(--surface-alt)",
                   color: sourceLabel ? "var(--text-mid)" : "var(--text-dim)",
-                  fontSize: 12.5,
+                  fontSize: "var(--fs-body)",
                   overflowWrap: "break-word",
                 }}
               >
@@ -358,7 +358,7 @@ export function AutoEtl() {
                   border: "none",
                   borderRadius: 11,
                   fontWeight: 600,
-                  fontSize: 13,
+                  fontSize: "var(--fs-base)",
                   padding: "9px 18px",
                   cursor: canProfile ? "pointer" : "not-allowed",
                 }}
@@ -417,11 +417,11 @@ export function AutoEtl() {
               <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 4 }}>
                 <Label>Cleaning</Label>
                 <div style={{ flex: 1 }} />
-                <span style={{ fontSize: 11.5, color: "var(--text-dim)" }}>
+                <span style={{ fontSize: "var(--fs-small)", color: "var(--text-dim)" }}>
                   {approved.length} of {steps.length} selected
                 </span>
               </div>
-              <p style={{ fontSize: 11.5, color: "var(--text-dim)", marginBottom: 14 }}>
+              <p style={{ fontSize: "var(--fs-small)", color: "var(--text-dim)", marginBottom: 14 }}>
                 Confident steps arrive ticked. Anything below 80% arrives un-ticked with its
                 confidence shown — tick it only if you agree.
               </p>
@@ -451,7 +451,7 @@ export function AutoEtl() {
                       />
                       <span
                         style={{
-                          fontSize: 13,
+                          fontSize: "var(--fs-base)",
                           color: on ? "var(--text)" : "var(--text-dim)",
                           flex: 1,
                         }}
@@ -464,7 +464,7 @@ export function AutoEtl() {
                       <span
                         className="mono"
                         style={{
-                          fontSize: 11,
+                          fontSize: "var(--fs-label)",
                           fontWeight: 500,
                           padding: "2px 8px",
                           borderRadius: 20,
@@ -486,7 +486,7 @@ export function AutoEtl() {
             {/* ---- model --------------------------------------------------- */}
             <div style={{ ...card, marginTop: 20 }}>
               <Label>Model</Label>
-              <p style={{ fontSize: 11.5, color: "var(--text-dim)", margin: "4px 0 16px" }}>
+              <p style={{ fontSize: "var(--fs-small)", color: "var(--text-dim)", margin: "4px 0 16px" }}>
                 {model.kind === "star" ? (
                   <>
                     A star schema: one fact table joined to{" "}
@@ -563,14 +563,14 @@ export function AutoEtl() {
               }}
             >
               <div style={{ flex: 1, minWidth: 260 }}>
-                <div style={{ fontSize: 13, color: "var(--text-mid)" }}>
+                <div style={{ fontSize: "var(--fs-base)", color: "var(--text-mid)" }}>
                   {approved.length} cleaning step{approved.length === 1 ? "" : "s"} ·{" "}
                   {model.kind === "star"
                     ? `${model.dims.length} dimension${model.dims.length === 1 ? "" : "s"}`
                     : "no dimensions"}{" "}
                   · loads into <span className="mono">{catalog}</span>
                 </div>
-                <div style={{ fontSize: 11.5, color: "var(--text-dim)", marginTop: 5 }}>
+                <div style={{ fontSize: "var(--fs-small)", color: "var(--text-dim)", marginTop: 5 }}>
                   Approving saves the plan as a job. Nothing has run yet.
                 </div>
               </div>
@@ -587,7 +587,7 @@ export function AutoEtl() {
                   border: "none",
                   borderRadius: 11,
                   fontWeight: 600,
-                  fontSize: 13,
+                  fontSize: "var(--fs-base)",
                   padding: "9px 20px",
                   cursor: busy ? "not-allowed" : "pointer",
                 }}
@@ -692,7 +692,7 @@ function Box({
         <span
           className="mono"
           style={{
-            fontSize: 9.5,
+            fontSize: "var(--fs-2xs)",
             fontWeight: 700,
             letterSpacing: "0.8px",
             padding: "2px 6px",
@@ -705,7 +705,7 @@ function Box({
         </span>
         <span
           className="mono"
-          style={{ fontSize: 12.5, fontWeight: 500, color, overflowWrap: "anywhere" }}
+          style={{ fontSize: "var(--fs-body)", fontWeight: 500, color, overflowWrap: "anywhere" }}
         >
           {name}
         </span>
@@ -721,7 +721,7 @@ function Col({ name, note, fk }: { name: string; note?: string; fk?: boolean }) 
       <span
         className="mono"
         style={{
-          fontSize: 12,
+          fontSize: "var(--fs-meta)",
           color: fk ? "var(--accent-deep)" : "var(--text-mid)",
           overflowWrap: "anywhere",
         }}
@@ -729,7 +729,7 @@ function Col({ name, note, fk }: { name: string; note?: string; fk?: boolean }) 
         {name}
       </span>
       {note && (
-        <span style={{ fontSize: 10, color: "var(--text-faint)", letterSpacing: "0.4px" }}>
+        <span style={{ fontSize: "var(--fs-xs)", color: "var(--text-faint)", letterSpacing: "0.4px" }}>
           {note}
         </span>
       )}
@@ -766,7 +766,7 @@ function FileBrowser({
           padding: "8px 12px",
           borderBottom: "1px solid var(--border)",
           background: "var(--surface-alt)",
-          fontSize: 11.5,
+          fontSize: "var(--fs-small)",
           color: "var(--text-dim)",
         }}
       >
@@ -777,7 +777,7 @@ function FileBrowser({
           <Row onClick={() => onDir(up)} glyph="▸" label=".." dim />
         )}
         {error && (
-          <div style={{ padding: 12, fontSize: 11.5, color: "var(--err)" }}>{error}</div>
+          <div style={{ padding: 12, fontSize: "var(--fs-small)", color: "var(--err)" }}>{error}</div>
         )}
         {!error && items === null && <Empty>Loading…</Empty>}
         {items?.length === 0 && <Empty>This folder is empty.</Empty>}
@@ -803,7 +803,7 @@ function FileBrowser({
         style={{
           padding: "8px 12px",
           borderTop: "1px solid var(--border)",
-          fontSize: 11,
+          fontSize: "var(--fs-label)",
           color: "var(--text-dim)",
         }}
       >
@@ -831,7 +831,7 @@ function TablePicker({
       <div style={{ maxHeight: 288, overflowY: "auto" }}>
         {!catalog && <Empty>Choose a target catalog first — tables are browsed inside it.</Empty>}
         {catalog && error && (
-          <div style={{ padding: 12, fontSize: 11.5, color: "var(--err)" }}>{error}</div>
+          <div style={{ padding: 12, fontSize: "var(--fs-small)", color: "var(--err)" }}>{error}</div>
         )}
         {catalog && !error && tree === null && <Empty>Loading tables…</Empty>}
         {catalog &&
@@ -843,7 +843,7 @@ function TablePicker({
                   padding: "8px 12px",
                   background: "var(--surface-alt)",
                   borderBottom: "1px solid var(--border-soft)",
-                  fontSize: 11.5,
+                  fontSize: "var(--fs-small)",
                   color: "var(--text-dim)",
                 }}
               >
@@ -896,12 +896,12 @@ function Row({
         borderBottom: "1px solid var(--border-soft)",
         background: on ? "var(--accent-tint)" : "transparent",
         color: dim ? "var(--text-faint)" : on ? "var(--accent-tint-ink)" : "var(--text)",
-        fontSize: 13,
+        fontSize: "var(--fs-base)",
         cursor: onClick ? "pointer" : "default",
       }}
     >
-      <span style={{ color: "var(--text-faint)", fontSize: 11 }}>{glyph}</span>
-      <span className="mono" style={{ fontSize: 12.5, overflowWrap: "anywhere" }}>
+      <span style={{ color: "var(--text-faint)", fontSize: "var(--fs-label)" }}>{glyph}</span>
+      <span className="mono" style={{ fontSize: "var(--fs-body)", overflowWrap: "anywhere" }}>
         {label}
       </span>
       {on && <span style={{ marginLeft: "auto", color: "var(--accent)" }}>✓</span>}
@@ -936,7 +936,7 @@ function Phase({
             display: "inline-flex",
             alignItems: "center",
             justifyContent: "center",
-            fontSize: 11,
+            fontSize: "var(--fs-label)",
             fontWeight: 600,
             background: done ? "var(--ok-tint)" : "var(--accent-tint)",
             color: done ? "var(--ok-ink)" : "var(--accent-tint-ink)",
@@ -944,7 +944,7 @@ function Phase({
         >
           {done ? "✓" : n}
         </span>
-        <h2 style={{ fontSize: 15, fontWeight: 600 }}>{title}</h2>
+        <h2 style={{ fontSize: "var(--fs-lg)", fontWeight: 600 }}>{title}</h2>
       </div>
       <div style={card}>{children}</div>
     </section>
@@ -956,7 +956,7 @@ function Stat({ label, value, mono }: { label: string; value: string; mono?: boo
     <div>
       <div
         style={{
-          fontSize: 10.5,
+          fontSize: "var(--fs-eyebrow)",
           letterSpacing: "0.8px",
           textTransform: "uppercase",
           color: "var(--text-faint)",
@@ -967,7 +967,7 @@ function Stat({ label, value, mono }: { label: string; value: string; mono?: boo
       </div>
       <div
         className={mono ? "mono" : undefined}
-        style={{ fontSize: mono ? 13 : 20, fontWeight: mono ? 400 : 600 }}
+        style={{ fontSize: mono ? "var(--fs-base)" : 20, fontWeight: mono ? 400 : 600 }}
       >
         {value}
       </div>
@@ -985,7 +985,7 @@ function Seg({ on, onClick, children }: { on: boolean; onClick: () => void; chil
         background: on ? "var(--accent)" : "var(--surface)",
         color: on ? "var(--on-accent)" : "var(--text-mid)",
         borderRadius: 11,
-        fontSize: 12.5,
+        fontSize: "var(--fs-body)",
         fontWeight: on ? 600 : 400,
         padding: "7px 18px",
       }}
@@ -999,7 +999,7 @@ function Label({ children }: { children: ReactNode }) {
   return (
     <div
       style={{
-        fontSize: 11,
+        fontSize: "var(--fs-label)",
         letterSpacing: "0.6px",
         textTransform: "uppercase",
         color: "var(--text-faint)",
@@ -1012,12 +1012,12 @@ function Label({ children }: { children: ReactNode }) {
 }
 
 function Hint({ children }: { children: ReactNode }) {
-  return <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 6 }}>{children}</div>;
+  return <div style={{ fontSize: "var(--fs-label)", color: "var(--text-dim)", marginTop: 6 }}>{children}</div>;
 }
 
 function Empty({ children }: { children: ReactNode }) {
   return (
-    <div style={{ padding: "12px", fontSize: 11.5, color: "var(--text-dim)" }}>{children}</div>
+    <div style={{ padding: "12px", fontSize: "var(--fs-small)", color: "var(--text-dim)" }}>{children}</div>
   );
 }
 
@@ -1055,7 +1055,7 @@ const input: CSSProperties = {
   borderRadius: 12,
   background: "var(--surface)",
   color: "var(--text)",
-  fontSize: 13,
+  fontSize: "var(--fs-base)",
   outline: "none",
 };
 
@@ -1064,12 +1064,12 @@ const ghost: CSSProperties = {
   color: "var(--text-mid)",
   border: "1px solid var(--border)",
   borderRadius: 11,
-  fontSize: 12.5,
+  fontSize: "var(--fs-body)",
   padding: "9px 16px",
 };
 
 const kindPill: CSSProperties = {
-  fontSize: 10,
+  fontSize: "var(--fs-xs)",
   letterSpacing: "0.4px",
   color: "var(--text-faint)",
   border: "1px solid var(--border)",
@@ -1082,6 +1082,6 @@ const crumbBtn: CSSProperties = {
   background: "transparent",
   padding: 0,
   font: "inherit",
-  fontSize: 11.5,
+  fontSize: "var(--fs-small)",
   color: "var(--text-dim)",
 };
