@@ -107,3 +107,18 @@ jobs:
           done
           grep -q '^## \[Unreleased\]' CHANGELOG.md \
             || { echo 'CHANGELOG.md needs an "## [Unreleased]" section' >&2; exit 1; }
+
+  versions:
+    # One product version everywhere: the UI footer is stamped from
+    # package.json, the daemon reports Cargo's, the web tier its own.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cargo, pyproject and package.json versions agree
+        run: |
+          cargo=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          py=$(sed -n 's/^version = "\(.*\)"/\1/p' web/pyproject.toml | head -1)
+          js=$(sed -n 's/.*"version": "\(.*\)".*/\1/p' web/frontend/package.json | head -1)
+          echo "cargo=$cargo pyproject=$py package.json=$js"
+          [ "$cargo" = "$py" ] && [ "$cargo" = "$js" ] \
+            || { echo "::error::product versions disagree" >&2; exit 1; }

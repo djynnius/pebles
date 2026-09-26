@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { NAV } from "../nav";
+import { NAV, SETTINGS_ID, activeNavId } from "../nav";
 import { Wordmark } from "./Wordmark";
+import { APP_VERSION } from "../version";
 
 /** What "+ New" can make. Each is an existing route that starts the thing. */
 const NEW_ITEMS: { label: string; glyph: string; path: string }[] = [
@@ -31,10 +32,10 @@ export function Sidebar({ admin }: { admin: boolean }) {
     };
   }, [newOpen]);
 
-  const activeId =
-    NAV.flatMap((g) => g.items).find(
-      (i) => i.path === loc.pathname || (i.id === "dashboards" && loc.pathname.startsWith("/dashboard")),
-    )?.id ?? "home";
+  // Longest-prefix match with an alias table (nav.ts): nested routes like
+  // /notebooks/:name or /jobs/:name/runs/:id keep their section lit.
+  const activeId = activeNavId(loc.pathname);
+  const settingsOn = activeId === SETTINGS_ID;
 
   return (
     <nav
@@ -210,13 +211,21 @@ export function Sidebar({ admin }: { admin: boolean }) {
 
       {/* footer */}
       <div style={{ borderTop: "1px solid var(--deep-border)", padding: "8px 10px" }}>
-        <NavLink to="/settings" style={{ ...footItem, justifyContent: collapsed ? "center" : "flex-start" }}>
+        <NavLink
+          to="/settings"
+          style={{
+            ...footItem,
+            justifyContent: collapsed ? "center" : "flex-start",
+            background: settingsOn ? "var(--nav-active-bg)" : "transparent",
+            color: settingsOn ? "var(--deep-text)" : "var(--deep-muted)",
+          }}
+        >
           <span style={{ width: 18, textAlign: "center" }}>⚙</span>
           {!collapsed && <span>Account &amp; Settings</span>}
         </NavLink>
         {!collapsed && (
           <div className="mono" style={{ fontSize: 11, color: "var(--deep-faint)", padding: "8px 10px 4px" }}>
-            v0.1.0 · self-hosted
+            v{APP_VERSION} · self-hosted
           </div>
         )}
       </div>

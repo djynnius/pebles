@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, errorText, sse, type Row } from "../api";
+import { recordRecent } from "../recents";
 import { qualify, useCatalogs } from "../catalogs";
 import { CatalogPanel } from "../components/CatalogTree";
 import { Markdown, markdownHeadings } from "../components/Markdown";
@@ -103,6 +104,7 @@ export function Notebook() {
           source: c.source ?? "",
         }));
         setDoc({ catalog: d.catalog ?? null, cells });
+        recordRecent("notebook", name, d.catalog ?? null);
         setOuts(loaded.map((c) => (c.output && c.type !== "md" ? { ...c.output, stale: true } : {})));
       })
       .catch((e) => setError(errorText(e)));

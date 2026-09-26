@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { recordRecent } from "../recents";
 import { api, columnsOf, errorText, type Row, type User } from "../api";
 import {
   accessDenied,
@@ -36,7 +37,11 @@ export function Catalog({ user }: { user: User }) {
   const { catalogs, error } = useCatalogs();
   const [engine, setEngine] = useState<Engine | null>(null);
   const [filter, setFilter] = useState("");
-  const [selected, setSelected] = useState<TableRef | null>(null);
+  const [params, setParams] = useSearchParams();
+  // `?table=catalog.schema.table` (from global search / Home Recents)
+  // preselects a table. Schema and table names are split off the right so a
+  // dotted catalog name still resolves.
+  const [selected, setSelected] = useState<TableRef | null>(() => parseTableParam(params.get("table")));
   const [detail, setDetail] = useState<TableDetail | null>(null);
   const [detailError, setDetailError] = useState("");
   /** A catalog the user can't open — shown as a "No access" state, not an error. */
@@ -50,6 +55,18 @@ export function Catalog({ user }: { user: User }) {
       .catch(() => setEngine(null));
   }, []);
 
+  // Follow later deep links while already on /catalog (search → another table).
+  const tableParam = params.get("table");
+  useEffect(() => {
+    const ref = parseTableParam(tableParam);
+    if (!ref) return;
+    setDenied(null);
+    setTab("schema");
+    setSelected((cur) =>
+      cur && cur.catalog === ref.catalog && cur.schema === ref.schema && cur.table === ref.table ? cur : ref,
+    );
+  }, [tableParam]);
+
   useEffect(() => {
     if (!selected) return;
     const { catalog, schema, table } = selected;
@@ -61,7 +78,10 @@ export function Catalog({ user }: { user: User }) {
           schema,
         )}/${encodeURIComponent(table)}`,
       )
-      .then(setDetail)
+      .then((d) => {
+        setDetail(d);
+        recordRecent("table", `${schema}.${table}`, catalog);
+      })
       .catch((e) => {
         const d = accessDenied(e, catalog);
         if (d) {
@@ -147,6 +167,12 @@ export function Catalog({ user }: { user: User }) {
               filter={filter}
               selected={selected}
               onPick={(ref) => {
+                // A tree pick supersedes any deep link that brought us here.
+                if (params.has("table")) {
+                  const next = new URLSearchParams(params);
+                  next.delete("table");
+                  setParams(next, { replace: true });
+                }
                 setDenied(null);
                 setSelected(ref);
                 setTab("schema");
@@ -750,6 +776,17 @@ function Stat({
       </div>
     </div>
   );
+}
+
+/** `catalog.schema.table` → a TableRef; schema and table split off the right. */
+function parseTableParam(v: string | null): TableRef | null {
+  if (!v) return null;
+  const parts = v.split(".");
+  if (parts.length < 3) return null;
+  const table = parts.pop() as string;
+  const schema = parts.pop() as string;
+  const catalog = parts.join(".");
+  return catalog && schema && table ? { catalog, schema, table } : null;
 }
 
 function Breadcrumb({ parts }: { parts: string[] }) {

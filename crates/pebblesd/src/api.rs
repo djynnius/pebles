@@ -100,6 +100,7 @@ pub fn router(role: Role, state: AppState) -> Router {
             .route("/engines/pending/{name}", delete(reject_pending))
             .route("/usage", get(usage))
             .route("/workflows", get(list_workflows).post(save_workflow))
+            .route("/workflows/{name}", delete(delete_workflow))
             .route("/workflows/{name}/run", post(trigger_workflow))
             .route("/workflows/{name}/trigger", get(workflow_trigger_status))
             .route("/workflows/{name}/runs", get(workflow_runs))
@@ -1416,6 +1417,26 @@ async fn trigger_workflow(
         }
     });
     Ok(Json(serde_json::json!({ "queued": name })))
+}
+
+async fn delete_workflow(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> ApiResult<Value> {
+    let dir = state.config_dir.clone();
+    let flow = name.clone();
+    tokio::task::spawn_blocking(move || crate::jobs::delete(&dir, &flow))
+        .await
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?
+        .map_err(jobs_error)?;
+    let (dir, flow) = (state.config_dir.clone(), name.clone());
+    tokio::task::spawn_blocking(move || {
+        if let Err(err) = crate::jobs::purge_history(&dir, &flow) {
+            tracing::warn!(workflow = %flow, %err, "purging Airflow history failed");
+        }
+    });
+    tracing::info!(workflow = %name, "workflow deleted");
+    Ok(Json(serde_json::json!({ "deleted": name })))
 }
 
 async fn workflow_trigger_status(

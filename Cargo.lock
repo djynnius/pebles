@@ -911,7 +911,7 @@ dependencies = [
 
 [[package]]
 name = "pebbles-api"
-version = "0.1.0"
+version = "1.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -920,7 +920,7 @@ dependencies = [
 
 [[package]]
 name = "pebbles-identity"
-version = "0.1.0"
+version = "1.1.0"
 dependencies = [
  "pwhash",
  "thiserror",
@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "pebbles-runtime"
-version = "0.1.0"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "serde",
@@ -937,7 +937,7 @@ dependencies = [
 
 [[package]]
 name = "pebbles-session"
-version = "0.1.0"
+version = "1.1.0"
 dependencies = [
  "libc",
  "serde",
@@ -950,7 +950,7 @@ dependencies = [
 
 [[package]]
 name = "pebblesd"
-version = "0.1.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1490,7 +1490,7 @@ dependencies = [
 
 [[package]]
 name = "sql-runner"
-version = "0.1.0"
+version = "1.1.0"
 dependencies = [
  "libc",
  "serde_json",
@@ -2088,7 +2088,7 @@ checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 
 [[package]]
 name = "xtask"
-version = "0.1.0"
+version = "1.1.0"
 dependencies = [
  "pebbles-api",
 ]

@@ -1,4 +1,5 @@
 import { Wordmark } from "./Wordmark";
+import { APP_VERSION } from "../version";
 
 // The 699px mobile gate (spec §3): below 700px the whole app is replaced. Not a
 // mobile product by design (PRD non-goal).
@@ -24,7 +25,7 @@ export function MobileGate() {
         to breathe. Open it on a laptop or larger display.
       </p>
       <p className="mono" style={{ fontSize: 11, color: "var(--deep-faint)", marginTop: 12 }}>
-        v0.1.0 · self-hosted
+        v{APP_VERSION} · self-hosted
       </p>
     </div>
   );

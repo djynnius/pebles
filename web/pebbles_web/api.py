@@ -24,6 +24,11 @@ from pebbles_web.pebblesd_client import PebblesdClient, PebblesdError
 DOC_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 #: the Pebbles group whose members administer the install (pebblesd admins.rs)
 ADMIN_GROUP = "admins"
+#: Home's recently-opened list
+RECENTS_MAX = 12
+RECENT_KINDS = ("notebook", "dashboard", "query", "table", "job")
+#: global search result cap
+SEARCH_MAX = 25
 #: how stale the "account still exists and is enabled" check may be
 ACCOUNT_RECHECK_SECS = 10.0
 #: Pebbles user/group names (pebbles-identity validate_username)
@@ -928,6 +933,12 @@ def register_api(app, client: PebblesdClient) -> None:
         _, err = _job_visible(user, name)
         return err or jsonify(client.trigger_workflow(name))
 
+    @app.delete("/api/jobs/<name>")
+    @authed
+    def api_jobs_delete(user, name):  # pyright: ignore[reportUnusedFunction]
+        _, err = _job_visible(user, name)
+        return err or jsonify(client.delete_workflow(name))
+
     @app.get("/api/jobs/<name>/trigger")
     @authed
     def api_jobs_trigger_status(user, name):  # pyright: ignore[reportUnusedFunction]
@@ -1135,6 +1146,97 @@ def register_api(app, client: PebblesdClient) -> None:
                 )
                 result["committed"] = bool(committed.get("ok"))
         return jsonify(result)
+
+    # ---- recents & search ------------------------------------------------------
+
+    RECENTS_PATH = ".pebbles/recents.json"
+
+    def _read_recents(username: str) -> list:
+        got = _session_op(username, {"op": "read", "path": RECENTS_PATH})
+        if not got.get("ok"):
+            return []
+        try:
+            items = json.loads(got.get("content") or "[]")
+        except json.JSONDecodeError:
+            return []
+        return [i for i in items if isinstance(i, dict)][:RECENTS_MAX]
+
+    @app.get("/api/recents")
+    @authed
+    def api_recents(user):  # pyright: ignore[reportUnusedFunction]
+        return jsonify(_read_recents(user["username"]))
+
+    @app.post("/api/recents")
+    @authed
+    def api_recents_touch(user):  # pyright: ignore[reportUnusedFunction]
+        """Record an opened item (most recent first, deduplicated). Lives in
+        the user's own home — the web tier never writes homes directly."""
+        body = request.get_json(silent=True) or {}
+        kind, name = str(body.get("kind", "")), str(body.get("name", ""))[:200]
+        if kind not in RECENT_KINDS or not name:
+            return jsonify({"error": "kind and name required"}), 422
+        entry = {"kind": kind, "name": name, "at": int(time.time())}
+        if body.get("catalog"):
+            entry["catalog"] = str(body["catalog"])[:64]
+        items = [
+            i for i in _read_recents(user["username"])
+            if not (i.get("kind") == kind and i.get("name") == name)
+        ]
+        items = [entry, *items][:RECENTS_MAX]
+        _session_op(user["username"], {"op": "mkdir", "path": ".pebbles"})
+        _session_op(
+            user["username"],
+            {"op": "write", "path": RECENTS_PATH, "content": json.dumps(items)},
+        )
+        return jsonify(items)
+
+    @app.get("/api/search")
+    @authed
+    def api_search(user):  # pyright: ignore[reportUnusedFunction]
+        """Names only, across what THIS user can open: notebooks, dashboards,
+        their jobs, and tables in accessible catalogs (never inaccessible ones,
+        so search can't leak what you can't see)."""
+        q = (request.args.get("q") or "").strip().lower()
+        if len(q) < 2:
+            return jsonify([])
+        username = user["username"]
+        hits: list = []
+
+        def add(kind, name, **extra):
+            if q in name.lower():
+                hits.append({"kind": kind, "name": name, **extra})
+
+        for n in _list_docs(username, "notebooks"):
+            add("notebook", n)
+        for n in _list_docs(username, "dashboards"):
+            add("dashboard", n)
+        admin = _is_admin(username)
+        for w in client.list_workflows():
+            if admin or w.get("username") == username:
+                add("job", w.get("name", ""))
+        for cat in client.list_catalogs(username):
+            if cat.get("accessible") is False:
+                continue
+            name = cat.get("name", "")
+            add("catalog", name)
+            if not IDENT.match(name):
+                continue
+            for row in _rows(
+                username,
+                "SELECT table_schema, table_name FROM information_schema.tables "
+                f"WHERE table_catalog = '{name}' "
+                "AND table_schema NOT IN ('information_schema', 'pg_catalog')",
+                name,
+            ):
+                table = row.get("table_name") or ""
+                if q in table.lower():
+                    hits.append({"kind": "table", "name": table, "catalog": name,
+                                 "schema": row.get("table_schema")})
+            if len(hits) >= SEARCH_MAX:
+                break
+        # prefix matches first, then alphabetical
+        hits.sort(key=lambda h: (not h["name"].lower().startswith(q), h["name"].lower()))
+        return jsonify(hits[:SEARCH_MAX])
 
     # ---- settings (git identity & keys) -----------------------------------------
 

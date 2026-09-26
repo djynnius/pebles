@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { recordRecent } from "../recents";
 import { api, columnsOf, errorText, sse, type Row } from "../api";
 import { qualify, useCatalogs } from "../catalogs";
 import { CatalogPanel } from "../components/CatalogTree";
@@ -149,6 +150,7 @@ export function Sql() {
     setElapsed(null);
     setRanOk(false);
     const started = performance.now();
+    const ran = { name: doc.name, catalog: doc.catalog };
     const query = `q=${encodeURIComponent(doc.sql)}${
       doc.catalog ? `&catalog=${encodeURIComponent(doc.catalog)}` : ""
     }`;
@@ -159,6 +161,7 @@ export function Sql() {
       result: (r) => {
         setRows(r.rows ?? []);
         setRanOk(true);
+        recordRecent("query", ran.name, ran.catalog);
         if (r.truncated) setError("Result truncated at 100,000 rows — refine the query.");
       },
       error: (m) => {

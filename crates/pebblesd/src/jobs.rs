@@ -443,6 +443,25 @@ pub fn airflow_cli(config_dir: &Path, args: &[&str]) -> Result<String, JobsError
     }
 }
 
+/// Remove a workflow: its definition, compiled DAG and trigger record go at
+/// once (so it can never be scheduled again); Airflow's run history is purged
+/// separately by `purge_history` (slow CLI — run it in the background).
+pub fn delete(config_dir: &Path, name: &str) -> Result<(), JobsError> {
+    get(config_dir, name)?;
+    let _ = std::fs::remove_file(jobs_dir(config_dir).join(format!("{name}.json")));
+    let _ = std::fs::remove_file(trigger_status_path(config_dir, name));
+    let _ = std::fs::remove_file(
+        airflow_home(config_dir)
+            .join("dags")
+            .join(format!("{}.py", dag_id(name))),
+    );
+    Ok(())
+}
+
+pub fn purge_history(config_dir: &Path, name: &str) -> Result<(), JobsError> {
+    airflow_cli(config_dir, &["dags", "delete", "-y", &dag_id(name)]).map(|_| ())
+}
+
 /// Wall-clock cap per Airflow CLI call. Each call imports Airflow's whole
 /// provider tree (several seconds natively, a minute+ under emulation or on
 /// small hardware), so this is generous; nothing user-facing waits on it —
@@ -766,6 +785,23 @@ mod tests {
             .map(|w| w.name)
             .collect();
         assert_eq!(names, vec!["nightly-claims"]);
+    }
+
+    #[test]
+    fn deleting_a_workflow_removes_definition_dag_and_status() {
+        let dir = tempfile::tempdir().unwrap();
+        save(dir.path(), &flow()).unwrap();
+        set_trigger_status(dir.path(), "nightly-claims", "triggered", None);
+        let dag = airflow_home(dir.path()).join("dags/pb_nightly_claims.py");
+        assert!(dag.exists());
+        delete(dir.path(), "nightly-claims").unwrap();
+        assert!(!dag.exists());
+        assert!(list(dir.path()).unwrap().is_empty());
+        assert!(trigger_status(dir.path(), "nightly-claims").is_none());
+        assert!(matches!(
+            delete(dir.path(), "nightly-claims"),
+            Err(JobsError::NotFound(_))
+        ));
     }
 
     #[test]

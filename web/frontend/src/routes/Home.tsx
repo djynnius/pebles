@@ -3,7 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { api, errorText, type User } from "../api";
 import { NkoyoAvatar } from "../components/Avatar";
 import { Card } from "../components/Page";
-import { ErrorBlock } from "../components/State";
+import { ErrorBlock, Loading } from "../components/State";
+import { KIND_GLYPH, recentPath, relativeTime, type Recent } from "../recents";
 
 interface Usage {
   cpus: number;
@@ -22,6 +23,8 @@ export function Home({ user }: { user: User }) {
   const [engines, setEngines] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [ask, setAsk] = useState("");
+  const [recents, setRecents] = useState<Recent[] | null>(null);
+  const [recentsError, setRecentsError] = useState("");
 
   useEffect(() => {
     // Both feed the KPI row. Swallowing a failure here left four em-dashes on
@@ -34,6 +37,13 @@ export function Home({ user }: { user: User }) {
       .get<{ name: string }[]>("/engines")
       .then((e) => setEngines(e.length))
       .catch((e) => setError((cur) => cur || errorText(e)));
+    api
+      .get<Recent[]>("/recents")
+      .then(setRecents)
+      .catch((e) => {
+        setRecents([]);
+        setRecentsError(errorText(e));
+      });
   }, []);
 
   /** Hand the draft to Nkoyo rather than sending it — the model call is hers. */
@@ -133,11 +143,100 @@ export function Home({ user }: { user: User }) {
         <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border-soft)", fontWeight: 600 }}>
           Recents
         </div>
-        <div style={{ padding: 18, color: "var(--text-dim)", fontSize: 13 }}>
-          Your recent notebooks, queries, and dashboards will appear here.
-        </div>
+        {recentsError ? (
+          <ErrorBlock
+            title="Couldn't load your recents"
+            error={recentsError}
+            style={{ margin: 14 }}
+          />
+        ) : recents === null ? (
+          <Loading style={{ padding: 18 }} />
+        ) : recents.length === 0 ? (
+          <div style={{ padding: 18, color: "var(--text-dim)", fontSize: 13 }}>
+            Your recent notebooks, queries, and dashboards will appear here.
+          </div>
+        ) : (
+          <div>
+            {recents.map((r, i) => (
+              <RecentRow
+                key={`${r.kind}:${r.catalog ?? ""}:${r.name}`}
+                item={r}
+                first={i === 0}
+                onOpen={() => nav(recentPath(r))}
+              />
+            ))}
+          </div>
+        )}
       </Card>
     </div>
+  );
+}
+
+const KIND_NAME: Record<Recent["kind"], string> = {
+  notebook: "Notebook",
+  dashboard: "Dashboard",
+  query: "Query",
+  table: "Table",
+  job: "Job",
+};
+
+function RecentRow({ item, first, onOpen }: { item: Recent; first: boolean; onOpen: () => void }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      title={`Open ${KIND_NAME[item.kind].toLowerCase()} ${item.name}`}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 12,
+        width: "100%",
+        textAlign: "left",
+        border: "none",
+        borderTop: first ? "none" : "1px solid var(--border-soft)",
+        background: hover ? "var(--hover)" : "transparent",
+        padding: "10px 18px",
+        color: "var(--text)",
+        fontSize: 13,
+      }}
+    >
+      <span
+        aria-hidden="true"
+        style={{ width: 20, textAlign: "center", color: "var(--text-faint)", flexShrink: 0 }}
+      >
+        {KIND_GLYPH[item.kind]}
+      </span>
+      <span
+        className="mono"
+        style={{ fontSize: 12.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}
+      >
+        {item.name}
+      </span>
+      {item.catalog && (
+        <span
+          className="mono"
+          style={{
+            fontSize: 11,
+            color: "var(--accent-deep)",
+            border: "1px solid var(--border)",
+            borderRadius: 8,
+            padding: "1px 7px",
+            flexShrink: 0,
+          }}
+        >
+          {item.catalog}
+        </span>
+      )}
+      <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--text-dim)", flexShrink: 0 }}>
+        {relativeTime(item.at)}
+      </span>
+      <span style={{ width: 72, textAlign: "right", fontSize: 11.5, color: "var(--text-faint)", flexShrink: 0 }}>
+        {KIND_NAME[item.kind]}
+      </span>
+    </button>
   );
 }
 

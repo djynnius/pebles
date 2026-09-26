@@ -6,6 +6,23 @@ All notable changes to Pebbles are documented here. The format follows
 
 ## [Unreleased]
 
+### Added (UAT Phase 5 — polish)
+- **Global search (⌘K)** across notebooks, dashboards, your jobs, and the
+  catalogs and tables you can open — never ones you can't, so search can't
+  reveal what you don't have access to.
+- **Recents on Home**: the notebooks, dashboards, queries, tables and job runs
+  you opened last, stored in your own home (`~/.pebbles/recents.json`).
+- **Jobs**: delete a job (owner or admin; schedule and run history are
+  removed); each job's status dot shows its latest run.
+
+### Fixed
+- **The version shown is the real one.** The UI footer said `v0.1.0` (hard-
+  coded in three places) after 1.0.0 shipped; it's now stamped at build time
+  from `package.json`, and CI fails if Cargo, pyproject and package.json
+  versions ever disagree. Main is now 1.1.0.
+- **Sidebar highlights the right section** on nested pages (a notebook,
+  Settings, the job builder …) instead of falling back to Home.
+
 ### Added (UAT Phase 4 — notebooks & analytics)
 - **Rich notebook output.** Python cells return matplotlib figures as images
   and DataFrames (pandas/polars) as real tables — first 200 rows with the

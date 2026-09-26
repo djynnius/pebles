@@ -200,6 +200,9 @@ class PebblesdClient:
         """Queues a run (202-style {"queued": name}); poll trigger_status."""
         return self._expect("POST", f"/workflows/{name}/run")
 
+    def delete_workflow(self, name: str) -> dict:
+        return self._expect("DELETE", f"/workflows/{name}")
+
     def trigger_status(self, name: str):
         """{state: queued|triggered|failed, error, at} of the last Run now."""
         return self._get(f"/workflows/{name}/trigger")

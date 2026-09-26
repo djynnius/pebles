@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, errorText, sse, type Row } from "../api";
+import { recordRecent } from "../recents";
 import { useCatalogs } from "../catalogs";
 import { DonutChart, LineChart } from "../components/Charts";
 import { FormMessage, SmallButton } from "../components/Form";
@@ -117,6 +118,7 @@ export function Dashboard() {
         if (!live) return;
         const tiles = d.tiles ?? [];
         setDoc({ catalog: d.catalog ?? null, filters: d.filters ?? [], tiles });
+        recordRecent("dashboard", name, d.catalog ?? null);
         setSpans(readLayout(name, tiles));
         setOuts(tiles.map(() => ({})));
       })

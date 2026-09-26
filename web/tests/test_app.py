@@ -351,6 +351,10 @@ class FakeDaemon:
     def trigger_workflow(self, name):
         return {"queued": name}
 
+    def delete_workflow(self, name):
+        self.workflows = [w for w in getattr(self, "workflows", []) if w["name"] != name]
+        return {"deleted": name}
+
     def trigger_status(self, name):
         return {"state": "triggered", "error": None, "at": 1}
 
@@ -1191,3 +1195,47 @@ def test_run_now_is_queued_and_its_outcome_is_readable():
     assert tomas.get("/api/jobs/etl/trigger").get_json()["state"] == "triggered"
     d.admins = []
     assert maya.get("/api/jobs/etl/trigger").status_code == 404   # owner-scoped
+
+
+def test_jobs_can_be_deleted_by_owner_or_admin_only():
+    d = FakeDaemon()
+    tomas, maya = signed_in_as("tomas", d), signed_in_as("maya", d)
+    job = {"schedule": None, "tasks": [{"id": "t", "task_type": "sql", "payload": "SELECT 1"}]}
+    tomas.post("/api/jobs", json={"name": "a", **job})
+    tomas.post("/api/jobs", json={"name": "b", **job})
+    d.admins = []
+    assert maya.delete("/api/jobs/a").status_code == 404        # not hers
+    assert tomas.delete("/api/jobs/a").status_code == 200
+    d.admins = ["maya"]
+    assert maya.delete("/api/jobs/b").status_code == 200        # admin may
+    assert tomas.get("/api/jobs").get_json() == []
+
+
+def test_recents_are_most_recent_first_deduplicated_and_capped():
+    c = api_signed_in()
+    assert c.get("/api/recents").get_json() == []
+    c.post("/api/recents", json={"kind": "notebook", "name": "eda"})
+    c.post("/api/recents", json={"kind": "dashboard", "name": "kpis"})
+    items = c.post("/api/recents", json={"kind": "notebook", "name": "eda"}).get_json()
+    assert [(i["kind"], i["name"]) for i in items] == [("notebook", "eda"), ("dashboard", "kpis")]
+    for n in range(20):
+        c.post("/api/recents", json={"kind": "query", "name": f"q{n}"})
+    assert len(c.get("/api/recents").get_json()) == 12
+    assert c.post("/api/recents", json={"kind": "bogus", "name": "x"}).status_code == 422
+
+
+def test_search_covers_docs_jobs_tables_but_never_inaccessible_catalogs():
+    d = FakeDaemon()
+    maya, tomas = signed_in_as("maya", d), signed_in_as("tomas", d)
+    maya.post("/api/catalogs", json={"name": "claims"})          # maya's, private
+    tomas.post("/api/notebooks", json={"name": "claims-eda"})
+    tomas.post("/api/jobs", json={"name": "claims-load", "schedule": None,
+                                  "tasks": [{"id": "t", "task_type": "sql", "payload": "x"}]})
+    hits = tomas.get("/api/search?q=claims").get_json()
+    kinds = {(h["kind"], h["name"]) for h in hits}
+    assert ("notebook", "claims-eda") in kinds and ("job", "claims-load") in kinds
+    assert not any(h["kind"] in ("catalog", "table") for h in hits)   # no leak
+    mine = maya.get("/api/search?q=claims").get_json()
+    assert ("catalog", "claims") in {(h["kind"], h["name"]) for h in mine}
+    assert ("table", "claims") in {(h["kind"], h["name"]) for h in mine}
+    assert tomas.get("/api/search?q=c").get_json() == []            # too short

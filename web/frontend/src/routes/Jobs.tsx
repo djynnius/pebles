@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, errorText } from "../api";
 import { AccentButton, Page } from "../components/Page";
+import { InlineConfirm } from "../components/Form";
 import { Table, Td } from "../components/Table";
 import { Empty, EmptyAction, ErrorBlock, Loading } from "../components/State";
 import { duration, isLive, runColor, stamp, type RunInfo, type Workflow } from "../jobs";
@@ -32,6 +33,14 @@ export function Jobs() {
   // per-job trigger failures ("Couldn't start the run: …").
   const [queued, setQueued] = useState<Record<string, boolean>>({});
   const [trigErr, setTrigErr] = useState<Record<string, string>>({});
+  // Delete: the job awaiting confirmation, whether the DELETE is in flight,
+  // and the server's refusal (403/404/…) shown inside the confirm panel.
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+  // `?open=<job>` (global search, Home Recents) expands that job's row.
+  const [params] = useSearchParams();
+  const openParam = params.get("open");
   const polls = useRef<Map<string, number>>(new Map());
   const alive = useRef(true);
 
@@ -96,6 +105,9 @@ export function Jobs() {
       .then((list) => {
         if (!alive.current) return;
         setJobs(list);
+        // The status dot is the newest run's state, so every job's history is
+        // read once up front (there are few jobs). Quiet: no "loading" flash.
+        for (const j of list) loadRuns(j.name, true);
         // A run may have been requested elsewhere (Auto ETL's "Approve & run");
         // pick up any trigger that is still queued.
         for (const j of list) {
@@ -109,7 +121,11 @@ export function Jobs() {
       })
       // Leave `jobs` null so a failed read renders the error, not "no jobs yet".
       .catch((e) => setError(errorText(e)));
-  }, [watchTrigger]);
+  }, [watchTrigger, loadRuns]);
+
+  useEffect(() => {
+    if (openParam && jobs?.some((j) => j.name === openParam)) setOpen(openParam);
+  }, [openParam, jobs]);
 
   // Keep a job's history fresh while its newest run is still moving.
   useEffect(() => {
@@ -140,6 +156,34 @@ export function Jobs() {
       .then(() => watchTrigger(name))
       .catch((e) => setError(errorText(e)))
       .finally(() => setBusy(""));
+  };
+
+  const askDelete = (name: string) => {
+    setConfirming(name);
+    setDeleteError("");
+  };
+
+  const confirmDelete = () => {
+    if (!confirming) return;
+    const name = confirming;
+    setDeleting(true);
+    setDeleteError("");
+    api
+      .del(`/jobs/${encodeURIComponent(name)}`)
+      .then(() => api.get<Workflow[]>("/jobs"))
+      .then((list) => {
+        if (!alive.current) return;
+        setJobs(list);
+        setConfirming(null);
+        if (open === name) setOpen(null);
+        setRuns((cur) => {
+          const next = { ...cur };
+          delete next[name];
+          return next;
+        });
+      })
+      .catch((e) => alive.current && setDeleteError(errorText(e)))
+      .finally(() => alive.current && setDeleting(false));
   };
 
   const shown = (jobs ?? []).filter((j) =>
@@ -190,23 +234,43 @@ export function Jobs() {
 
       {error && <ErrorBlock error={error} />}
       {!error && jobs === null && <Loading />}
+      {confirming && (
+        <div style={{ marginBottom: 14 }}>
+          <InlineConfirm
+            message={`Delete job ${confirming}? Its schedule and run history are removed.`}
+            confirmLabel="Delete"
+            busyLabel="Deleting…"
+            busy={deleting}
+            error={deleteError}
+            onConfirm={confirmDelete}
+            onCancel={() => setConfirming(null)}
+          />
+        </div>
+      )}
 
       {shown.length > 0 ? (
         <Table head={["", "Job", "Schedule", "Owner", "Tasks", ""]}>
           {shown.map((job) => {
             const expanded = open === job.name;
             const history = runs[job.name];
-            // The dot is the *latest run's* state, and only once that history
-            // has been fetched. It used to be hard-coded green, which told a
-            // user with a failing job that everything was fine.
+            // The dot is the *newest run's* state (histories are read on load).
+            // It used to be hard-coded green, which told a user with a failing
+            // job that everything was fine. Dim = never run / not yet known.
             const latest = Array.isArray(history) ? history[0] : undefined;
+            const dotTitle = latest
+              ? `Last run: ${latest.state || "unknown"}`
+              : Array.isArray(history)
+                ? "Never run"
+                : typeof history === "string" && history !== "loading"
+                  ? `Run history unavailable: ${history}`
+                  : "Reading run history…";
             return [
               <tr key={job.name}>
                 <Td>
                   <span
-                    title={
-                      latest ? `Last run: ${latest.state}` : "Expand the job to read its run history"
-                    }
+                    title={dotTitle}
+                    aria-label={dotTitle}
+                    role="img"
                     style={{
                       display: "inline-block",
                       width: 8,
@@ -265,6 +329,15 @@ export function Jobs() {
                       style={rowBtn}
                     >
                       Edit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => askDelete(job.name)}
+                      disabled={deleting && confirming === job.name}
+                      title={`Delete ${job.name}`}
+                      style={rowBtn}
+                    >
+                      Delete
                     </button>
                   </div>
                 </Td>

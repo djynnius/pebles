@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, errorText } from "../api";
+import { recordRecent } from "../recents";
 import { ErrorBlock, Loading } from "../components/State";
 import { duration, isLive, runColor, stamp, type RunInfo, type TaskRunInfo } from "../jobs";
 
@@ -23,6 +24,7 @@ export function JobRun() {
   const [open, setOpen] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [stripError, setStripError] = useState("");
+  const recorded = useRef("");
 
   const load = useCallback(() => {
     api
@@ -39,6 +41,11 @@ export function JobRun() {
       )
       .then((t) => {
         setTasks(t);
+        // Polling re-enters here; record only the first successful load.
+        if (recorded.current !== `${name}/${runId}`) {
+          recorded.current = `${name}/${runId}`;
+          recordRecent("job", name);
+        }
         setError("");
       })
       .catch((e) => {

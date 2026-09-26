@@ -87,6 +87,17 @@ export function CatalogTree({
     setOpen((cur) => (cur.length ? cur : [first.name]));
   }, [catalogs]);
 
+  // A selection made from outside the tree (a ?table= deep link from search
+  // or Recents) reveals its branch, so the highlighted row is actually visible.
+  const selCatalog = selected?.catalog;
+  const selSchema = selected?.schema;
+  useEffect(() => {
+    if (!selCatalog || !selSchema) return;
+    const key = `${selCatalog}.${selSchema}`;
+    setOpen((cur) => (cur.includes(selCatalog) ? cur : [...cur, selCatalog]));
+    setOpenSchemas((cur) => (cur.includes(key) ? cur : [...cur, key]));
+  }, [selCatalog, selSchema]);
+
   // Load whatever is open, plus everything while searching.
   useEffect(() => {
     const unlocked = new Set(catalogs.filter((c) => c.accessible !== false).map((c) => c.name));

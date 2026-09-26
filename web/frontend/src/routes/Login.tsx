@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, errorText, type User } from "../api";
 import { Wordmark } from "../components/Wordmark";
+import { APP_VERSION } from "../version";
 
 export function Login({
   onAuthed,
@@ -59,7 +60,7 @@ export function Login({
           metered compute, no data leaving your network.
         </p>
         <p className="mono" style={{ fontSize: 11, color: "var(--deep-faint)", marginTop: 24 }}>
-          v0.1.0 · self-hosted
+          v{APP_VERSION} · self-hosted
         </p>
       </div>
 
