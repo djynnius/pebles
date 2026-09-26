@@ -290,7 +290,7 @@ fn gunicorn(cfg: &Config) -> Option<ServiceSpec> {
             "PEBBLES_SOCKET".into(),
             cfg.socket_path().display().to_string(),
         ),
-        // gunicorn's control machinery wants a writable HOME.
+        // A defined HOME for the web user (it has no home of its own).
         ("HOME".into(), WEB_ROOT.into()),
     ];
     match ensure_web_secret(cfg) {
@@ -323,6 +323,12 @@ fn gunicorn(cfg: &Config) -> Option<ServiceSpec> {
                 "8".into(),
                 "--chdir".into(),
                 WEB_ROOT.into(),
+                // gunicorn ≥26 opens a runtime control socket (reload/scale
+                // workers) under $HOME/.gunicorn — unwritable for the web user,
+                // so it logged "Control server error" at every boot. pebblesd
+                // already supervises gunicorn by signals; an extra local admin
+                // surface in the web tier is exactly what NFR-01 avoids.
+                "--no-control-socket".into(),
                 "pebbles_web:create_app()".into(),
             ],
             envs,

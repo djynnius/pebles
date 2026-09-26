@@ -16,6 +16,10 @@ All notable changes to Pebbles are documented here. The format follows
   removed); each job's status dot shows its latest run.
 
 ### Fixed
+- **No more "Control server error" at boot.** gunicorn 26 opens a runtime
+  control socket under `$HOME/.gunicorn`, which the unprivileged web user
+  can't (and shouldn't) write. Pebbles supervises gunicorn itself, so the web
+  tier now runs with `--no-control-socket` — one less local admin surface.
 - **User homes could be lost on upgrade.** The quick-start `docker run` only
   mounted the config volume, so every user's files, notebooks and dashboards
   lived in the container's writable layer and vanished when the container was
