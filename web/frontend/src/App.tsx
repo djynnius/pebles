@@ -87,7 +87,7 @@ export function App() {
         <Route path="/" element={<Home user={user} />} />
         <Route path="/nkoyo" element={<Nkoyo user={user} />} />
         <Route path="/files" element={<Files user={user} />} />
-        <Route path="/catalog" element={<Catalog />} />
+        <Route path="/catalog" element={<Catalog user={user} />} />
         <Route path="/newcatalog" element={<NewCatalog user={user} />} />
         <Route path="/notebooks" element={<Notebooks />} />
         <Route path="/notebooks/:name" element={<Notebook />} />
@@ -99,11 +99,11 @@ export function App() {
         <Route path="/jobs/:name/runs/:runId" element={<JobRun />} />
         <Route path="/ingest" element={<Ingest />} />
         <Route path="/autoetl" element={<AutoEtl />} />
-        <Route path="/engines" element={<Engines />} />
-        <Route path="/engineconfig" element={<EngineConfig />} />
+        <Route path="/engines" element={<Engines user={user} />} />
+        <Route path="/engineconfig" element={<EngineConfig user={user} />} />
         <Route path="/hosts" element={<Hosts />} />
-        <Route path="/users" element={<Users />} />
-        <Route path="/groups" element={<Groups />} />
+        <Route path="/users" element={<Users user={user} />} />
+        <Route path="/groups" element={<Groups user={user} />} />
         <Route path="/usage" element={<Usage />} />
         <Route path="/settings" element={<Settings user={user} onSignOut={signOut} />} />
         <Route path="*" element={<Navigate to="/" replace />} />

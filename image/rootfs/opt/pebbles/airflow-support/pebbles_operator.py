@@ -45,6 +45,30 @@ def _call(method: str, path: str, body: dict | None = None) -> tuple[int, dict]:
         conn.close()
 
 
+#: A full engine (409 admission refusal) is transient: interactive sessions
+#: idle out and other tasks finish. Wait it out instead of failing the run.
+ADMISSION_RETRIES = int(os.environ.get("PEBBLES_JOB_ADMISSION_RETRIES", "20"))
+ADMISSION_WAIT_SECS = float(os.environ.get("PEBBLES_JOB_ADMISSION_WAIT", "30"))
+
+
+def _open_with_backoff(body: dict) -> tuple[int, dict]:
+    import time
+
+    status, sess = _call("POST", "/sessions", body)
+    attempt = 0
+    while status == 409 and "admitting this session" in str(sess.get("error", "")):
+        attempt += 1
+        if attempt > ADMISSION_RETRIES:
+            break
+        print(
+            f"pebbles: engine full ({sess.get('error')}); "
+            f"waiting {ADMISSION_WAIT_SECS:.0f}s (attempt {attempt}/{ADMISSION_RETRIES})"
+        )
+        time.sleep(ADMISSION_WAIT_SECS)
+        status, sess = _call("POST", "/sessions", body)
+    return status, sess
+
+
 def _exec(session_id: int, payload: dict) -> dict:
     status, data = _call("POST", f"/sessions/{session_id}/exec", payload)
     if status != 200:
@@ -124,7 +148,7 @@ def run_pebbles_task(
     body: dict = {"username": username, "mode": mode}
     if engine and engine != "main":
         body["engine"] = engine
-    status, sess = _call("POST", "/sessions", body)
+    status, sess = _open_with_backoff(body)
     if status == 202:
         raise RuntimeError(
             "engine is draining (dedicated reservation pending); task will retry"

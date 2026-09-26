@@ -6,6 +6,36 @@ All notable changes to Pebbles are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+- **Admin role (UAT finding: every user was effectively an admin).** Admin is
+  now membership in the Pebbles UNIX group `admins` — no second ACL. Creating
+  users/groups and changing membership, cluster join tokens, engine approval
+  and removal, and the Nkoyo model configuration are refused (403) for
+  everyone else, checked per request so revocation is immediate. pebblesd
+  guarantees the group exists and is never empty: accounts named in
+  `PEBBLES_ADMINS` are added at boot, and if the group would be empty the
+  first account ever created is promoted. The last admin can't be removed.
+  `/api/me` reports `admin`, and the UI hides admin navigation and controls.
+- **Jobs belong to their owner.** A job runs *as* its owner, so other users
+  can no longer see, run, or inspect someone else's job (admins see all), and
+  saving a job whose name belongs to another user is refused (409) — enforced
+  in pebblesd as well as the web tier.
+- **Catalog grants** are limited to the catalog's owner or an admin.
+
+### Fixed
+- **Session exhaustion locked users out (UAT P0).** Every login/cookie forked
+  a fresh 512 MB kernel for the same user; with a flat 2 GB engine budget,
+  four logins made Files, SQL, Auto ETL and even scheduled jobs fail with
+  "admitting this session would need …". Interactive sessions are now
+  **reused per user** (atomically — parallel first requests from one page load
+  converge on one kernel; job and Nkoyo sessions stay separate and
+  self-closing), **released on logout**, and the engine budget defaults to
+  **75% of the container's real memory** (cgroup limit or host RAM, ≥1 GiB;
+  `PEBBLES_ENGINE_MEMORY_BYTES` still overrides).
+- **Jobs wait out a full engine** instead of failing: an admission refusal is
+  retried every 30 s up to 20 times (`PEBBLES_JOB_ADMISSION_RETRIES`,
+  `PEBBLES_JOB_ADMISSION_WAIT`), logged in the run.
+
 ## [1.0.0] - 2026-08-12
 
 The first release. Everything below — from the Phase 0 scaffold to release

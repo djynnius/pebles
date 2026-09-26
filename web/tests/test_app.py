@@ -16,7 +16,12 @@ class FakeDaemon:
             return {"username": username, "uid": 70000}
         return None
 
-    def open_session(self, username):
+    def close_session(self, session_id):
+        self.closed = getattr(self, "closed", []) + [session_id]
+        return {"closed": session_id}
+
+    def open_session(self, username, reuse=True):
+        self.reuse_flags = getattr(self, "reuse_flags", []) + [reuse]
         sid = self.next_session
         self.next_session += 1
         return {"id": sid, "username": username, "uid": 70000, "pid": 4242}
@@ -179,7 +184,10 @@ class FakeDaemon:
         return {"username": username, "uid": 70002, "gid": 70002, "home": f"/home/{username}"}
 
     def list_groups(self):
-        return [{"name": "analysts", "gid": 70050, "members": ["tomas"]}]
+        return [
+            {"name": "analysts", "gid": 70050, "members": ["tomas"]},
+            {"name": "admins", "gid": 70051, "members": list(getattr(self, "admins", ["maya"]))},
+        ]
 
     def create_group(self, name):
         return {"name": name, "gid": 70051, "members": []}
@@ -289,6 +297,12 @@ class FakeDaemon:
 
     def save_workflow(self, workflow):
         self.workflows = getattr(self, "workflows", [])
+        for existing in self.workflows:
+            if existing["name"] == workflow["name"]:
+                if existing["username"] != workflow["username"]:
+                    raise PebblesdError(409, "a job named that already belongs to another user")
+                self.workflows.remove(existing)
+                break
         self.workflows.append(workflow)
         return workflow
 
@@ -410,6 +424,17 @@ def test_json_api_auth_and_data():
 
     assert c.post("/api/logout").status_code == 200
     assert c.get("/api/me").status_code == 401
+
+
+def test_web_sessions_reuse_and_are_released_on_logout():
+    # UAT: every login forked a fresh kernel until admission locked everyone
+    # out. The web tier must request reuse, and logout must free the session.
+    d = FakeDaemon()
+    c = api_signed_in(d)
+    assert c.post("/api/sql", json={"sql": "SELECT 1"}).status_code == 200
+    assert d.reuse_flags and all(d.reuse_flags)
+    assert c.post("/api/logout").status_code == 200
+    assert d.closed == [1]
 
 
 def test_api_endpoints_require_auth():
@@ -790,3 +815,75 @@ def test_api_settings_git_identity_and_keys():
     ).status_code == 200
     assert c.post("/api/settings/git", json={"action": "keygen"}).status_code == 200
     assert c.post("/api/settings/git", json={"action": "nope"}).status_code == 422
+
+
+# ---- authorization (UAT: every user was effectively an admin) ---------------
+
+
+def signed_in_as(username, daemon=None):
+    c = client(daemon)
+    c.post("/api/login", json={"username": username, "password": "pebbles-demo-1"})
+    return c
+
+
+def test_me_reports_admin_membership():
+    d = FakeDaemon()
+    assert signed_in_as("maya", d).get("/api/me").get_json()["admin"] is True
+    assert signed_in_as("tomas", d).get("/api/me").get_json()["admin"] is False
+
+
+def test_non_admins_are_refused_every_admin_action():
+    c = signed_in_as("tomas")
+    refused = [
+        ("post", "/api/users", {"username": "evil", "password": "evil-pass-1"}),
+        ("post", "/api/groups", {"name": "evil"}),
+        ("post", "/api/groups/admins/members", {"username": "tomas"}),
+        ("delete", "/api/groups/analysts/members/tomas", None),
+        ("get", "/api/tokens", None),
+        ("post", "/api/tokens", None),
+        ("delete", "/api/tokens/ab12", None),
+        ("get", "/api/engines/pending", None),
+        ("post", "/api/engines/pending/worker-9/approve", None),
+        ("delete", "/api/engines/pending/worker-9", None),
+        ("delete", "/api/engines/worker-1", None),
+        ("post", "/api/nkoyo/config", {"endpoints": ["http://attacker:11434"]}),
+        ("post", "/api/nkoyo/rescan", None),
+    ]
+    for method, path, body in refused:
+        resp = getattr(c, method)(path, json=body) if body else getattr(c, method)(path)
+        assert resp.status_code == 403, (method, path, resp.status_code)
+    # ordinary reads stay open to everyone
+    assert c.get("/api/users").status_code == 200
+    assert c.get("/api/groups").status_code == 200
+
+
+def test_the_last_admin_cannot_be_removed():
+    c = signed_in_as("maya")
+    assert c.delete("/api/groups/admins/members/maya").status_code == 409
+
+
+def test_jobs_are_scoped_to_their_owner():
+    d = FakeDaemon()
+    maya, tomas = signed_in_as("maya", d), signed_in_as("tomas", d)
+    job = {"name": "nightly", "schedule": None,
+           "tasks": [{"id": "t", "task_type": "sql", "payload": "SELECT 1"}]}
+    assert tomas.post("/api/jobs", json=job).status_code == 200
+    d.admins = []  # maya is an ordinary user for this test
+    # another user can't see, run, inspect, or overwrite tomas's job
+    assert maya.get("/api/jobs").get_json() == []
+    assert maya.post("/api/jobs/nightly/run").status_code == 404
+    assert maya.get("/api/jobs/nightly/runs").status_code == 404
+    assert maya.post("/api/jobs", json=job).status_code == 409
+    # the owner keeps full control
+    assert tomas.post("/api/jobs/nightly/run").status_code == 200
+    # admins see everything
+    d.admins = ["maya"]
+    assert [w["name"] for w in maya.get("/api/jobs").get_json()] == ["nightly"]
+
+
+def test_only_owner_or_admin_grants_a_catalog():
+    d = FakeDaemon()
+    maya, tomas = signed_in_as("maya", d), signed_in_as("tomas", d)
+    assert maya.post("/api/catalogs", json={"name": "claims"}).status_code == 200
+    assert tomas.post("/api/catalogs/claims/grants", json={"group": "analysts"}).status_code == 403
+    assert maya.post("/api/catalogs/claims/grants", json={"group": "analysts"}).status_code == 200

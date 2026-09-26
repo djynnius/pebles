@@ -23,6 +23,8 @@ pub enum JobsError {
     InvalidTask(String),
     #[error("workflow {0:?} not found")]
     NotFound(String),
+    #[error("a job named {0:?} already belongs to another user")]
+    Owned(String),
     #[error("airflow is not available on this container")]
     NoAirflow,
     #[error("airflow command failed: {0}")]
@@ -218,6 +220,13 @@ pub fn validate(wf: &Workflow) -> Result<(), JobsError> {
 /// Persist the workflow and (re)compile its DAG file.
 pub fn save(config_dir: &Path, wf: &Workflow) -> Result<(), JobsError> {
     validate(wf)?;
+    // Job names are global (they become Airflow DAG ids): never let one user's
+    // save silently replace another user's job — it would then run as them.
+    if let Ok(existing) = get(config_dir, &wf.name) {
+        if existing.username != wf.username {
+            return Err(JobsError::Owned(wf.name.clone()));
+        }
+    }
     let jobs = jobs_dir(config_dir);
     std::fs::create_dir_all(&jobs)?;
     std::fs::write(
@@ -624,6 +633,21 @@ mod tests {
         let mut wf = flow();
         wf.tasks[0].repo = Some("Bad Repo".into());
         assert!(matches!(validate(&wf), Err(JobsError::InvalidTask(_))));
+    }
+
+    #[test]
+    fn saving_over_another_users_job_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let wf = flow();
+        save(dir.path(), &wf).unwrap();
+        save(dir.path(), &wf).unwrap(); // the owner may re-save
+        let mut hijack = flow();
+        hijack.username = "mallory".into();
+        assert!(matches!(
+            save(dir.path(), &hijack),
+            Err(JobsError::Owned(_))
+        ));
+        assert_eq!(get(dir.path(), &wf.name).unwrap().username, "maya");
     }
 
     #[test]

@@ -21,6 +21,8 @@ from pebbles_web.pebblesd_client import PebblesdClient, PebblesdError
 
 #: home-relative document names (notebooks, dashboards, repos)
 DOC_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+#: the Pebbles group whose members administer the install (pebblesd admins.rs)
+ADMIN_GROUP = "admins"
 #: unquoted SQL identifiers (catalog/schema/table); pebblesd enforces the same
 #: shape for catalog names at creation time
 IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -115,6 +117,40 @@ def register_api(app, client: PebblesdClient) -> None:
 
         return wrapper
 
+    def _is_admin(username: str) -> bool:
+        """Admin = member of the Pebbles group `admins` (pebblesd guarantees it
+        exists and is never empty). Checked per request — no cached role, so
+        removing someone from the group takes effect immediately."""
+        return any(
+            g.get("name") == ADMIN_GROUP and username in g.get("members", [])
+            for g in client.list_groups()
+        )
+
+    def admin_only(f):
+        """Stack UNDER @authed: receives the signed-in user first."""
+
+        @functools.wraps(f)
+        def wrapper(user, *args, **kwargs):
+            if not _is_admin(user["username"]):
+                return jsonify({"error": "admins only"}), 403
+            return f(user, *args, **kwargs)
+
+        return wrapper
+
+    def _job(name: str) -> dict | None:
+        return next((w for w in client.list_workflows() if w.get("name") == name), None)
+
+    def _job_visible(user: dict, name: str):
+        """(workflow, None) when the caller owns it or is an admin; else
+        (None, error-response). Jobs run AS their owner, so letting others
+        trigger them would be running code as someone else."""
+        wf = _job(name)
+        if wf is None:
+            return None, (jsonify({"error": f"no job {name!r}"}), 404)
+        if wf.get("username") != user["username"] and not _is_admin(user["username"]):
+            return None, (jsonify({"error": f"no job {name!r}"}), 404)
+        return wf, None
+
     def _engine_session_id(username: str) -> int:
         sid = session.get("engine_session")
         if sid is None:
@@ -177,7 +213,11 @@ def register_api(app, client: PebblesdClient) -> None:
         user = session.get("user")
         if user is None:
             return jsonify({"error": "unauthenticated"}), 401
-        return jsonify(user)
+        try:
+            admin = _is_admin(user["username"])
+        except (OSError, RuntimeError, ValueError):
+            admin = False
+        return jsonify({**user, "admin": admin})
 
     @app.post("/api/login")
     def api_login():  # pyright: ignore[reportUnusedFunction]
@@ -190,6 +230,14 @@ def register_api(app, client: PebblesdClient) -> None:
 
     @app.post("/api/logout")
     def api_logout():  # pyright: ignore[reportUnusedFunction]
+        # Release the engine session with the login: an idle kernel otherwise
+        # holds its memory reservation until the 30-minute reaper runs.
+        sid = session.get("engine_session")
+        if sid is not None:
+            try:
+                client.close_session(sid)
+            except (OSError, RuntimeError, ValueError):
+                pass  # already reaped / daemon restarting — nothing to release
         session.clear()
         return jsonify({"ok": True})
 
@@ -218,6 +266,7 @@ def register_api(app, client: PebblesdClient) -> None:
 
     @app.post("/api/users")
     @authed
+    @admin_only
     def api_users_create(user):  # pyright: ignore[reportUnusedFunction]
         body = request.get_json(silent=True) or {}
         return jsonify(
@@ -231,56 +280,73 @@ def register_api(app, client: PebblesdClient) -> None:
 
     @app.post("/api/groups")
     @authed
+    @admin_only
     def api_groups_create(user):  # pyright: ignore[reportUnusedFunction]
         body = request.get_json(silent=True) or {}
         return jsonify(client.create_group(body.get("name", "").strip()))
 
     @app.post("/api/groups/<group>/members")
     @authed
+    @admin_only
     def api_group_add_member(user, group):  # pyright: ignore[reportUnusedFunction]
         body = request.get_json(silent=True) or {}
         return jsonify(client.add_group_member(group, body.get("username", "")))
 
     @app.delete("/api/groups/<group>/members/<username>")
     @authed
+    @admin_only
     def api_group_remove_member(user, group, username):  # pyright: ignore[reportUnusedFunction]
+        if group == ADMIN_GROUP:
+            admins = next(
+                (g.get("members", []) for g in client.list_groups() if g.get("name") == group),
+                [],
+            )
+            if admins == [username]:
+                return jsonify({"error": "can't remove the last admin"}), 409
         return jsonify(client.remove_group_member(group, username))
 
     # ---- cluster (tokens, pending engines) --------------------------------
 
     @app.get("/api/tokens")
     @authed
+    @admin_only
     def api_tokens(user):  # pyright: ignore[reportUnusedFunction]
         return jsonify(client.list_tokens())
 
     @app.post("/api/tokens")
     @authed
+    @admin_only
     def api_tokens_mint(user):  # pyright: ignore[reportUnusedFunction]
         # The plaintext token appears exactly once, in this response (REQ-05).
         return jsonify(client.mint_token())
 
     @app.delete("/api/tokens/<token_id>")
     @authed
+    @admin_only
     def api_tokens_revoke(user, token_id):  # pyright: ignore[reportUnusedFunction]
         return jsonify(client.revoke_token(token_id))
 
     @app.get("/api/engines/pending")
     @authed
+    @admin_only
     def api_engines_pending(user):  # pyright: ignore[reportUnusedFunction]
         return jsonify(client.list_pending_engines())
 
     @app.post("/api/engines/pending/<name>/approve")
     @authed
+    @admin_only
     def api_engine_approve(user, name):  # pyright: ignore[reportUnusedFunction]
         return jsonify(client.approve_pending_engine(name))
 
     @app.delete("/api/engines/pending/<name>")
     @authed
+    @admin_only
     def api_engine_reject(user, name):  # pyright: ignore[reportUnusedFunction]
         return jsonify(client.reject_pending_engine(name))
 
     @app.delete("/api/engines/<name>")
     @authed
+    @admin_only
     def api_engine_deregister(user, name):  # pyright: ignore[reportUnusedFunction]
         return jsonify(client.deregister_engine(name))
 
@@ -305,6 +371,13 @@ def register_api(app, client: PebblesdClient) -> None:
     @app.post("/api/catalogs/<name>/grants")
     @authed
     def api_catalog_grant(user, name):  # pyright: ignore[reportUnusedFunction]
+        owner = next(
+            (c.get("owner") for c in client.list_catalogs() if c.get("name") == name), None
+        )
+        if owner is None:
+            return jsonify({"error": f"no catalog {name!r}"}), 404
+        if owner != user["username"] and not _is_admin(user["username"]):
+            return jsonify({"error": "only the catalog's owner or an admin can grant it"}), 403
         body = request.get_json(silent=True) or {}
         return jsonify(client.grant_catalog(name, body.get("group", "")))
 
@@ -661,7 +734,10 @@ def register_api(app, client: PebblesdClient) -> None:
     @app.get("/api/jobs")
     @authed
     def api_jobs(user):  # pyright: ignore[reportUnusedFunction]
-        return jsonify(client.list_workflows())
+        flows = client.list_workflows()
+        if _is_admin(user["username"]):
+            return jsonify(flows)
+        return jsonify([w for w in flows if w.get("username") == user["username"]])
 
     @app.post("/api/jobs")
     @authed
@@ -673,17 +749,20 @@ def register_api(app, client: PebblesdClient) -> None:
     @app.post("/api/jobs/<name>/run")
     @authed
     def api_jobs_run(user, name):  # pyright: ignore[reportUnusedFunction]
-        return jsonify(client.trigger_workflow(name))
+        _, err = _job_visible(user, name)
+        return err or jsonify(client.trigger_workflow(name))
 
     @app.get("/api/jobs/<name>/runs")
     @authed
     def api_jobs_runs(user, name):  # pyright: ignore[reportUnusedFunction]
-        return jsonify(client.workflow_runs(name))
+        _, err = _job_visible(user, name)
+        return err or jsonify(client.workflow_runs(name))
 
     @app.get("/api/jobs/<name>/runs/<run_id>")
     @authed
     def api_jobs_run_detail(user, name, run_id):  # pyright: ignore[reportUnusedFunction]
-        return jsonify(client.workflow_run_detail(name, run_id))
+        _, err = _job_visible(user, name)
+        return err or jsonify(client.workflow_run_detail(name, run_id))
 
     # ---- repos (git-as-user) -------------------------------------------------
 
@@ -775,6 +854,7 @@ def register_api(app, client: PebblesdClient) -> None:
 
     @app.post("/api/nkoyo/config")
     @authed
+    @admin_only
     def api_nkoyo_config_save(user):  # pyright: ignore[reportUnusedFunction]
         body = request.get_json(silent=True) or {}
         cfg = {
@@ -788,6 +868,7 @@ def register_api(app, client: PebblesdClient) -> None:
 
     @app.post("/api/nkoyo/rescan")
     @authed
+    @admin_only
     def api_nkoyo_rescan(user):  # pyright: ignore[reportUnusedFunction]
         return jsonify(client.nkoyo_rescan())
 

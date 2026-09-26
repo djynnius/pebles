@@ -5,6 +5,7 @@
 //! API on a unix socket. The Flask tier is a client of that socket and nothing else
 //! (NFR-01): the socket is root-owned with group `pebbles`, mode 0660.
 
+mod admins;
 mod api;
 mod backups;
 mod catalog;
@@ -99,6 +100,11 @@ async fn main() -> anyhow::Result<()> {
         Ok(0) => {}
         Ok(n) => tracing::info!(restored = n, "restored persisted UNIX accounts"),
         Err(err) => tracing::error!(%err, "restoring persisted accounts failed"),
+    }
+    if cfg.role == pebbles_api::Role::Main {
+        // Who administers this install: the `admins` group (never empty once
+        // any user exists — see admins.rs).
+        admins::ensure_admins(&cfg.config_dir);
     }
 
     let socket_path = cfg.socket_path();
@@ -348,7 +354,10 @@ fn session_state(
         Some(pebbles_session::broker::Broker::start(
             pebbles_session::broker::BrokerConfig {
                 kernel,
-                engine_memory_bytes: env_u64("PEBBLES_ENGINE_MEMORY_BYTES", 2 * 1024 * 1024 * 1024),
+                engine_memory_bytes: env_u64(
+                    "PEBBLES_ENGINE_MEMORY_BYTES",
+                    default_engine_memory(),
+                ),
                 max_sessions: env_u64("PEBBLES_MAX_SESSIONS", 10) as usize,
                 idle_timeout: std::time::Duration::from_secs(env_u64(
                     "PEBBLES_SESSION_IDLE_SECS",
@@ -398,4 +407,35 @@ mod tests {
         assert_eq!(stat_fields("742 (x) Z 1 740"), None);
         assert_eq!(stat_fields(""), None);
     }
+}
+
+/// The session budget when PEBBLES_ENGINE_MEMORY_BYTES isn't set: 75% of the
+/// memory this container may actually use — the cgroup limit when one is set
+/// (Docker `--memory`, Incus `limits.memory`), else host RAM — leaving headroom
+/// for Postgres, Airflow and the web tier. Never below 1 GiB. (It used to be a
+/// flat 2 GiB, which on an 8 GB box admitted only four 512 MB sessions.)
+fn default_engine_memory() -> u64 {
+    const GIB: u64 = 1024 * 1024 * 1024;
+    let cgroup = std::fs::read_to_string("/sys/fs/cgroup/memory.max")
+        .ok()
+        .or_else(|| std::fs::read_to_string("/sys/fs/cgroup/memory/memory.limit_in_bytes").ok())
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        // "max" (v2) doesn't parse; v1's "unlimited" is a huge sentinel.
+        .filter(|&b| b < (1u64 << 60));
+    let host = std::fs::read_to_string("/proc/meminfo").ok().and_then(|m| {
+        m.lines()
+            .find(|l| l.starts_with("MemTotal:"))?
+            .split_whitespace()
+            .nth(1)?
+            .parse::<u64>()
+            .ok()
+            .map(|kb| kb * 1024)
+    });
+    let total = match (cgroup, host) {
+        (Some(c), Some(h)) => c.min(h),
+        (Some(c), None) => c,
+        (None, Some(h)) => h,
+        (None, None) => 4 * GIB,
+    };
+    (total / 4 * 3).max(GIB)
 }

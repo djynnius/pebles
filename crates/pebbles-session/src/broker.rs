@@ -76,6 +76,10 @@ pub struct OpenRequest {
     pub home: String,
     pub mode: SessionMode,
     pub memory_limit_bytes: u64,
+    /// Interactive (web) sessions are reusable: a second open for the same user
+    /// returns the live session instead of forking another kernel. Job and
+    /// Nkoyo sessions are NOT reusable — they own their lifecycle and close it.
+    pub reusable: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -87,6 +91,8 @@ pub struct SessionInfo {
     pub pid: u32,
     pub mode: SessionMode,
     pub memory_limit_bytes: u64,
+    #[serde(default)]
+    pub reusable: bool,
 }
 
 pub struct BrokerConfig {
@@ -118,6 +124,9 @@ pub struct Broker {
     sessions: StdMutex<HashMap<u64, Arc<SessionEntry>>>,
     reservation: StdMutex<Option<PendingReservation>>,
     next_id: AtomicU64,
+    /// Serializes reusable opens so N parallel requests from one fresh login
+    /// converge on ONE kernel instead of racing to fork N of them.
+    reuse_gate: Mutex<()>,
 }
 
 impl Broker {
@@ -132,6 +141,7 @@ impl Broker {
             sessions: StdMutex::new(HashMap::new()),
             reservation: StdMutex::new(None),
             next_id: AtomicU64::new(0),
+            reuse_gate: Mutex::new(()),
         });
         tokio::spawn(reap_idle(Arc::downgrade(&broker)));
         broker
@@ -186,8 +196,33 @@ impl Broker {
         }
     }
 
+    /// The live reusable session for `username`, if any.
+    pub fn find_reusable(&self, username: &str) -> Option<SessionInfo> {
+        self.sessions
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|e| e.info.reusable && e.info.username == username)
+            .map(|e| e.info.clone())
+            .min_by_key(|i| i.id)
+    }
+
     /// The immediate path: admission + spawn (both shared and empty-engine dedicated).
     async fn open_now(&self, req: OpenRequest) -> Result<SessionInfo, SessionError> {
+        if req.reusable && req.mode == SessionMode::Shared {
+            let _gate = self.reuse_gate.lock().await;
+            if let Some(existing) = self.find_reusable(&req.username) {
+                if let Some(entry) = self.sessions.lock().unwrap().get(&existing.id) {
+                    *entry.last_used.lock().unwrap() = Instant::now();
+                }
+                return Ok(existing);
+            }
+            return self.spawn_admitted(req).await;
+        }
+        self.spawn_admitted(req).await
+    }
+
+    async fn spawn_admitted(&self, req: OpenRequest) -> Result<SessionInfo, SessionError> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst) + 1;
         let spec = SessionSpec {
             user: req.username.clone(),
@@ -383,6 +418,7 @@ impl Broker {
                 pid,
                 mode: req.mode,
                 memory_limit_bytes: req.memory_limit_bytes,
+                reusable: req.reusable,
             },
             last_used: StdMutex::new(Instant::now()),
             io: Arc::new(Mutex::new(SessionIo {
@@ -555,6 +591,7 @@ mod tests {
             home: dir.display().to_string(),
             mode: SessionMode::Shared,
             memory_limit_bytes: mem,
+            reusable: false,
         }
     }
 
@@ -603,6 +640,72 @@ mod tests {
         ));
         broker.close(info.id).await.unwrap();
         assert!(broker.open(request(dir.path(), 60)).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn parallel_reusable_opens_converge_on_one_kernel() {
+        // The UAT bug: every login/cookie forked a fresh 512 MB kernel for the
+        // same user until admission locked everyone out. Reusable opens —
+        // including N racing in parallel from one page load — share ONE.
+        let dir = tempfile::tempdir().unwrap();
+        let broker = test_broker(dir.path());
+        let reusable = |mem| OpenRequest {
+            reusable: true,
+            ..request(dir.path(), mem)
+        };
+        let opens = futures_join(vec![
+            broker.open(reusable(60)),
+            broker.open(reusable(60)),
+            broker.open(reusable(60)),
+            broker.open(reusable(60)),
+        ])
+        .await;
+        let ids: Vec<u64> = opens.into_iter().map(|o| session(o.unwrap()).id).collect();
+        assert!(
+            ids.iter().all(|&i| i == ids[0]),
+            "all opens share one session: {ids:?}"
+        );
+        assert_eq!(broker.list().len(), 1);
+
+        // Non-reusable (job/Nkoyo) sessions never attach to the interactive one…
+        let transient = broker.open(request(dir.path(), 30)).await.unwrap();
+        assert_ne!(session(transient).id, ids[0]);
+        // …and once the interactive session closes, reuse opens a fresh one.
+        broker.close(ids[0]).await.unwrap();
+        let again = session(broker.open(reusable(60)).await.unwrap());
+        assert_ne!(again.id, ids[0]);
+    }
+
+    async fn futures_join<F: std::future::Future>(futs: Vec<F>) -> Vec<F::Output> {
+        let mut handles = Vec::new();
+        for f in futs {
+            handles.push(f);
+        }
+        let mut out = Vec::new();
+        // Poll concurrently: join via tokio::join-style select over boxed futures.
+        let mut pinned: Vec<std::pin::Pin<Box<F>>> = handles.into_iter().map(Box::pin).collect();
+        let mut done: Vec<Option<F::Output>> = (0..pinned.len()).map(|_| None).collect();
+        std::future::poll_fn(|cx| {
+            let mut pending = false;
+            for (i, f) in pinned.iter_mut().enumerate() {
+                if done[i].is_none() {
+                    match f.as_mut().poll(cx) {
+                        std::task::Poll::Ready(v) => done[i] = Some(v),
+                        std::task::Poll::Pending => pending = true,
+                    }
+                }
+            }
+            if pending {
+                std::task::Poll::Pending
+            } else {
+                std::task::Poll::Ready(())
+            }
+        })
+        .await;
+        for d in done {
+            out.push(d.expect("completed"));
+        }
+        out
     }
 
     #[tokio::test]

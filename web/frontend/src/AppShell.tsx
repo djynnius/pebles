@@ -14,7 +14,7 @@ export function AppShell({ user, onSignOut }: { user: User; onSignOut: () => voi
         background: "var(--surface-alt)",
       }}
     >
-      <Sidebar />
+      <Sidebar admin={user.admin === true} />
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
         <Topbar user={user} onSignOut={onSignOut} />
         <div style={{ flex: 1, minHeight: 0, display: "flex" }}>

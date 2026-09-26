@@ -78,8 +78,15 @@ class PebblesdClient:
             return data
         raise PebblesdError(status, data.get("error", str(data)))
 
-    def open_session(self, username: str) -> dict:
-        return self._expect("POST", "/sessions", {"username": username})
+    def open_session(self, username: str, reuse: bool = True) -> dict:
+        """The user's interactive session. `reuse` (the default for the web
+        tier) returns their live session instead of forking a new kernel per
+        login/cookie — pebblesd serializes this so parallel first requests
+        converge on one session."""
+        return self._expect("POST", "/sessions", {"username": username, "reuse": reuse})
+
+    def close_session(self, session_id: int) -> dict:
+        return self._expect("DELETE", f"/sessions/{session_id}")
 
     def exec_in_session(self, session_id: int, payload: dict) -> dict:
         return self._expect("POST", f"/sessions/{session_id}/exec", payload)

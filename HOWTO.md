@@ -90,6 +90,32 @@ incus launch pebbles pebbles-main -p default -p pebbles -c environment.PEBBLES_R
 incus list pebbles-main   # open http://<its IP>:8080
 ```
 
+## Admins
+
+Admin rights = membership in the Pebbles group **`admins`**. Admins manage
+users and groups, cluster join tokens, engine approvals, and Nkoyo's models;
+everyone else gets their own workspace. On first boot after an upgrade (or
+when the first user is created) the **first account ever created** becomes
+the admin if nobody else is. To make someone else an admin:
+
+```sh
+# at boot: comma-separated usernames
+docker run ... -e PEBBLES_ADMINS=admin,maya ...
+
+# or live, from the host, through the privileged socket
+docker exec pebbles curl -s --unix-socket /run/pebbles/pebblesd.sock \
+  -H 'Content-Type: application/json' -d '{"username":"admin"}' \
+  http://pebblesd/groups/admins/members
+```
+
+After that, admins manage membership from the Groups screen. The last admin
+can't be removed.
+
+**Session memory.** Each signed-in user gets one engine session (512 MB by
+default, reused across their browser tabs and logins, released on sign-out).
+The engine's total budget defaults to 75% of the container's memory; set
+`PEBBLES_ENGINE_MEMORY_BYTES` / `PEBBLES_SESSION_MEMORY_BYTES` to tune.
+
 ## Back up (and restore) your installation
 
 Two things hold all state, both on the main's host:

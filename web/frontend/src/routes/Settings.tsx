@@ -28,10 +28,12 @@ const USER_TABS: { id: TabId; label: string }[] = [
   { id: "git", label: "Git & repos" },
   { id: "nkoyo", label: "Nkoyo model" },
   { id: "skills", label: "Agent skills" },
-  { id: "tokens", label: "API tokens" },
 ];
 
+// Admin-only (members of the UNIX group `admins`): pebblesd answers 403 to
+// everyone else, so non-admins never see these tabs at all.
 const ADMIN_TABS: { id: TabId; label: string }[] = [
+  { id: "tokens", label: "API tokens" },
   { id: "runtime", label: "Compute runtime" },
   { id: "approvals", label: "Engine approvals" },
 ];
@@ -43,7 +45,10 @@ export function Settings({ user, onSignOut }: { user: User; onSignOut: () => voi
   // "Register engine" on Engines means "mint a join token", which lives here.
   const [params, setParams] = useSearchParams();
   const wanted = params.get("tab") as TabId | null;
-  const tab: TabId = ALL_TABS.some((t) => t.id === wanted) ? (wanted as TabId) : "profile";
+  const admin = user.admin === true;
+  // A non-admin who lands on an admin tab via ?tab= falls back to Profile.
+  const visible = admin ? ALL_TABS : USER_TABS;
+  const tab: TabId = visible.some((t) => t.id === wanted) ? (wanted as TabId) : "profile";
   const setTab = (id: TabId) => setParams({ tab: id }, { replace: true });
   const initials = user.username.slice(0, 2).toUpperCase();
 
@@ -90,20 +95,24 @@ export function Settings({ user, onSignOut }: { user: User; onSignOut: () => voi
           <TabButton key={t.id} label={t.label} on={tab === t.id} onClick={() => setTab(t.id)} />
         ))}
 
-        <div
-          style={{
-            fontSize: 10.5,
-            letterSpacing: "0.8px",
-            textTransform: "uppercase",
-            color: "var(--text-faint)",
-            padding: "14px 6px 6px",
-          }}
-        >
-          — Workspace · admin —
-        </div>
-        {ADMIN_TABS.map((t) => (
-          <TabButton key={t.id} label={t.label} on={tab === t.id} onClick={() => setTab(t.id)} />
-        ))}
+        {admin && (
+          <>
+            <div
+              style={{
+                fontSize: 10.5,
+                letterSpacing: "0.8px",
+                textTransform: "uppercase",
+                color: "var(--text-faint)",
+                padding: "14px 6px 6px",
+              }}
+            >
+              — Workspace · admin —
+            </div>
+            {ADMIN_TABS.map((t) => (
+              <TabButton key={t.id} label={t.label} on={tab === t.id} onClick={() => setTab(t.id)} />
+            ))}
+          </>
+        )}
 
         <div style={{ flex: 1 }} />
         <button
@@ -132,7 +141,7 @@ export function Settings({ user, onSignOut }: { user: User; onSignOut: () => voi
         {tab === "security" && <SecurityPane user={user} />}
         {tab === "home" && <HomePane />}
         {tab === "git" && <GitPane />}
-        {tab === "nkoyo" && <NkoyoPane />}
+        {tab === "nkoyo" && <NkoyoPane admin={admin} />}
         {tab === "skills" && <SkillsPane />}
         {tab === "tokens" && <TokensPane />}
         {tab === "runtime" && <RuntimePane />}
@@ -633,7 +642,7 @@ interface Detected {
   models: string[];
 }
 
-function NkoyoPane() {
+function NkoyoPane({ admin }: { admin: boolean }) {
   const [cfg, setCfg] = useState<NkoyoConfig | null>(null);
   const [endpoints, setEndpoints] = useState("");
   const [detected, setDetected] = useState<Detected[] | null>(null);
@@ -702,6 +711,7 @@ function NkoyoPane() {
             value={endpoints}
             onChange={(e) => setEndpoints(e.target.value)}
             rows={3}
+            readOnly={!admin}
             placeholder="http://10.0.0.7:11434"
             className="mono"
             style={{ ...input, resize: "vertical", fontSize: 12.5 }}
@@ -712,6 +722,7 @@ function NkoyoPane() {
             <input
               value={cfg.planner_model}
               onChange={(e) => patch({ planner_model: e.target.value })}
+              readOnly={!admin}
               className="mono"
               style={input}
             />
@@ -720,6 +731,7 @@ function NkoyoPane() {
             <input
               value={cfg.coder_model}
               onChange={(e) => patch({ coder_model: e.target.value })}
+              readOnly={!admin}
               className="mono"
               style={input}
             />
@@ -728,6 +740,7 @@ function NkoyoPane() {
             <input
               value={cfg.embed_model}
               onChange={(e) => patch({ embed_model: e.target.value })}
+              readOnly={!admin}
               className="mono"
               style={input}
             />
@@ -739,19 +752,26 @@ function NkoyoPane() {
               max={64}
               value={cfg.max_steps}
               onChange={(e) => patch({ max_steps: Number(e.target.value) })}
+              readOnly={!admin}
               className="mono"
               style={input}
             />
           </Labelled>
         </div>
-        <div style={{ display: "flex", gap: 10 }}>
-          <button type="button" onClick={busy ? undefined : save} style={accent}>
-            {busy ? "Working…" : "Save"}
-          </button>
-          <button type="button" onClick={busy ? undefined : rescan} style={ghost}>
-            Rescan hosts
-          </button>
-        </div>
+        {admin ? (
+          <div style={{ display: "flex", gap: 10 }}>
+            <button type="button" onClick={busy ? undefined : save} style={accent}>
+              {busy ? "Working…" : "Save"}
+            </button>
+            <button type="button" onClick={busy ? undefined : rescan} style={ghost}>
+              Rescan hosts
+            </button>
+          </div>
+        ) : (
+          <div style={{ fontSize: 12.5, color: "var(--text-dim)" }}>
+            Only admins can change the assistant&apos;s models.
+          </div>
+        )}
         <Note>
           Local Ollama only — endpoints are probed across the fleet and nothing leaves your hosts.
         </Note>

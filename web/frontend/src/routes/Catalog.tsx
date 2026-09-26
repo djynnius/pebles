@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, errorText, type Row } from "../api";
+import { api, errorText, type Row, type User } from "../api";
 import {
   qualify,
   useCatalogs,
@@ -29,7 +29,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "permissions", label: "Permissions" },
 ];
 
-export function Catalog() {
+export function Catalog({ user }: { user: User }) {
   const navigate = useNavigate();
   const { catalogs, error } = useCatalogs();
   const [engine, setEngine] = useState<Engine | null>(null);
@@ -309,7 +309,12 @@ export function Catalog() {
                 />
               )}
               {tab === "lineage" && <LineageTab />}
-              {tab === "permissions" && <PermissionsTab catalog={selected.catalog} />}
+              {tab === "permissions" && (
+                <PermissionsTab
+                  catalog={selected.catalog}
+                  canGrant={user.admin === true || catalogRow?.owner === user.username}
+                />
+              )}
             </>
           )}
         </div>
@@ -471,7 +476,7 @@ function LineageTab() {
   );
 }
 
-function PermissionsTab({ catalog }: { catalog: string }) {
+function PermissionsTab({ catalog, canGrant }: { catalog: string; canGrant: boolean }) {
   const [grants, setGrants] = useState<Grant[] | null>(null);
   const [groups, setGroups] = useState<Group[]>([]);
   const [choice, setChoice] = useState("");
@@ -490,12 +495,14 @@ function PermissionsTab({ catalog }: { catalog: string }) {
     setGrants(null);
     setError("");
     reload();
-    api
-      .get<Group[]>("/groups")
-      .then(setGroups)
-      .catch(() => setGroups([]));
+    if (canGrant) {
+      api
+        .get<Group[]>("/groups")
+        .then(setGroups)
+        .catch(() => setGroups([]));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [catalog]);
+  }, [catalog, canGrant]);
 
   const add = () => {
     if (!choice) return;
@@ -563,6 +570,11 @@ function PermissionsTab({ catalog }: { catalog: string }) {
         ))}
       </div>
 
+      {!canGrant ? (
+        <div style={{ fontSize: 12.5, color: "var(--text-dim)" }}>
+          Only the catalog&apos;s owner or an admin can grant access.
+        </div>
+      ) : (
       <div
         style={{
           display: "flex",
@@ -618,6 +630,7 @@ function PermissionsTab({ catalog }: { catalog: string }) {
           {busy ? "Granting…" : "Grant"}
         </button>
       </div>
+      )}
     </div>
   );
 }

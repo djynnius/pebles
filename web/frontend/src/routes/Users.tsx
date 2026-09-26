@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, errorText } from "../api";
+import { api, errorText, type User } from "../api";
 import { Page } from "../components/Page";
 import { Table, Td } from "../components/Table";
 import { Empty, ErrorBlock, Loading } from "../components/State";
@@ -11,7 +11,24 @@ interface UserRow {
   home: string;
 }
 
-export function Users() {
+export function Users({ user }: { user: User }) {
+  // Non-admins get the page chrome and a plain notice — no fetch, so no 403
+  // flashing up as an error.
+  if (!user.admin) {
+    return (
+      <Page title="Users &amp; access" eyebrow="Admin">
+      <Empty
+        glyph="⊘"
+        title="Admins only"
+        body="This page is for members of the admins group. Ask an admin if you need an account or group changed."
+      />
+      </Page>
+    );
+  }
+  return <UsersList />;
+}
+
+function UsersList() {
   const [users, setUsers] = useState<UserRow[] | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {

@@ -12,7 +12,7 @@ const NEW_ITEMS: { label: string; glyph: string; path: string }[] = [
   { label: "Catalog", glyph: "◨", path: "/newcatalog" },
 ];
 
-export function Sidebar() {
+export function Sidebar({ admin }: { admin: boolean }) {
   const [collapsed, setCollapsed] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
   const nav = useNavigate();
@@ -153,7 +153,7 @@ export function Sidebar() {
 
       {/* nav groups */}
       <div style={{ flex: 1, overflowY: "auto", padding: "6px 10px" }}>
-        {NAV.map((group) => (
+        {NAV.filter((g) => admin || !g.adminOnly).map((group) => (
           <div key={group.title} style={{ marginBottom: 12 }}>
             {!collapsed && <div style={eyebrow}>{group.title}</div>}
             {group.items.map((item) => {

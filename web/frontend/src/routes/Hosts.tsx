@@ -95,6 +95,7 @@ export function Hosts() {
       </Table>
       <p style={{ color: "var(--text-dim)", fontSize: 13, marginTop: 14 }}>
         Removing an engine invalidates its credentials; it can rejoin with a fresh join token.
+        Only admins can register or remove engines.
       </p>
     </Page>
   );

@@ -93,6 +93,8 @@ export const api = {
 export interface User {
   username: string;
   uid: number;
+  /** Member of the UNIX group `admins`; gates the Admin UI (server enforces 403). */
+  admin?: boolean;
 }
 
 /** A row of a query result — DuckDB values arrive as JSON scalars. */

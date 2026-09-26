@@ -185,6 +185,8 @@ async fn create_user(
         if let Err(err) = pebbles_identity::host::persist_users(&config_dir) {
             tracing::error!(%err, "persisting account snapshot failed");
         }
+        // A fresh install's first user becomes its admin (admins.rs).
+        crate::admins::ensure_admins(&config_dir);
         // M2.5b: catalog TCP credential (~/.pgpass) for remote-engine attaches.
         // Best-effort — postgres may still be starting on first boot; the
         // grant/catalog hooks re-try it lazily.
@@ -486,6 +488,7 @@ async fn open_session(
             memory_limit_bytes: req
                 .memory_limit_bytes
                 .unwrap_or(state.default_session_memory),
+            reusable: req.reuse,
         })
         .await
         .map_err(session_error)?;
@@ -1133,6 +1136,8 @@ async fn nkoyo_chat(
                 home: user.home.clone(),
                 mode: SessionMode::Shared,
                 memory_limit_bytes: state.default_session_memory,
+                // Nkoyo's transient session owns its lifecycle (closed below).
+                reusable: false,
             })
             .await
             .ok()
@@ -1201,6 +1206,7 @@ fn jobs_error(e: crate::jobs::JobsError) -> (StatusCode, Json<ApiError>) {
             error(StatusCode::UNPROCESSABLE_ENTITY, e)
         }
         JobsError::NotFound(_) => error(StatusCode::NOT_FOUND, e),
+        JobsError::Owned(_) => error(StatusCode::CONFLICT, e),
         JobsError::NoAirflow => error(StatusCode::SERVICE_UNAVAILABLE, e),
         _ => error(StatusCode::INTERNAL_SERVER_ERROR, e),
     }

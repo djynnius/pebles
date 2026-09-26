@@ -9,6 +9,8 @@ export interface NavItem {
 export interface NavGroup {
   title: string;
   items: NavItem[];
+  /** Shown only to members of the UNIX group `admins`. */
+  adminOnly?: boolean;
 }
 
 export const NAV: NavGroup[] = [
@@ -46,6 +48,7 @@ export const NAV: NavGroup[] = [
   },
   {
     title: "Admin",
+    adminOnly: true,
     items: [
       { id: "users", label: "Users", glyph: "◔", path: "/users" },
       { id: "groups", label: "Groups", glyph: "◕", path: "/groups" },

@@ -1,6 +1,6 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { api, errorText } from "../api";
+import { api, errorText, type User } from "../api";
 import { Switch } from "../components/Page";
 import { Empty, EmptyAction, ErrorBlock, Loading } from "../components/State";
 import { LOST_HINT, isLost } from "../engines";
@@ -53,7 +53,8 @@ function savePrefs(name: string, prefs: EnginePrefs) {
 
 const gb = (b: number) => (b / 1024 ** 3).toFixed(1);
 
-export function EngineConfig() {
+export function EngineConfig({ user }: { user: User }) {
+  const admin = user.admin === true;
   const nav = useNavigate();
   const [params, setParams] = useSearchParams();
   const wanted = params.get("engine");
@@ -109,11 +110,17 @@ export function EngineConfig() {
           <Empty
             glyph="◍"
             title="No engines registered yet"
-            body="There is nothing to configure until an engine joins. Mint a single-use join token and start an engine container with it."
+            body={
+              admin
+                ? "There is nothing to configure until an engine joins. Mint a single-use join token and start an engine container with it."
+                : "There is nothing to configure until an engine joins. An admin registers engines with a single-use join token."
+            }
             action={
-              <EmptyAction onClick={() => nav("/settings?tab=tokens")}>
-                Mint a join token
-              </EmptyAction>
+              admin ? (
+                <EmptyAction onClick={() => nav("/settings?tab=tokens")}>
+                  Mint a join token
+                </EmptyAction>
+              ) : undefined
             }
           />
         )
@@ -188,6 +195,8 @@ export function EngineConfig() {
             </p>
           </div>
 
+          {admin && (
+          <>
           <h2 style={{ fontSize: 16, fontWeight: 600, margin: "24px 0 12px" }}>Danger zone</h2>
           <div
             style={{
@@ -220,6 +229,8 @@ export function EngineConfig() {
               Deregister engine
             </button>
           </div>
+          </>
+          )}
         </>
       )}
     </div>

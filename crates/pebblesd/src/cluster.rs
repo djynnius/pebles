@@ -525,8 +525,16 @@ impl Cluster {
     }
 
     pub fn map_remote(&self, engine: &EngineRecord, remote_id: u64) -> u64 {
-        let local = self.next_remote.fetch_add(1, Ordering::SeqCst) + 1;
         let mut remote = self.remote.lock().unwrap();
+        // A reused engine session (reuse=true) comes back with the same remote
+        // id: hand out the existing proxy id rather than a second mapping.
+        if let Some((local, _)) = remote
+            .iter()
+            .find(|(_, r)| r.engine_name == engine.name && r.remote_id == remote_id)
+        {
+            return *local;
+        }
+        let local = self.next_remote.fetch_add(1, Ordering::SeqCst) + 1;
         remote.insert(
             local,
             RemoteRef {

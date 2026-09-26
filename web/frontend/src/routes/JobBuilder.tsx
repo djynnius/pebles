@@ -67,6 +67,9 @@ export function JobBuilder() {
   const [engines, setEngines] = useState<EngineRow[]>([]);
   const [repos, setRepos] = useState<string[]>([]);
   const [error, setError] = useState("");
+  // The server's own reason a save failed (e.g. 409 "a job named … already
+  // belongs to another user"), shown beside the button that caused it.
+  const [saveError, setSaveError] = useState("");
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(!editing);
 
@@ -168,6 +171,7 @@ export function JobBuilder() {
     }
     setBusy(true);
     setError("");
+    setSaveError("");
     const body = {
       name,
       schedule: manual ? null : schedule.trim() || null,
@@ -195,7 +199,7 @@ export function JobBuilder() {
         savePrefs(name, prefs);
         nav("/jobs");
       })
-      .catch((e) => setError(errorText(e)))
+      .catch((e) => setSaveError(errorText(e)))
       .finally(() => setBusy(false));
   };
 
@@ -485,6 +489,9 @@ export function JobBuilder() {
         ))}
       </div>
 
+      {saveError && (
+        <ErrorBlock title="Couldn't save the job" error={saveError} style={{ marginTop: 22, marginBottom: 0 }} />
+      )}
       <div style={{ display: "flex", gap: 10, marginTop: 22 }}>
         <button
           type="button"

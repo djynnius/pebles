@@ -100,6 +100,10 @@ pub struct OpenSessionRequest {
     /// in the UI (REQ-17) — this default serves the single-box case.
     #[serde(default)]
     pub engine: Option<String>,
+    /// Interactive callers (the web tier) set this: reuse the user's live
+    /// interactive session instead of forking a new kernel per login/cookie.
+    #[serde(default)]
+    pub reuse: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

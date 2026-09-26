@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, errorText } from "../api";
+import { api, errorText, type User } from "../api";
 import { Page, AccentButton } from "../components/Page";
 import { Table, Td, StatusDot } from "../components/Table";
 import { Empty, EmptyAction, ErrorBlock, Loading } from "../components/State";
@@ -15,7 +15,8 @@ interface Engine {
   sessions: number;
 }
 
-export function Engines() {
+export function Engines({ user }: { user: User }) {
+  const admin = user.admin === true;
   const nav = useNavigate();
   const [engines, setEngines] = useState<Engine[] | null>(null);
   const [error, setError] = useState("");
@@ -34,7 +35,7 @@ export function Engines() {
     <Page
       title="Engines"
       eyebrow="Infrastructure"
-      actions={<AccentButton onClick={mint}>Register engine</AccentButton>}
+      actions={admin ? <AccentButton onClick={mint}>Register engine</AccentButton> : undefined}
     >
       {error && <ErrorBlock title="Couldn't load engines" error={error} />}
       {!error && engines === null && <Loading />}
@@ -66,8 +67,12 @@ export function Engines() {
           <Empty
             glyph="◍"
             title="No engines registered yet"
-            body="Engines are the containers that run your queries. Mint a single-use join token, start an engine container with it, and it appears here."
-            action={<EmptyAction onClick={mint}>Mint a join token</EmptyAction>}
+            body={
+              admin
+                ? "Engines are the containers that run your queries. Mint a single-use join token, start an engine container with it, and it appears here."
+                : "Engines are the containers that run your queries. An admin registers them with a single-use join token."
+            }
+            action={admin ? <EmptyAction onClick={mint}>Mint a join token</EmptyAction> : undefined}
           />
         )
       )}
