@@ -59,16 +59,20 @@ export function AccentButton({
   children,
   onClick,
   type = "button",
+  disabled,
 }: {
   children: ReactNode;
   onClick?: () => void;
   type?: "button" | "submit";
+  disabled?: boolean;
 }) {
   return (
     <button
       type={type}
       onClick={onClick}
+      disabled={disabled}
       style={{
+        opacity: disabled ? 0.6 : 1,
         background: "var(--accent)",
         color: "var(--on-accent)",
         border: "none",
@@ -129,11 +133,24 @@ export function Switch({
   );
 }
 
-export function GhostButton({ children, onClick }: { children: ReactNode; onClick?: () => void }) {
+export function GhostButton({
+  children,
+  onClick,
+  type = "button",
+  disabled,
+}: {
+  children: ReactNode;
+  onClick?: () => void;
+  type?: "button" | "submit";
+  disabled?: boolean;
+}) {
   return (
     <button
+      type={type}
       onClick={onClick}
+      disabled={disabled}
       style={{
+        opacity: disabled ? 0.6 : 1,
         background: "var(--surface)",
         color: "var(--text-mid)",
         border: "1px solid var(--border)",

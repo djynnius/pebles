@@ -235,6 +235,87 @@ impl UidAllocator {
 /// Host-mutating operations. Everything here shells out to the standard tooling
 /// (`groupadd`/`useradd`/`chpasswd`) as root and is only reachable through
 /// pebblesd's privileged API — never from the web tier directly (NFR-01).
+/// Shadow fields for a user: (hash, expire) — `None` if absent.
+fn shadow_entry<'a>(shadow: &'a str, name: &str) -> Option<(&'a str, &'a str)> {
+    shadow.lines().find_map(|line| {
+        let f: Vec<&str> = line.split(':').collect();
+        (f.first() == Some(&name)).then(|| {
+            (
+                f.get(1).copied().unwrap_or(""),
+                f.get(7).copied().unwrap_or(""),
+            )
+        })
+    })
+}
+
+/// Is the account disabled? Locked hash (`!…`) or an expiry date set.
+pub fn is_disabled_in_shadow(shadow: &str, name: &str) -> bool {
+    shadow_entry(shadow, name)
+        .map(|(hash, expire)| hash.starts_with('!') || !expire.is_empty())
+        .unwrap_or(false)
+}
+
+/// What an ENGINE must change to match the main's identity snapshot. The main
+/// is the source of truth (REQ-11): accounts deleted there disappear here,
+/// password and lock/expiry changes follow, revoked memberships and deleted
+/// team groups are dropped. Pure — computed from file contents, so testable.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ReconcilePlan {
+    pub delete_users: Vec<String>,
+    /// (user, hash) — covers password changes AND lock state ('!' prefix).
+    pub set_hashes: Vec<(String, String)>,
+    /// (user, expire field — "" clears it).
+    pub set_expiry: Vec<(String, String)>,
+    pub remove_memberships: Vec<(String, String)>,
+    pub delete_groups: Vec<String>,
+}
+
+pub fn reconcile_plan(
+    stored_passwd: &str,
+    stored_shadow: &str,
+    stored_group: &str,
+    live_passwd: &str,
+    live_shadow: &str,
+    live_group: &str,
+) -> ReconcilePlan {
+    let mut plan = ReconcilePlan::default();
+    let stored_users = pebbles_users(stored_passwd);
+    for live in pebbles_users(live_passwd) {
+        if !stored_users.iter().any(|u| u.username == live.username) {
+            plan.delete_users.push(live.username);
+            continue;
+        }
+        let (Some((want_hash, want_exp)), Some((have_hash, have_exp))) = (
+            shadow_entry(stored_shadow, &live.username),
+            shadow_entry(live_shadow, &live.username),
+        ) else {
+            continue;
+        };
+        if want_hash != have_hash && !want_hash.is_empty() {
+            plan.set_hashes
+                .push((live.username.clone(), want_hash.to_string()));
+        }
+        if want_exp != have_exp {
+            plan.set_expiry
+                .push((live.username.clone(), want_exp.to_string()));
+        }
+    }
+    let stored_groups = pebbles_groups(stored_group, stored_passwd);
+    for live in pebbles_groups(live_group, live_passwd) {
+        match stored_groups.iter().find(|g| g.name == live.name) {
+            None => plan.delete_groups.push(live.name),
+            Some(want) => {
+                for m in &live.members {
+                    if !want.members.contains(m) && !plan.delete_users.contains(m) {
+                        plan.remove_memberships.push((live.name.clone(), m.clone()));
+                    }
+                }
+            }
+        }
+    }
+    plan
+}
+
 pub mod host {
     use super::*;
     use std::io::Write;
@@ -338,6 +419,113 @@ pub mod host {
         Ok(())
     }
 
+    /// Names of disabled accounts (locked or expired) — root-only read.
+    pub fn disabled_users() -> Vec<String> {
+        let shadow = std::fs::read_to_string("/etc/shadow").unwrap_or_default();
+        list_users()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|u| super::is_disabled_in_shadow(&shadow, &u.username))
+            .map(|u| u.username)
+            .collect()
+    }
+
+    fn require_user(username: &str) -> Result<ProvisionedUser, IdentityError> {
+        validate_username(username)?;
+        find_user(username)?.ok_or_else(|| IdentityError::NoSuchUser(username.to_string()))
+    }
+
+    /// Set a new password (admin reset or self-service change — the caller
+    /// decides who may). SHA-512 crypt, same as create_user.
+    pub fn set_password(username: &str, password: &str) -> Result<(), IdentityError> {
+        require_user(username)?;
+        run(
+            "chpasswd",
+            &["-c", "SHA512"],
+            Some(&format!("{username}:{password}\n")),
+        )
+    }
+
+    /// Disable = lock the password AND expire the account, so neither a
+    /// password nor an SSH key gets in (PAM's account phase refuses expired
+    /// accounts). Enable reverses both. Replicates to engines via the shadow
+    /// snapshot (see `reconcile_plan`).
+    pub fn set_disabled(username: &str, disabled: bool) -> Result<(), IdentityError> {
+        require_user(username)?;
+        if disabled {
+            run("usermod", &["-L", username], None)?;
+            run("chage", &["-E", "0", username], None)
+        } else {
+            run("usermod", &["-U", username], None)?;
+            run("chage", &["-E", "-1", username], None)
+        }
+    }
+
+    /// Remove an account (and its personal group). `remove_home` deletes
+    /// `/home/<name>` too — the main only; engines never pass it, since homes
+    /// may be shared storage.
+    pub fn delete_user(username: &str, remove_home: bool) -> Result<(), IdentityError> {
+        require_user(username)?;
+        if remove_home {
+            run("userdel", &["-r", username], None)
+        } else {
+            run("userdel", &[username], None)
+        }
+    }
+
+    pub fn delete_group(name: &str) -> Result<(), IdentityError> {
+        validate_username(name)?;
+        if !list_groups()?.iter().any(|g| g.name == name) {
+            return Err(IdentityError::NoSuchUser(format!("group {name}")));
+        }
+        run("groupdel", &[name], None)
+    }
+
+    /// Engine side: converge the live account database on the main's snapshot
+    /// (deletions, password/lock/expiry changes, revoked memberships, deleted
+    /// team groups). Additions are `restore_users`' job. Returns actions taken.
+    pub fn reconcile_to_snapshot(state_dir: &Path) -> Result<usize, IdentityError> {
+        let dir = state_dir.join("identity");
+        let Ok(stored_passwd) = std::fs::read_to_string(dir.join("passwd")) else {
+            return Ok(0);
+        };
+        let plan = super::reconcile_plan(
+            &stored_passwd,
+            &std::fs::read_to_string(dir.join("shadow")).unwrap_or_default(),
+            &std::fs::read_to_string(dir.join("group")).unwrap_or_default(),
+            &std::fs::read_to_string("/etc/passwd")?,
+            &std::fs::read_to_string("/etc/shadow").unwrap_or_default(),
+            &std::fs::read_to_string("/etc/group")?,
+        );
+        let mut n = 0;
+        for user in &plan.delete_users {
+            run("userdel", &[user], None)?; // never -r: homes may be shared
+            n += 1;
+        }
+        for (user, hash) in &plan.set_hashes {
+            run("chpasswd", &["-e"], Some(&format!("{user}:{hash}\n")))?;
+            n += 1;
+        }
+        for (user, expire) in &plan.set_expiry {
+            let value = if expire.is_empty() {
+                "-1"
+            } else {
+                expire.as_str()
+            };
+            run("chage", &["-E", value, user], None)?;
+            n += 1;
+        }
+        for (group, user) in &plan.remove_memberships {
+            run("gpasswd", &["-d", user, group], None)?;
+            n += 1;
+        }
+        for group in &plan.delete_groups {
+            run("groupdel", &[group], None)?;
+            n += 1;
+        }
+        Ok(n)
+    }
+
     /// Team groups on this host.
     pub fn list_groups() -> Result<Vec<PebblesGroup>, IdentityError> {
         Ok(pebbles_groups(
@@ -418,7 +606,11 @@ pub mod host {
             std::fs::write(&path, content)?;
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
         }
-        restore_users(state_dir)
+        let added = restore_users(state_dir)?;
+        // Engines follow the main in BOTH directions: deletions, password and
+        // lock changes, and revoked memberships reconcile too.
+        let changed = reconcile_to_snapshot(state_dir)?;
+        Ok(added + changed)
     }
 
     /// Recreate any persisted account missing from this container (fresh image,
@@ -535,6 +727,64 @@ pub mod host {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn engines_reconcile_deletes_password_lock_and_membership_changes() {
+        let stored_passwd = "maya:x:70000:70000::/home/maya:/bin/bash\n\
+                             tomas:x:70001:70001::/home/tomas:/bin/bash\n";
+        let live_passwd = "maya:x:70000:70000::/home/maya:/bin/bash\n\
+                           tomas:x:70001:70001::/home/tomas:/bin/bash\n\
+                           gone:x:70002:70002::/home/gone:/bin/bash\n\
+                           root:x:0:0:root:/root:/bin/bash\n";
+        // maya's password changed; tomas was disabled (locked + expired)
+        let stored_shadow = "maya:$6$new:1::::::\ntomas:!$6$t:1:::::1:\n";
+        let live_shadow = "maya:$6$old:1::::::\ntomas:$6$t:1::::::\ngone:$6$g:1::::::\n";
+        let stored_group = "maya:x:70000:\ntomas:x:70001:\nanalysts:x:70050:maya\n";
+        let live_group = "maya:x:70000:\ntomas:x:70001:\ngone:x:70002:\n\
+                          analysts:x:70050:maya,tomas\nold-team:x:70051:maya\n";
+
+        let plan = reconcile_plan(
+            stored_passwd,
+            stored_shadow,
+            stored_group,
+            live_passwd,
+            live_shadow,
+            live_group,
+        );
+        assert_eq!(plan.delete_users, vec!["gone"]); // root is out of range: untouched
+        assert_eq!(
+            plan.set_hashes,
+            vec![
+                ("maya".into(), "$6$new".into()),
+                ("tomas".into(), "!$6$t".into())
+            ]
+        );
+        assert_eq!(plan.set_expiry, vec![("tomas".into(), "1".into())]);
+        assert_eq!(
+            plan.remove_memberships,
+            vec![("analysts".into(), "tomas".into())]
+        );
+        assert_eq!(plan.delete_groups, vec!["old-team"]);
+
+        // converged state → empty plan
+        let same = reconcile_plan(
+            stored_passwd,
+            stored_shadow,
+            stored_group,
+            stored_passwd,
+            stored_shadow,
+            stored_group,
+        );
+        assert_eq!(same, ReconcilePlan::default());
+    }
+
+    #[test]
+    fn disabled_means_locked_or_expired() {
+        let shadow = "a:!$6$x:1::::::\nb:$6$x:1:::::1:\nc:$6$x:1::::::\n";
+        assert!(is_disabled_in_shadow(shadow, "a"));
+        assert!(is_disabled_in_shadow(shadow, "b"));
+        assert!(!is_disabled_in_shadow(shadow, "c"));
+    }
 
     const PASSWD: &str = "root:x:0:0:root:/root:/bin/bash\n\
                           postgres:x:102:104:PostgreSQL:/var/lib/postgresql:/bin/sh\n\

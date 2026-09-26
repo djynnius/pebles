@@ -381,34 +381,6 @@ fn session_state(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::stat_fields;
-
-    // Real-shaped /proc/<pid>/stat line: pid (comm) state ppid … starttime(22) …
-    const ZOMBIE: &str = "742 (airflow worker) Z 1 740 740 0 -1 4227116 0 0 0 0 1 2 3 4 \
-                          20 0 1 0 98765 0 0 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 1 0 0 0 0 0";
-
-    #[test]
-    fn stat_parser_reads_state_ppid_and_starttime() {
-        assert_eq!(stat_fields(ZOMBIE), Some((b'Z', 1, 98765)));
-    }
-
-    #[test]
-    fn stat_parser_survives_hostile_comm_names() {
-        // comm may contain spaces AND parentheses; only the LAST ')' ends it.
-        let stat = "99 (a) evil (comm)) R 42 99 99 0 -1 0 0 0 0 0 0 0 0 0 \
-                    20 0 1 0 12345 0 0 0";
-        assert_eq!(stat_fields(stat), Some((b'R', 42, 12345)));
-    }
-
-    #[test]
-    fn stat_parser_rejects_truncated_lines() {
-        assert_eq!(stat_fields("742 (x) Z 1 740"), None);
-        assert_eq!(stat_fields(""), None);
-    }
-}
-
 /// The session budget when PEBBLES_ENGINE_MEMORY_BYTES isn't set: 75% of the
 /// memory this container may actually use — the cgroup limit when one is set
 /// (Docker `--memory`, Incus `limits.memory`), else host RAM — leaving headroom
@@ -438,4 +410,32 @@ fn default_engine_memory() -> u64 {
         (None, None) => 4 * GIB,
     };
     (total / 4 * 3).max(GIB)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stat_fields;
+
+    // Real-shaped /proc/<pid>/stat line: pid (comm) state ppid … starttime(22) …
+    const ZOMBIE: &str = "742 (airflow worker) Z 1 740 740 0 -1 4227116 0 0 0 0 1 2 3 4 \
+                          20 0 1 0 98765 0 0 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 1 0 0 0 0 0";
+
+    #[test]
+    fn stat_parser_reads_state_ppid_and_starttime() {
+        assert_eq!(stat_fields(ZOMBIE), Some((b'Z', 1, 98765)));
+    }
+
+    #[test]
+    fn stat_parser_survives_hostile_comm_names() {
+        // comm may contain spaces AND parentheses; only the LAST ')' ends it.
+        let stat = "99 (a) evil (comm)) R 42 99 99 0 -1 0 0 0 0 0 0 0 0 0 \
+                    20 0 1 0 12345 0 0 0";
+        assert_eq!(stat_fields(stat), Some((b'R', 42, 12345)));
+    }
+
+    #[test]
+    fn stat_parser_rejects_truncated_lines() {
+        assert_eq!(stat_fields("742 (x) Z 1 740"), None);
+        assert_eq!(stat_fields(""), None);
+    }
 }

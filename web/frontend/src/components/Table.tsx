@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 export function Table({ head, children }: { head: string[]; children: ReactNode }) {
   return (
@@ -41,14 +41,26 @@ export function Table({ head, children }: { head: string[]; children: ReactNode 
   );
 }
 
-export function Td({ children, mono }: { children: ReactNode; mono?: boolean }) {
+export function Td({
+  children,
+  mono,
+  style,
+  colSpan,
+}: {
+  children?: ReactNode;
+  mono?: boolean;
+  style?: CSSProperties;
+  colSpan?: number;
+}) {
   return (
     <td
       className={mono ? "mono" : undefined}
+      colSpan={colSpan}
       style={{
         padding: "11px 16px",
         borderBottom: "1px solid var(--border-soft)",
         fontSize: mono ? 12.5 : 13,
+        ...style,
       }}
     >
       {children}

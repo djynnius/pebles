@@ -108,8 +108,10 @@ docker exec pebbles curl -s --unix-socket /run/pebbles/pebblesd.sock \
   http://pebblesd/groups/admins/members
 ```
 
-After that, admins manage membership from the Groups screen. The last admin
-can't be removed.
+After that, admins manage everything from the UI: **Users** (add, disable,
+delete, reset password, make admin), **Groups** (create, delete, members) and
+**Engines** (who may use each engine). Everyone changes their own password
+under Settings → Security. The last admin can't be removed or disabled.
 
 **Session memory.** Each signed-in user gets one engine session (512 MB by
 default, reused across their browser tabs and logins, released on sign-out).

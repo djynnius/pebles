@@ -1,7 +1,21 @@
-import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useState,
+  type CSSProperties,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, errorText, type User } from "../api";
 import { Empty, EmptyAction, ErrorBlock, Loading } from "../components/State";
+import {
+  Field,
+  FormMessage,
+  InlineConfirm,
+  TextInput,
+  passwordProblem,
+} from "../components/Form";
 
 /*
  * /settings — account & settings (spec §5 "settings"). Left rail of tabs, right
@@ -219,12 +233,81 @@ function SecurityPane({ user }: { user: User }) {
         <FieldRow label="Signed in as" value={user.username} mono />
         <FieldRow label="Session" value="Browser cookie, this device only" last />
       </Card>
+      <SectionTitle>Change password</SectionTitle>
+      <ChangePassword />
       <Note>
-        Passwords are verified against the host shadow database by pebblesd — changing yours from
-        the web tier arrives in a later phase. Signing out clears this cookie; other devices keep
-        their own sessions until they sign out.
+        Passwords are verified against the host shadow database by pebblesd — this changes your
+        UNIX account password. Signing out clears this cookie; other devices keep their own
+        sessions until they sign out.
       </Note>
     </>
+  );
+}
+
+function ChangePassword() {
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [error, setError] = useState("");
+  const [ok, setOk] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    setOk(false);
+    if (!current) return setError("Enter your current password.");
+    const problem = passwordProblem(next, confirm);
+    if (problem) return setError(problem);
+    if (next === current) return setError("The new password must differ from the current one.");
+    setSaving(true);
+    setError("");
+    api
+      .post("/me/password", { current, new: next })
+      .then(() => {
+        setOk(true);
+        setCurrent("");
+        setNext("");
+        setConfirm("");
+      })
+      .catch((err) => setError(errorText(err)))
+      .finally(() => setSaving(false));
+  };
+
+  return (
+    <Card style={{ padding: 18 }}>
+      <form onSubmit={submit} style={{ display: "grid", gap: 12, maxWidth: 420 }}>
+        <Field label="Current password">
+          <TextInput
+            type="password"
+            value={current}
+            onChange={setCurrent}
+            autoComplete="current-password"
+          />
+        </Field>
+        <Field label="New password" hint="At least 8 characters">
+          <TextInput type="password" value={next} onChange={setNext} autoComplete="new-password" />
+        </Field>
+        <Field label="Confirm new password">
+          <TextInput
+            type="password"
+            value={confirm}
+            onChange={setConfirm}
+            autoComplete="new-password"
+          />
+        </Field>
+        {error && <FormMessage tone="err">{error}</FormMessage>}
+        {ok && <FormMessage tone="ok">Password changed. Use it the next time you sign in.</FormMessage>}
+        <div>
+          <button
+            type="submit"
+            disabled={saving}
+            style={{ ...accent, opacity: saving ? 0.6 : 1 }}
+          >
+            {saving ? "Changing…" : "Change password"}
+          </button>
+        </div>
+      </form>
+    </Card>
   );
 }
 
@@ -886,12 +969,20 @@ function TokensPane() {
       .catch((e) => setError(errorText(e)));
   };
 
+  const [revoking, setRevoking] = useState<string | null>(null);
+  const [revokeBusy, setRevokeBusy] = useState(false);
+  const [revokeError, setRevokeError] = useState("");
   const revoke = (id: string) => {
-    if (!confirm(`Revoke join token ${id}?`)) return;
+    setRevokeBusy(true);
+    setRevokeError("");
     api
       .del(`/tokens/${encodeURIComponent(id)}`)
-      .then(load)
-      .catch((e) => setError(errorText(e)));
+      .then(() => {
+        setRevoking(null);
+        load();
+      })
+      .catch((e) => setRevokeError(errorText(e)))
+      .finally(() => setRevokeBusy(false));
   };
 
   return (
@@ -944,8 +1035,8 @@ function TokensPane() {
       {tokens && tokens.length > 0 ? (
         <Card style={{ overflow: "hidden" }}>
           {tokens.map((t) => (
+            <div key={t.id}>
             <div
-              key={t.id}
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -972,9 +1063,30 @@ function TokensPane() {
                 {t.used ? "USED" : "UNUSED"}
               </span>
               <div style={{ flex: 1 }} />
-              <button type="button" onClick={() => revoke(t.id)} style={ghost}>
+              <button
+                type="button"
+                onClick={() => {
+                  setRevokeError("");
+                  setRevoking(revoking === t.id ? null : t.id);
+                }}
+                style={ghost}
+              >
                 Revoke
               </button>
+            </div>
+            {revoking === t.id && (
+              <div style={{ padding: "10px 18px", borderBottom: "1px solid var(--border-soft)" }}>
+                <InlineConfirm
+                  message={`Revoke join token ${t.id}?`}
+                  confirmLabel="Revoke"
+                  busyLabel="Revoking…"
+                  busy={revokeBusy}
+                  onConfirm={() => revoke(t.id)}
+                  onCancel={() => setRevoking(null)}
+                  error={revokeError}
+                />
+              </div>
+            )}
             </div>
           ))}
         </Card>
@@ -1014,12 +1126,20 @@ function RuntimePane() {
   }, []);
   useEffect(load, [load]);
 
+  const [removing, setRemoving] = useState<string | null>(null);
+  const [removeBusy, setRemoveBusy] = useState(false);
+  const [removeError, setRemoveError] = useState("");
   const deregister = (name: string) => {
-    if (!confirm(`Deregister ${name}? Its credentials stop working immediately.`)) return;
+    setRemoveBusy(true);
+    setRemoveError("");
     api
       .del(`/engines/${encodeURIComponent(name)}`)
-      .then(load)
-      .catch((e) => setError(errorText(e)));
+      .then(() => {
+        setRemoving(null);
+        load();
+      })
+      .catch((e) => setRemoveError(errorText(e)))
+      .finally(() => setRemoveBusy(false));
   };
 
   return (
@@ -1028,8 +1148,8 @@ function RuntimePane() {
       {engines && engines.length > 0 ? (
         <Card style={{ overflow: "hidden" }}>
           {engines.map((e) => (
+            <div key={e.name}>
             <div
-              key={e.name}
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -1054,9 +1174,30 @@ function RuntimePane() {
               >
                 Configure
               </button>
-              <button type="button" onClick={() => deregister(e.name)} style={ghost}>
+              <button
+                type="button"
+                onClick={() => {
+                  setRemoveError("");
+                  setRemoving(removing === e.name ? null : e.name);
+                }}
+                style={ghost}
+              >
                 Deregister
               </button>
+            </div>
+            {removing === e.name && (
+              <div style={{ padding: "10px 18px", borderBottom: "1px solid var(--border-soft)" }}>
+                <InlineConfirm
+                  message={`Deregister ${e.name}? Its credentials stop working immediately.`}
+                  confirmLabel="Deregister"
+                  busyLabel="Deregistering…"
+                  busy={removeBusy}
+                  onConfirm={() => deregister(e.name)}
+                  onCancel={() => setRemoving(null)}
+                  error={removeError}
+                />
+              </div>
+            )}
             </div>
           ))}
         </Card>

@@ -6,6 +6,28 @@ All notable changes to Pebbles are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Account lifecycle for admins (UAT Phase 2).** Users can be **deleted**
+  (optionally with their home directory — off by default), **disabled**
+  (password locked AND account expired, so neither a password nor an SSH key
+  gets in; their live sessions close immediately and a still-open browser
+  cookie stops working within seconds) and re-enabled, and have their
+  **password reset**. Everyone can **change their own password** from
+  Settings → Security (the current password is required). Admins can't
+  delete or disable themselves or the last admin. A deleted user's catalogs
+  survive; their database role is stripped of login.
+- **Groups** can be deleted (never `admins`); the Groups screen creates groups
+  and adds/removes members. **Engine access** (everyone / one group) is
+  settable from Engines and Engine config.
+
+### Fixed
+- **Engines now follow the main in both directions.** Account sync used to be
+  add-only: a user deleted or disabled on the main kept a working login (incl.
+  SFTP) on every engine, and password changes never reached them. Engines now
+  reconcile deletions, password and lock/expiry changes, revoked memberships
+  and deleted groups on every sync (immediate push + the 60 s reconcile loop).
+  Engine-side deletion never removes homes — they may be shared storage.
+
 ### Security
 - **Admin role (UAT finding: every user was effectively an admin).** Admin is
   now membership in the Pebbles UNIX group `admins` — no second ACL. Creating

@@ -142,6 +142,22 @@ class PebblesdClient:
             raise PebblesdError(status, str(data))
         return data
 
+    def delete_user(self, username: str, remove_home: bool = False) -> dict:
+        q = "?remove_home=true" if remove_home else ""
+        return self._expect("DELETE", f"/users/{username}{q}")
+
+    def set_password(self, username: str, password: str) -> dict:
+        return self._expect("POST", f"/users/{username}/password", {"password": password})
+
+    def set_disabled(self, username: str, disabled: bool) -> dict:
+        return self._expect("POST", f"/users/{username}/disabled", {"disabled": disabled})
+
+    def delete_group(self, name: str) -> dict:
+        return self._expect("DELETE", f"/groups/{name}")
+
+    def set_engine_access(self, name: str, access: str) -> dict:
+        return self._expect("POST", f"/engines/{name}/access", {"access": access})
+
     def create_user(self, username: str, password: str) -> dict:
         return self._expect("POST", "/users", {"username": username, "password": password})
 

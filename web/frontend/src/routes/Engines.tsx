@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, errorText, type User } from "../api";
 import { Page, AccentButton } from "../components/Page";
 import { Table, Td, StatusDot } from "../components/Table";
 import { Empty, EmptyAction, ErrorBlock, Loading } from "../components/State";
 import { LOST_HINT, engineTone, isLost } from "../engines";
+import { EngineAccess, useGroupNames } from "../components/EngineAccess";
 
 interface Engine {
   name: string;
@@ -20,12 +21,17 @@ export function Engines({ user }: { user: User }) {
   const nav = useNavigate();
   const [engines, setEngines] = useState<Engine[] | null>(null);
   const [error, setError] = useState("");
-  useEffect(() => {
+  const groups = useGroupNames(admin);
+  const load = useCallback(() => {
     api
       .get<Engine[]>("/engines")
-      .then(setEngines)
+      .then((e) => {
+        setEngines(e);
+        setError("");
+      })
       .catch((e) => setError(errorText(e)));
   }, []);
+  useEffect(load, [load]);
 
   // Registering an engine *is* minting a join token — the engine container
   // trades it for membership, so the button goes where the tokens live.
@@ -57,7 +63,15 @@ export function Engines({ user }: { user: User }) {
               </Td>
               <Td>{e.sessions}</Td>
               <Td>{e.resources.cpus}</Td>
-              <Td mono>{e.access ?? "everyone"}</Td>
+              <Td>
+                <EngineAccess
+                  engine={e.name}
+                  access={e.access}
+                  admin={admin}
+                  groups={groups}
+                  onChanged={load}
+                />
+              </Td>
               <Td mono>{e.address}</Td>
             </tr>
           ))}

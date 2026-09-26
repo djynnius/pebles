@@ -70,6 +70,9 @@ pub fn router(role: Role, state: AppState) -> Router {
         // too while it doubles as the single-box engine (REQ-04).
         Role::Main => health_routes(role)
             .route("/users", get(list_users).post(create_user))
+            .route("/users/{name}", delete(delete_user))
+            .route("/users/{name}/password", post(set_user_password))
+            .route("/users/{name}/disabled", post(set_user_disabled))
             .route("/auth/login", post(login))
             .route("/sessions", get(list_sessions).post(open_session))
             .route(
@@ -84,6 +87,7 @@ pub fn router(role: Role, state: AppState) -> Router {
                 get(list_catalog_grants).post(grant_catalog),
             )
             .route("/groups", get(list_groups).post(create_group))
+            .route("/groups/{name}", delete(delete_group))
             .route("/groups/{name}/members", post(add_member))
             .route("/groups/{name}/members/{user}", delete(remove_member))
             .route("/cluster/tokens", get(list_tokens).post(mint_token))
@@ -211,6 +215,7 @@ async fn create_user(
                 uid: user.uid,
                 gid: user.gid,
                 home: user.home,
+                disabled: false,
             }))
         }
         Err(e @ IdentityError::InvalidUsername(_)) => {
@@ -222,14 +227,17 @@ async fn create_user(
 }
 
 async fn list_users() -> ApiResult<Vec<UserInfo>> {
-    let users = tokio::task::spawn_blocking(pebbles_identity::host::list_users)
-        .await
-        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?
-        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let (users, disabled) = tokio::task::spawn_blocking(|| {
+        pebbles_identity::host::list_users().map(|u| (u, pebbles_identity::host::disabled_users()))
+    })
+    .await
+    .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?
+    .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(Json(
         users
             .into_iter()
             .map(|u| UserInfo {
+                disabled: disabled.contains(&u.username),
                 username: u.username,
                 uid: u.uid,
                 gid: u.gid,
@@ -237,6 +245,118 @@ async fn list_users() -> ApiResult<Vec<UserInfo>> {
             })
             .collect(),
     ))
+}
+
+/// Close every live local session a user holds (disable/delete must take
+/// effect now, not at the 30-minute idle reap).
+async fn close_user_sessions(state: &AppState, username: &str) {
+    if let Some(broker) = &state.broker {
+        for s in broker.list().into_iter().filter(|s| s.username == username) {
+            let _ = broker.close(s.id).await;
+        }
+    }
+}
+
+fn identity_status(e: &IdentityError) -> StatusCode {
+    match e {
+        IdentityError::NoSuchUser(_) => StatusCode::NOT_FOUND,
+        IdentityError::InvalidUsername(_) => StatusCode::UNPROCESSABLE_ENTITY,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+/// Run one identity mutation off the async runtime, persist the snapshot,
+/// and replicate to engines (which reconcile deletions/locks too).
+async fn mutate_identity(
+    state: &AppState,
+    op: impl FnOnce() -> Result<(), IdentityError> + Send + 'static,
+) -> Result<(), (StatusCode, Json<ApiError>)> {
+    let config_dir = state.config_dir.clone();
+    tokio::task::spawn_blocking(move || {
+        op()?;
+        if let Err(err) = pebbles_identity::host::persist_users(&config_dir) {
+            tracing::error!(%err, "persisting account snapshot failed");
+        }
+        Ok::<_, IdentityError>(())
+    })
+    .await
+    .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?
+    .map_err(|e| error(identity_status(&e), e))?;
+    replicate(state);
+    Ok(())
+}
+
+async fn delete_user(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> ApiResult<Value> {
+    let remove_home = q.get("remove_home").is_some_and(|v| v == "true");
+    close_user_sessions(&state, &name).await;
+    let user = name.clone();
+    mutate_identity(&state, move || {
+        pebbles_identity::host::delete_user(&user, remove_home)
+    })
+    .await?;
+    // Their catalogs survive; the database role just can't log in any more.
+    let role = name.clone();
+    let _ = tokio::task::spawn_blocking(move || crate::catalog::disable_role(&role)).await;
+    tracing::info!(user = %name, remove_home, "account deleted");
+    Ok(Json(
+        serde_json::json!({ "deleted": name, "home_removed": remove_home }),
+    ))
+}
+
+async fn set_user_password(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(req): Json<pebbles_api::SetPasswordRequest>,
+) -> ApiResult<Value> {
+    if req.password.len() < 8 {
+        return Err(error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "password must be at least 8 characters",
+        ));
+    }
+    let user = name.clone();
+    mutate_identity(&state, move || {
+        pebbles_identity::host::set_password(&user, &req.password)
+    })
+    .await?;
+    tracing::info!(user = %name, "password changed");
+    Ok(Json(serde_json::json!({ "updated": name })))
+}
+
+async fn set_user_disabled(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(req): Json<pebbles_api::SetDisabledRequest>,
+) -> ApiResult<Value> {
+    let user = name.clone();
+    let disabled = req.disabled;
+    mutate_identity(&state, move || {
+        pebbles_identity::host::set_disabled(&user, disabled)
+    })
+    .await?;
+    if disabled {
+        close_user_sessions(&state, &name).await;
+    }
+    tracing::info!(user = %name, disabled, "account enable state changed");
+    Ok(Json(
+        serde_json::json!({ "user": name, "disabled": disabled }),
+    ))
+}
+
+async fn delete_group(State(state): State<AppState>, Path(name): Path<String>) -> ApiResult<Value> {
+    if name == crate::admins::ADMIN_GROUP {
+        return Err(error(
+            StatusCode::CONFLICT,
+            "the admins group can't be deleted",
+        ));
+    }
+    let group = name.clone();
+    mutate_identity(&state, move || pebbles_identity::host::delete_group(&group)).await?;
+    Ok(Json(serde_json::json!({ "deleted": name })))
 }
 
 async fn login(Json(req): Json<LoginRequest>) -> ApiResult<LoginResponse> {
@@ -464,6 +584,19 @@ async fn open_session(
             ))
         }
     };
+    // A disabled account gets no compute — interactive or scheduled.
+    let check = req.username.clone();
+    let is_disabled = tokio::task::spawn_blocking(move || {
+        pebbles_identity::host::disabled_users().contains(&check)
+    })
+    .await
+    .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    if is_disabled {
+        return Err(error(
+            StatusCode::FORBIDDEN,
+            format!("account {:?} is disabled", req.username),
+        ));
+    }
     let username = req.username.clone();
     let user = tokio::task::spawn_blocking(move || pebbles_identity::host::find_user(&username))
         .await

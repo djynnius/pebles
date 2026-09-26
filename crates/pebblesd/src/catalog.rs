@@ -197,6 +197,16 @@ pub fn ensure_pg_password(username: &str) -> Result<(), CatalogError> {
     Ok(())
 }
 
+/// A deleted account's Postgres role: kept (it may own catalogs other people
+/// were granted) but stripped of login, and its scram password cleared.
+pub fn disable_role(name: &str) -> Result<(), CatalogError> {
+    psql(&format!(
+        "DO $$ BEGIN IF EXISTS (SELECT FROM pg_roles WHERE rolname = '{name}') \
+         THEN ALTER ROLE \"{name}\" NOLOGIN PASSWORD NULL; END IF; END $$;"
+    ))?;
+    Ok(())
+}
+
 pub(crate) fn ensure_role(name: &str, login: bool) -> Result<(), CatalogError> {
     let kind = if login { "LOGIN" } else { "NOLOGIN" };
     psql(&format!(

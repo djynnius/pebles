@@ -13,6 +13,7 @@ import functools
 import json
 import os
 import re
+import time
 
 from flask import Response, jsonify, request, session
 
@@ -23,6 +24,10 @@ from pebbles_web.pebblesd_client import PebblesdClient, PebblesdError
 DOC_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 #: the Pebbles group whose members administer the install (pebblesd admins.rs)
 ADMIN_GROUP = "admins"
+#: how stale the "account still exists and is enabled" check may be
+ACCOUNT_RECHECK_SECS = 10.0
+#: Pebbles user/group names (pebbles-identity validate_username)
+IDENT_GROUP = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 #: unquoted SQL identifiers (catalog/schema/table); pebblesd enforces the same
 #: shape for catalog names at creation time
 IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -100,6 +105,25 @@ def _sse_response(result: dict | None, error: str | None) -> Response:
 def register_api(app, client: PebblesdClient) -> None:
     """Attach every /api/* route to `app`. Called once from create_app."""
 
+    # username -> (checked_at, ok): a deleted or disabled account's live cookie
+    # must stop working within seconds, not at its next login.
+    account_cache: dict[str, tuple[float, bool]] = {}
+
+    def _account_ok(username: str) -> bool:
+        now = time.monotonic()
+        hit = account_cache.get(username)
+        if hit and now - hit[0] < ACCOUNT_RECHECK_SECS:
+            return hit[1]
+        ok = any(
+            u.get("username") == username and not u.get("disabled")
+            for u in client.list_users()
+        )
+        account_cache[username] = (now, ok)
+        return ok
+
+    def _forget_account(username: str) -> None:
+        account_cache.pop(username, None)
+
     def authed(f):
         """Cookie-session gate + uniform error mapping for JSON handlers."""
 
@@ -108,6 +132,12 @@ def register_api(app, client: PebblesdClient) -> None:
             user = session.get("user")
             if user is None:
                 return jsonify({"error": "unauthenticated"}), 401
+            try:
+                if not _account_ok(user["username"]):
+                    session.clear()
+                    return jsonify({"error": "unauthenticated"}), 401
+            except (OSError, RuntimeError, ValueError):
+                pass  # pebblesd briefly unreachable: the handler reports it
             try:
                 return f(user, *args, **kwargs)
             except PebblesdError as exc:
@@ -136,6 +166,20 @@ def register_api(app, client: PebblesdClient) -> None:
             return f(user, *args, **kwargs)
 
         return wrapper
+
+    def _admins() -> list:
+        return next(
+            (g.get("members", []) for g in client.list_groups() if g.get("name") == ADMIN_GROUP),
+            [],
+        )
+
+    def _guard_account_change(user: dict, target: str):
+        """Deleting/disabling: never yourself, never the last admin."""
+        if target == user["username"]:
+            return jsonify({"error": "you can't do that to your own account"}), 409
+        if _admins() == [target]:
+            return jsonify({"error": "that's the last admin — make someone else an admin first"}), 409
+        return None
 
     def _job(name: str) -> dict | None:
         return next((w for w in client.list_workflows() if w.get("name") == name), None)
@@ -273,6 +317,52 @@ def register_api(app, client: PebblesdClient) -> None:
             client.create_user(body.get("username", "").strip(), body.get("password", ""))
         )
 
+    @app.delete("/api/users/<username>")
+    @authed
+    @admin_only
+    def api_users_delete(user, username):  # pyright: ignore[reportUnusedFunction]
+        refused = _guard_account_change(user, username)
+        if refused:
+            return refused
+        remove_home = request.args.get("remove_home") == "true"
+        result = client.delete_user(username, remove_home)
+        _forget_account(username)
+        return jsonify(result)
+
+    @app.post("/api/users/<username>/password")
+    @authed
+    @admin_only
+    def api_users_reset_password(user, username):  # pyright: ignore[reportUnusedFunction]
+        body = request.get_json(silent=True) or {}
+        return jsonify(client.set_password(username, body.get("password", "")))
+
+    @app.post("/api/users/<username>/disabled")
+    @authed
+    @admin_only
+    def api_users_set_disabled(user, username):  # pyright: ignore[reportUnusedFunction]
+        body = request.get_json(silent=True) or {}
+        disabled = bool(body.get("disabled"))
+        if disabled:
+            refused = _guard_account_change(user, username)
+            if refused:
+                return refused
+        result = client.set_disabled(username, disabled)
+        _forget_account(username)
+        return jsonify(result)
+
+    @app.post("/api/me/password")
+    @authed
+    def api_me_password(user):  # pyright: ignore[reportUnusedFunction]
+        """Self-service change: proving the current password is mandatory, so
+        a borrowed, still-open browser session can't lock its owner out."""
+        body = request.get_json(silent=True) or {}
+        current, new = body.get("current", ""), body.get("new", "")
+        if client.login(user["username"], current) is None:
+            return jsonify({"error": "your current password is incorrect"}), 403
+        if current == new:
+            return jsonify({"error": "choose a password you haven't been using"}), 422
+        return jsonify(client.set_password(user["username"], new))
+
     @app.get("/api/groups")
     @authed
     def api_groups(user):  # pyright: ignore[reportUnusedFunction]
@@ -284,6 +374,12 @@ def register_api(app, client: PebblesdClient) -> None:
     def api_groups_create(user):  # pyright: ignore[reportUnusedFunction]
         body = request.get_json(silent=True) or {}
         return jsonify(client.create_group(body.get("name", "").strip()))
+
+    @app.delete("/api/groups/<group>")
+    @authed
+    @admin_only
+    def api_groups_delete(user, group):  # pyright: ignore[reportUnusedFunction]
+        return jsonify(client.delete_group(group))
 
     @app.post("/api/groups/<group>/members")
     @authed
@@ -343,6 +439,19 @@ def register_api(app, client: PebblesdClient) -> None:
     @admin_only
     def api_engine_reject(user, name):  # pyright: ignore[reportUnusedFunction]
         return jsonify(client.reject_pending_engine(name))
+
+    @app.post("/api/engines/<name>/access")
+    @authed
+    @admin_only
+    def api_engine_access(user, name):  # pyright: ignore[reportUnusedFunction]
+        """"everyone" or "group:<name>" (REQ-07)."""
+        body = request.get_json(silent=True) or {}
+        access = (body.get("access") or "").strip()
+        if access != "everyone" and not (
+            access.startswith("group:") and IDENT_GROUP.match(access[len("group:"):])
+        ):
+            return jsonify({"error": 'access must be "everyone" or "group:<name>"'}), 422
+        return jsonify(client.set_engine_access(name, access))
 
     @app.delete("/api/engines/<name>")
     @authed

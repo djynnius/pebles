@@ -66,6 +66,19 @@ pub struct UserInfo {
     pub uid: u32,
     pub gid: u32,
     pub home: String,
+    /// Locked + expired: can't sign in, SFTP, or open sessions.
+    #[serde(default)]
+    pub disabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SetPasswordRequest {
+    pub password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SetDisabledRequest {
+    pub disabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

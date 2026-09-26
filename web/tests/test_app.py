@@ -11,10 +11,42 @@ class FakeDaemon:
     def health(self):
         return {"status": "ok", "role": "main"}
 
+    def _accounts(self):
+        if not hasattr(self, "accounts"):
+            self.accounts = {
+                "maya": {"uid": 70000, "password": "pebbles-demo-1", "disabled": False},
+                "tomas": {"uid": 70001, "password": "pebbles-demo-1", "disabled": False},
+            }
+        return self.accounts
+
     def login(self, username, password):
-        if password == "pebbles-demo-1":
-            return {"username": username, "uid": 70000}
+        acct = self._accounts().get(username)
+        if acct and acct["password"] == password and not acct["disabled"]:
+            return {"username": username, "uid": acct["uid"]}
         return None
+
+    def delete_user(self, username, remove_home=False):
+        self._accounts().pop(username)
+        self.last_delete = (username, remove_home)
+        return {"deleted": username, "home_removed": remove_home}
+
+    def set_password(self, username, password):
+        if len(password) < 8:
+            raise PebblesdError(422, "password must be at least 8 characters")
+        self._accounts()[username]["password"] = password
+        return {"updated": username}
+
+    def set_disabled(self, username, disabled):
+        self._accounts()[username]["disabled"] = disabled
+        return {"user": username, "disabled": disabled}
+
+    def delete_group(self, name):
+        if name == "admins":
+            raise PebblesdError(409, "the admins group can't be deleted")
+        return {"deleted": name}
+
+    def set_engine_access(self, name, access):
+        return {"engine": name, "access": access}
 
     def close_session(self, session_id):
         self.closed = getattr(self, "closed", []) + [session_id]
@@ -178,9 +210,14 @@ class FakeDaemon:
         return list(self.catalogs)
 
     def list_users(self):
-        return [{"username": "maya", "uid": 70000, "gid": 70000, "home": "/home/maya"}]
+        return [
+            {"username": n, "uid": a["uid"], "gid": a["uid"], "home": f"/home/{n}",
+             "disabled": a["disabled"]}
+            for n, a in self._accounts().items()
+        ]
 
     def create_user(self, username, password):
+        self._accounts()[username] = {"uid": 70002, "password": password, "disabled": False}
         return {"username": username, "uid": 70002, "gid": 70002, "home": f"/home/{username}"}
 
     def list_groups(self):
@@ -887,3 +924,72 @@ def test_only_owner_or_admin_grants_a_catalog():
     assert maya.post("/api/catalogs", json={"name": "claims"}).status_code == 200
     assert tomas.post("/api/catalogs/claims/grants", json={"group": "analysts"}).status_code == 403
     assert maya.post("/api/catalogs/claims/grants", json={"group": "analysts"}).status_code == 200
+
+
+# ---- Phase 2: account lifecycle ------------------------------------------------
+
+
+def test_admin_deletes_and_disables_accounts_with_guards():
+    d = FakeDaemon()
+    maya = signed_in_as("maya", d)
+    # never yourself, never the last admin
+    assert maya.delete("/api/users/maya").status_code == 409
+    assert maya.post("/api/users/maya/disabled", json={"disabled": True}).status_code == 409
+    # tomas: disable → can't sign in; re-enable → can
+    assert maya.post("/api/users/tomas/disabled", json={"disabled": True}).status_code == 200
+    assert client(d).post(
+        "/api/login", json={"username": "tomas", "password": "pebbles-demo-1"}
+    ).status_code == 401
+    assert maya.post("/api/users/tomas/disabled", json={"disabled": False}).status_code == 200
+    assert signed_in_as("tomas", d).get("/api/me").status_code == 200
+    # delete, optionally with the home directory
+    assert maya.delete("/api/users/tomas?remove_home=true").status_code == 200
+    assert d.last_delete == ("tomas", True)
+    assert not any(u["username"] == "tomas" for u in maya.get("/api/users").get_json())
+
+
+def test_a_disabled_accounts_live_cookie_stops_working():
+    d = FakeDaemon()
+    tomas = signed_in_as("tomas", d)
+    assert tomas.get("/api/catalogs").status_code == 200
+    signed_in_as("maya", d).post("/api/users/tomas/disabled", json={"disabled": True})
+    # a fresh app instance per client has a cold cache; within one app the
+    # recheck TTL applies — both paths must end in 401 for the live cookie
+    tomas2 = client(d)
+    with tomas2.session_transaction() as sess:
+        sess["user"] = {"username": "tomas", "uid": 70001}
+    assert tomas2.get("/api/catalogs").status_code == 401
+
+
+def test_admin_password_reset_and_self_service_change():
+    d = FakeDaemon()
+    maya, tomas = signed_in_as("maya", d), signed_in_as("tomas", d)
+    assert maya.post("/api/users/tomas/password", json={"password": "short"}).status_code == 422
+    assert maya.post("/api/users/tomas/password", json={"password": "brand-new-pass"}).status_code == 200
+    assert d.accounts["tomas"]["password"] == "brand-new-pass"
+    # self-service requires the current password
+    bad = tomas.post("/api/me/password", json={"current": "wrong", "new": "another-pass-1"})
+    assert bad.status_code == 403
+    ok = tomas.post("/api/me/password", json={"current": "brand-new-pass", "new": "another-pass-1"})
+    assert ok.status_code == 200 and d.accounts["tomas"]["password"] == "another-pass-1"
+    # non-admins can't reset others
+    assert tomas.post("/api/users/maya/password", json={"password": "hijacked-pass"}).status_code == 403
+
+
+def test_groups_can_be_deleted_but_not_admins():
+    maya = signed_in_as("maya")
+    assert maya.delete("/api/groups/analysts").status_code == 200
+    assert maya.delete("/api/groups/admins").status_code == 409
+    assert signed_in_as("tomas").delete("/api/groups/analysts").status_code == 403
+
+
+def test_engine_access_is_validated_and_admin_only():
+    maya = signed_in_as("maya")
+    assert maya.post("/api/engines/worker-1/access", json={"access": "everyone"}).status_code == 200
+    assert maya.post(
+        "/api/engines/worker-1/access", json={"access": "group:analysts"}
+    ).status_code == 200
+    assert maya.post("/api/engines/worker-1/access", json={"access": "root"}).status_code == 422
+    assert signed_in_as("tomas").post(
+        "/api/engines/worker-1/access", json={"access": "everyone"}
+    ).status_code == 403

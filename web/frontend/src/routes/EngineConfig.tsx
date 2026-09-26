@@ -1,9 +1,11 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, errorText, type User } from "../api";
 import { Switch } from "../components/Page";
 import { Empty, EmptyAction, ErrorBlock, Loading } from "../components/State";
 import { LOST_HINT, isLost } from "../engines";
+import { EngineAccess, useGroupNames } from "../components/EngineAccess";
+import { InlineConfirm } from "../components/Form";
 
 /*
  * /engineconfig — one engine's detail (spec §5 "engineconfig"). Everything the
@@ -18,6 +20,7 @@ interface Engine {
   state: string;
   sessions: number;
   resources: { cpus: number; memory_bytes: number };
+  access?: string;
 }
 
 interface EnginePrefs {
@@ -62,7 +65,8 @@ export function EngineConfig({ user }: { user: User }) {
   const [prefs, setPrefs] = useState<EnginePrefs>(DEFAULTS);
   const [error, setError] = useState("");
 
-  useEffect(() => {
+  const groups = useGroupNames(admin);
+  const load = useCallback(() => {
     api
       .get<Engine[]>("/engines")
       .then(setEngines)
@@ -70,12 +74,14 @@ export function EngineConfig({ user }: { user: User }) {
       // "the fleet could not be read".
       .catch((e) => setError(errorText(e)));
   }, []);
+  useEffect(load, [load]);
 
   const engine = (engines ?? []).find((e) => e.name === wanted) ?? (engines ?? [])[0];
 
+  const engineName = engine?.name;
   useEffect(() => {
-    if (engine) setPrefs(loadPrefs(engine.name));
-  }, [engine]);
+    if (engineName) setPrefs(loadPrefs(engineName));
+  }, [engineName]);
 
   const toggle = (key: keyof EnginePrefs) => {
     if (!engine) return;
@@ -84,13 +90,20 @@ export function EngineConfig({ user }: { user: User }) {
     savePrefs(engine.name, next);
   };
 
+  const [confirming, setConfirming] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [removeError, setRemoveError] = useState("");
   const deregister = () => {
     if (!engine) return;
-    if (!confirm(`Deregister ${engine.name}? Its credentials stop working immediately.`)) return;
+    setRemoving(true);
+    setRemoveError("");
     api
       .del(`/engines/${encodeURIComponent(engine.name)}`)
       .then(() => nav("/engines"))
-      .catch((e) => setError(errorText(e)));
+      .catch((e) => {
+        setRemoveError(errorText(e));
+        setRemoving(false);
+      });
   };
 
   return (
@@ -174,6 +187,41 @@ export function EngineConfig({ user }: { user: User }) {
             />
           </div>
 
+          <h2 style={{ fontSize: 16, fontWeight: 600, margin: "24px 0 12px" }}>Access control</h2>
+          <div
+            style={{
+              ...card,
+              padding: 18,
+              display: "flex",
+              alignItems: "center",
+              gap: 16,
+              flexWrap: "wrap",
+            }}
+          >
+            <span style={{ width: 180, fontSize: 13, color: "var(--text-muted)" }}>
+              Who can open sessions
+            </span>
+            <EngineAccess
+              engine={engine.name}
+              access={engine.access}
+              admin={admin}
+              groups={groups}
+              onChanged={load}
+            />
+            <p
+              style={{
+                flexBasis: "100%",
+                fontSize: 11.5,
+                color: "var(--text-dim)",
+                lineHeight: 1.7,
+              }}
+            >
+              {admin
+                ? "Restrict this engine to one UNIX group, or leave it open to everyone. Membership is managed under Groups."
+                : "Only an admin can change who may use this engine."}
+            </p>
+          </div>
+
           <h2 style={{ fontSize: 16, fontWeight: 600, margin: "24px 0 12px" }}>Session policy</h2>
           <div style={{ ...card, padding: 18, display: "grid", gap: 12 }}>
             <Switch
@@ -215,7 +263,11 @@ export function EngineConfig({ user }: { user: User }) {
             </div>
             <button
               type="button"
-              onClick={deregister}
+              onClick={() => {
+                setRemoveError("");
+                setConfirming((c) => !c);
+              }}
+              disabled={removing}
               style={{
                 background: "var(--surface)",
                 color: "var(--err)",
@@ -228,6 +280,19 @@ export function EngineConfig({ user }: { user: User }) {
             >
               Deregister engine
             </button>
+            {confirming && (
+              <div style={{ flexBasis: "100%" }}>
+                <InlineConfirm
+                  message={`Deregister ${engine.name}? Its credentials stop working immediately.`}
+                  confirmLabel="Deregister"
+                  busyLabel="Deregistering…"
+                  busy={removing}
+                  onConfirm={deregister}
+                  onCancel={() => setConfirming(false)}
+                  error={removeError}
+                />
+              </div>
+            )}
           </div>
           </>
           )}
