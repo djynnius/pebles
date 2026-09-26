@@ -16,6 +16,12 @@ All notable changes to Pebbles are documented here. The format follows
   removed); each job's status dot shows its latest run.
 
 ### Fixed
+- **User homes could be lost on upgrade.** The quick-start `docker run` only
+  mounted the config volume, so every user's files, notebooks and dashboards
+  lived in the container's writable layer and vanished when the container was
+  recreated to upgrade (accounts came back — empty). The image now declares
+  `/home` a volume, the quick-start mounts `pebbles-home:/home`, and pebblesd
+  warns at boot when `/home` isn't on a mounted volume.
 - **Session replies could desync (found in the Phase 4 live test).** When a
   client disconnected mid-execution (a timed-out request, a closed tab), the
   kernel's reply stayed in the pipe and every later request in that session

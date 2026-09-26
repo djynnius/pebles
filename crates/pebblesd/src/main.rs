@@ -101,6 +101,8 @@ async fn main() -> anyhow::Result<()> {
         Ok(n) => tracing::info!(restored = n, "restored persisted UNIX accounts"),
         Err(err) => tracing::error!(%err, "restoring persisted accounts failed"),
     }
+    #[cfg(target_os = "linux")]
+    warn_if_homes_unpersisted();
     if cfg.role == pebbles_api::Role::Main {
         // Who administers this install: the `admins` group (never empty once
         // any user exists — see admins.rs).
@@ -324,6 +326,25 @@ fn stat_fields(stat: &str) -> Option<(u8, i32, u64)> {
     let ppid = fields.next()?.parse().ok()?; // field 4
     let starttime = fields.nth(17)?.parse().ok()?; // field 22
     Some((state, ppid, starttime))
+}
+
+/// Accounts are restored from the config volume on every boot, but homes are
+/// not: if /home lives in the container's writable layer, recreating the
+/// container (the upgrade path) silently wipes every user's files. Say so,
+/// loudly, at boot. (Found in UAT: the quick-start only mounted the config.)
+#[cfg(target_os = "linux")]
+fn warn_if_homes_unpersisted() {
+    let mounts = std::fs::read_to_string("/proc/self/mounts").unwrap_or_default();
+    let mounted = mounts
+        .lines()
+        .any(|l| l.split_whitespace().nth(1) == Some("/home"));
+    if !mounted {
+        tracing::warn!(
+            "/home is NOT on a mounted volume — user files, notebooks and dashboards \
+             will be LOST when this container is recreated (e.g. to upgrade). \
+             Mount a volume at /home (docker: -v pebbles-home:/home)."
+        );
+    }
 }
 
 /// LXC/Incus ask a system container's init to shut down with SIGPWR (the

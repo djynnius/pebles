@@ -11,8 +11,15 @@ docker run -d --name pebbles \
   -e PEBBLES_ROLE=main \
   -p 8080:8080 \
   -v pebbles-config:/var/lib/pebbles \
+  -v pebbles-home:/home \
   ghcr.io/djynnius/pebles:edge
 ```
+
+**Both volumes are required.** `pebbles-config` holds accounts, catalogs and
+the lake; `pebbles-home` holds every user's files, notebooks and dashboards.
+Upgrading is "pull the new image, recreate the container with the same
+volumes" — anything not on a volume is lost when the container is recreated
+(pebblesd logs a warning at boot if `/home` isn't on a mounted volume).
 
 Open http://localhost:8080 — you'll land on the login page. Create the first user
 through the privileged API (admin screens arrive in Phase 1):

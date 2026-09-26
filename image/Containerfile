@@ -107,7 +107,10 @@ RUN chmod 755 /opt/pebbles/scripts/udhcpc.sh
 RUN ln -sf /usr/local/bin/pebblesd /sbin/init
 
 ENV PEBBLES_CONFIG=/var/lib/pebbles
-VOLUME /var/lib/pebbles
+# Config/catalog/lake AND user homes must outlive the container (upgrade =
+# new image, same volumes). Declaring /home makes even a bare `docker run`
+# keep homes in a volume instead of the disposable writable layer.
+VOLUME /var/lib/pebbles /home
 EXPOSE 8080
 
 ENTRYPOINT ["/usr/local/bin/pebblesd"]
