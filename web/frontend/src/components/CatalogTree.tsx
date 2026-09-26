@@ -1,6 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
-import type { Catalog, SchemaNode, TreeResponse } from "../catalogs";
+import {
+  accessDenied,
+  type AccessDenied,
+  type Catalog,
+  type SchemaNode,
+  type TreeResponse,
+} from "../catalogs";
 
 /*
  * catalog › schema › table tree, shared by the Catalog browser's 290px column
@@ -8,6 +14,11 @@ import type { Catalog, SchemaNode, TreeResponse } from "../catalogs";
  * per catalog on first expand (each /tree call runs queries on the user's
  * engine session, so we never fan them out unasked) — except while a filter is
  * active, when every tree is loaded so the search can see the whole lake.
+ *
+ * Catalogs the user can't open (`accessible === false`, or a tree call that
+ * answered 403 access:false) are listed — so they can be asked for — but render
+ * locked: muted, no caret, never fetched, and a click shows who to ask instead
+ * of pretending the catalog is empty. Accessible catalogs sort first.
  */
 
 export interface TableRef {
@@ -21,16 +32,38 @@ export function CatalogTree({
   filter = "",
   selected,
   onPick,
+  onDenied,
 }: {
   catalogs: Catalog[];
   /** Client-side substring filter over catalog / schema / table names. */
   filter?: string;
   selected?: TableRef | null;
   onPick: (ref: TableRef) => void;
+  /** Called when the user clicks a catalog they can't open. */
+  onDenied?: (info: AccessDenied) => void;
 }) {
   const [trees, setTrees] = useState<Record<string, TreeResponse | null>>({});
   const [openCatalogs, setOpen] = useState<string[]>([]);
   const [openSchemas, setOpenSchemas] = useState<string[]>([]);
+  /** Catalogs whose tree call answered 403 access:false → the server's owner. */
+  const [blocked, setBlocked] = useState<Record<string, string>>({});
+  /** The locked catalog whose "No access" note is showing. */
+  const [note, setNote] = useState<string | null>(null);
+
+  const locked = (c: Catalog) => c.accessible === false || c.name in blocked;
+  const ownerOf = (c: Catalog) => blocked[c.name] || c.owner;
+
+  // Accessible first; Array.prototype.sort is stable, so each half keeps the
+  // server's order.
+  const sorted = useMemo(
+    () =>
+      [...catalogs].sort(
+        (a, b) =>
+          Number(a.accessible === false || a.name in blocked) -
+          Number(b.accessible === false || b.name in blocked),
+      ),
+    [catalogs, blocked],
+  );
 
   const q = filter.trim().toLowerCase();
   const filtering = q.length > 0;
@@ -40,26 +73,43 @@ export function CatalogTree({
     api
       .get<TreeResponse>(`/catalogs/${encodeURIComponent(name)}/tree`)
       .then((t) => setTrees((cur) => ({ ...cur, [name]: t })))
-      .catch(() => setTrees((cur) => ({ ...cur, [name]: { schemas: [] } })));
+      .catch((e) => {
+        const denied = accessDenied(e, name);
+        if (denied) setBlocked((cur) => ({ ...cur, [name]: denied.owner }));
+        setTrees((cur) => ({ ...cur, [name]: { schemas: [] } }));
+      });
   };
 
   // Open the first catalog on arrival so the panel is never a dead end.
   useEffect(() => {
-    if (catalogs.length === 0) return;
-    setOpen((cur) => (cur.length ? cur : [catalogs[0].name]));
+    const first = catalogs.find((c) => c.accessible !== false);
+    if (!first) return;
+    setOpen((cur) => (cur.length ? cur : [first.name]));
   }, [catalogs]);
 
   // Load whatever is open, plus everything while searching.
   useEffect(() => {
-    const wanted = filtering ? catalogs.map((c) => c.name) : openCatalogs;
+    const unlocked = new Set(catalogs.filter((c) => c.accessible !== false).map((c) => c.name));
+    const wanted = filtering ? [...unlocked] : openCatalogs;
     for (const name of wanted) {
-      if (!(name in trees)) load(name);
+      if (unlocked.has(name) && !(name in trees)) load(name);
     }
     // `trees` is intentionally read, not depended on: load() guards re-entry.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openCatalogs, filtering, catalogs]);
 
-  const toggleCatalog = (name: string) => {
+  const toggleCatalog = (c: Catalog) => {
+    if (locked(c)) {
+      const owner = ownerOf(c);
+      setNote((cur) => (cur === c.name ? null : c.name));
+      onDenied?.({
+        catalog: c.name,
+        owner,
+        message: `You don't have access to ${c.name}. Ask its owner (${owner || "unknown"}) or an admin to grant one of your groups.`,
+      });
+      return;
+    }
+    const name = c.name;
     setOpen((cur) => (cur.includes(name) ? cur.filter((n) => n !== name) : [...cur, name]));
     if (!(name in trees)) load(name);
   };
@@ -82,12 +132,13 @@ export function CatalogTree({
       .filter((s) => !filtering || s.tables.length > 0 || s.name.toLowerCase().includes(q));
 
   const visibleCatalogs = filtering
-    ? catalogs.filter((c) => {
+    ? sorted.filter((c) => {
         if (c.name.toLowerCase().includes(q)) return true;
+        if (locked(c)) return false;
         const tree = trees[c.name];
         return tree ? matchingSchemas(c.name, tree.schemas).length > 0 : true;
       })
-    : catalogs;
+    : sorted;
 
   if (filtering && visibleCatalogs.length === 0) {
     return <div style={hint}>Nothing matches “{filter.trim()}”.</div>;
@@ -96,6 +147,27 @@ export function CatalogTree({
   return (
     <div style={{ padding: "6px 6px 14px" }}>
       {visibleCatalogs.map((c) => {
+        if (locked(c)) {
+          const owner = ownerOf(c);
+          return (
+            <div key={c.name}>
+              <TreeRow
+                depth={0}
+                muted
+                onClick={() => toggleCatalog(c)}
+                glyph={<LockGlyph />}
+                label={c.name}
+                weight={600}
+                title={`No access to ${c.name}`}
+              />
+              {note === c.name && (
+                <div style={{ ...hint, paddingLeft: 30 }}>
+                  No access — ask {owner || "its owner"} or an admin
+                </div>
+              )}
+            </div>
+          );
+        }
         const open = filtering || openCatalogs.includes(c.name);
         const tree = trees[c.name];
         const schemas = tree ? matchingSchemas(c.name, tree.schemas) : [];
@@ -105,7 +177,7 @@ export function CatalogTree({
               depth={0}
               open={open}
               caret
-              onClick={() => toggleCatalog(c.name)}
+              onClick={() => toggleCatalog(c)}
               glyph={<DbGlyph />}
               label={c.name}
               weight={600}
@@ -202,6 +274,8 @@ function TreeRow({
   open,
   active,
   weight,
+  muted,
+  title,
   onClick,
 }: {
   depth: number;
@@ -211,6 +285,9 @@ function TreeRow({
   open?: boolean;
   active?: boolean;
   weight?: number;
+  /** Locked catalog: faint text, no hover emphasis beyond the background. */
+  muted?: boolean;
+  title?: string;
   onClick: () => void;
 }) {
   const [hover, setHover] = useState(false);
@@ -218,6 +295,7 @@ function TreeRow({
     <button
       type="button"
       onClick={onClick}
+      title={title}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
@@ -234,7 +312,7 @@ function TreeRow({
         fontWeight: weight ?? (active ? 600 : 400),
         fontFamily: "inherit",
         background: active ? "var(--accent-tint)" : hover ? "var(--hover)" : "transparent",
-        color: active ? "var(--accent-tint-ink)" : "var(--text-mid)",
+        color: active ? "var(--accent-tint-ink)" : muted ? "var(--text-faint)" : "var(--text-mid)",
       }}
     >
       <span
@@ -271,6 +349,25 @@ function DbGlyph() {
     >
       <path d="M13 3.9c0 1-2.2 1.8-5 1.8s-5-.8-5-1.8S5.2 2.1 8 2.1s5 .8 5 1.8Z" />
       <path d="M3 3.9v8.2c0 1 2.2 1.8 5 1.8s5-.8 5-1.8V3.9" />
+    </svg>
+  );
+}
+
+/** 11px padlock for catalogs the user can't open. */
+function LockGlyph() {
+  return (
+    <svg
+      width="11"
+      height="11"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      aria-label="No access"
+      style={{ color: "var(--text-faint)", display: "block" }}
+    >
+      <rect x="3" y="7" width="10" height="7" rx="1.5" />
+      <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" />
     </svg>
   );
 }

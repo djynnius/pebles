@@ -44,6 +44,17 @@ GIT_ACTIONS = {
 }
 
 
+#: Ollama cloud-offloaded model tags (e.g. "glm-5.2:cloud", "gpt-oss:120b-cloud")
+CLOUD_MODEL = re.compile(r"(:cloud$|-cloud$|:cloud\b)")
+#: home files Pebbles provisions itself (the catalog TCP credential, M2.5b)
+MANAGED_FILES = {".pgpass"}
+
+
+def _managed_path(path: str) -> bool:
+    clean = os.path.normpath("/" + (path or "").strip()).lstrip("/")
+    return clean in MANAGED_FILES
+
+
 def _safe_rel(path: str) -> str | None:
     """Normalize a home-relative path, refusing traversal outside the home."""
     clean = os.path.normpath("/" + path.strip()).lstrip("/")
@@ -179,6 +190,23 @@ def register_api(app, client: PebblesdClient) -> None:
             return jsonify({"error": "you can't do that to your own account"}), 409
         if _admins() == [target]:
             return jsonify({"error": "that's the last admin — make someone else an admin first"}), 409
+        return None
+
+    def _catalog_denied(user: dict, name: str):
+        """403 with a useful message when the user can't open this catalog —
+        instead of browse queries failing silently into an empty tree."""
+        entry = next(
+            (c for c in client.list_catalogs(user["username"]) if c.get("name") == name), None
+        )
+        if entry is None:
+            return jsonify({"error": f"no catalog {name!r}"}), 404
+        if entry.get("accessible") is False:
+            return jsonify({
+                "error": f"You don't have access to {name}. Ask its owner "
+                f"({entry.get('owner')}) or an admin to grant one of your groups.",
+                "access": False,
+                "owner": entry.get("owner"),
+            }), 403
         return None
 
     def _job(name: str) -> dict | None:
@@ -464,7 +492,7 @@ def register_api(app, client: PebblesdClient) -> None:
     @app.get("/api/catalogs")
     @authed
     def api_catalogs(user):  # pyright: ignore[reportUnusedFunction]
-        return jsonify(client.list_catalogs())
+        return jsonify(client.list_catalogs(user["username"]))
 
     @app.post("/api/catalogs")
     @authed
@@ -496,6 +524,9 @@ def register_api(app, client: PebblesdClient) -> None:
         """schemas → tables, as the signed-in user sees them."""
         if not IDENT.match(name):
             return jsonify({"error": "bad catalog name"}), 422
+        denied = _catalog_denied(user, name)
+        if denied:
+            return denied
         username = user["username"]
         schemas: dict[str, list] = {}
         for row in _rows(
@@ -527,6 +558,9 @@ def register_api(app, client: PebblesdClient) -> None:
         """Everything the Catalog detail view shows, in one call."""
         if not all(IDENT.match(part) for part in (name, schema, table)):
             return jsonify({"error": "bad identifier"}), 422
+        denied = _catalog_denied(user, name)
+        if denied:
+            return denied
         username = user["username"]
         qualified = f'"{name}"."{schema}"."{table}"'
         columns = _rows(
@@ -644,6 +678,8 @@ def register_api(app, client: PebblesdClient) -> None:
     @authed
     def api_files_delete(user):  # pyright: ignore[reportUnusedFunction]
         body = request.get_json(silent=True) or {}
+        if _managed_path(body.get("path", "")):
+            return jsonify({"error": "that file is managed by Pebbles and can't be changed here"}), 409
         target = _safe_rel(body.get("path", ""))
         if not target:
             return jsonify({"error": "bad path"}), 422
@@ -653,6 +689,8 @@ def register_api(app, client: PebblesdClient) -> None:
     @authed
     def api_files_rename(user):  # pyright: ignore[reportUnusedFunction]
         body = request.get_json(silent=True) or {}
+        if _managed_path(body.get("path", "")):
+            return jsonify({"error": "that file is managed by Pebbles and can't be changed here"}), 409
         src = _safe_rel(body.get("path", ""))
         dst = _safe_rel(body.get("to", ""))
         if not src or not dst:
@@ -959,7 +997,14 @@ def register_api(app, client: PebblesdClient) -> None:
     @app.get("/api/nkoyo/config")
     @authed
     def api_nkoyo_config(user):  # pyright: ignore[reportUnusedFunction]
-        return jsonify(client.nkoyo_config())
+        cfg = client.nkoyo_config()
+        # Ollama ":cloud" models run on ollama.com, not on this cluster — the
+        # UI must not claim "no data leaves your hosts" while one is in use.
+        cfg["cloud_models"] = sorted({
+            m for m in (cfg.get("planner_model"), cfg.get("coder_model"), cfg.get("embed_model"))
+            if isinstance(m, str) and CLOUD_MODEL.search(m)
+        })
+        return jsonify(cfg)
 
     @app.post("/api/nkoyo/config")
     @authed

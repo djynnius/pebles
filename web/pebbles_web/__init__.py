@@ -32,6 +32,10 @@ def _secret_key() -> bytes:
 def create_app(pebblesd: PebblesdClient | None = None) -> Flask:
     app = Flask(__name__)
     app.secret_key = _secret_key()
+    # Query rows are JSON objects whose key order IS the column order the user
+    # wrote in SELECT — Flask sorts keys by default, which scrambled every
+    # result grid, CSV export and dashboard tile alphabetically.
+    app.json.sort_keys = False  # type: ignore[attr-defined]
     client = pebblesd or PebblesdClient()
 
     # The SPA's JSON API — every /api/* route (pebbles_web/api.py).

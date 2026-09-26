@@ -435,7 +435,35 @@ pub fn airflow_cli(config_dir: &Path, args: &[&str]) -> Result<String, JobsError
 
 pub fn trigger(config_dir: &Path, name: &str) -> Result<(), JobsError> {
     get(config_dir, name)?;
-    airflow_cli(config_dir, &["dags", "trigger", &dag_id(name)]).map(|_| ())
+    let dag = dag_id(name);
+    match airflow_cli(config_dir, &["dags", "trigger", &dag]) {
+        Ok(_) => Ok(()),
+        // A job saved seconds ago isn't in Airflow's DagModel until the
+        // scheduler's next directory scan (~10 s). Register just this file
+        // ourselves and retry once — "Run now" right after "Save" must work.
+        Err(JobsError::Airflow(msg)) if is_dag_not_found(&msg) => {
+            let file = airflow_home(config_dir)
+                .join("dags")
+                .join(format!("{dag}.py"));
+            airflow_cli(
+                config_dir,
+                &["dags", "reserialize", "-S", &file.display().to_string()],
+            )?;
+            airflow_cli(config_dir, &["dags", "trigger", &dag])
+                .map(|_| ())
+                .map_err(|_| {
+                    JobsError::Airflow(
+                        "the scheduler hasn't registered this job yet — try again in a few seconds"
+                            .into(),
+                    )
+                })
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn is_dag_not_found(msg: &str) -> bool {
+    msg.contains("DagNotFound") || msg.contains("not found in DagModel")
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -648,6 +676,16 @@ mod tests {
             Err(JobsError::Owned(_))
         ));
         assert_eq!(get(dir.path(), &wf.name).unwrap().username, "maya");
+    }
+
+    #[test]
+    fn dag_not_found_is_recognised_for_the_register_and_retry_path() {
+        assert!(is_dag_not_found(
+            "airflow.exceptions.DagNotFound: Dag id pb_uat_job not found in DagModel"
+        ));
+        assert!(!is_dag_not_found(
+            "psycopg2.OperationalError: could not connect"
+        ));
     }
 
     #[test]

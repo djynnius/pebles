@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 import { useNavigate } from "react-router-dom";
 import { api, errorText } from "../api";
 import { AccentButton, Page } from "../components/Page";
+import { InlineConfirm } from "../components/Form";
 import { Empty, ErrorBlock, Loading } from "../components/State";
 
 /*
@@ -52,12 +53,28 @@ export function Notebooks() {
       .finally(() => setBusy(false));
   };
 
+  // Inline "Delete x? [Delete] [Cancel]" instead of window.confirm.
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+
   const remove = (n: string) => {
-    if (!confirm(`Delete notebook “${n}”? This removes ~/notebooks/${n}.json.`)) return;
+    setConfirming(n);
+    setDeleteError("");
+  };
+
+  const confirmRemove = () => {
+    if (!confirming) return;
+    setDeleting(true);
+    setDeleteError("");
     api
-      .del(`/notebooks/${encodeURIComponent(n)}`)
-      .then(load)
-      .catch((e) => setError(errorText(e)));
+      .del(`/notebooks/${encodeURIComponent(confirming)}`)
+      .then(() => {
+        setConfirming(null);
+        load();
+      })
+      .catch((e) => setDeleteError(errorText(e)))
+      .finally(() => setDeleting(false));
   };
 
   return (
@@ -106,6 +123,19 @@ export function Notebooks() {
 
       {error && <ErrorBlock error={error} />}
       {!error && names === null && <Loading />}
+      {confirming && (
+        <div style={{ marginBottom: 14 }}>
+          <InlineConfirm
+            message={`Delete notebook “${confirming}”? This removes ~/notebooks/${confirming}.json.`}
+            confirmLabel="Delete"
+            busyLabel="Deleting…"
+            busy={deleting}
+            error={deleteError}
+            onConfirm={confirmRemove}
+            onCancel={() => setConfirming(null)}
+          />
+        </div>
+      )}
 
       {names && names.length > 0 ? (
         <div

@@ -326,6 +326,10 @@ pub struct CatalogDescriptor {
     pub data_path: String,
     /// The equivalent SQL shown live in the UI (REQ-25).
     pub sql: String,
+    /// Can the requesting user open it (owner or granted group)? Present when
+    /// the list was requested for a user (`GET /catalogs?user=<name>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accessible: Option<bool>,
 }
 
 #[derive(OpenApi)]

@@ -86,6 +86,11 @@ pub fn create_catalog(name: &str, owner: &ProvisionedUser) -> Result<CatalogInfo
         "CREATE DATABASE \"{database}\" OWNER \"{}\";",
         owner.username
     ))?;
+    // Postgres grants CONNECT to PUBLIC on every new database; a catalog is
+    // private to its owner until explicitly granted to a group (REQ-13).
+    psql(&format!(
+        "REVOKE CONNECT ON DATABASE \"{database}\" FROM PUBLIC;"
+    ))?;
 
     Ok(CatalogInfo {
         name: name.to_string(),
@@ -112,6 +117,43 @@ pub fn list_catalogs() -> Result<Vec<CatalogInfo>, CatalogError> {
                 data_path: lake_root().join(name).display().to_string(),
             })
         })
+        .collect())
+}
+
+/// One-time hardening for catalogs created before PUBLIC connect was revoked
+/// (idempotent — REVOKE of an absent privilege is a no-op). Grants to groups
+/// and the owner's own rights are untouched.
+pub fn revoke_public_connect_all() -> Result<usize, CatalogError> {
+    let dbs = list_catalogs()?;
+    for c in &dbs {
+        psql(&format!(
+            "REVOKE CONNECT ON DATABASE \"{}\" FROM PUBLIC;",
+            c.database
+        ))?;
+    }
+    Ok(dbs.len())
+}
+
+/// Catalogs `username` may actually open: Postgres CONNECT privilege on the
+/// catalog database — the same check ATTACH hits — so what the UI and Nkoyo
+/// list matches what queries allow (owner, or a granted group).
+pub fn accessible_catalogs(username: &str) -> Result<Vec<String>, CatalogError> {
+    if !username
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+    {
+        return Ok(vec![]);
+    }
+    let out = psql(&format!(
+        "SELECT substr(datname, 10) FROM pg_database \
+         WHERE datname LIKE 'ducklake\\_%' \
+         AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{username}') \
+         AND has_database_privilege('{username}', datname, 'CONNECT') ORDER BY 1;"
+    ))?;
+    Ok(out
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
         .collect())
 }
 

@@ -124,8 +124,10 @@ class PebblesdClient:
         finally:
             conn.close()
 
-    def list_catalogs(self) -> list:
-        status, data = self._request("GET", "/catalogs")
+    def list_catalogs(self, user: str | None = None) -> list:
+        """With `user`, each catalog carries `accessible` for that user."""
+        path = f"/catalogs?user={user}" if user else "/catalogs"
+        status, data = self._request("GET", path)
         if status != 200:
             raise PebblesdError(status, str(data))
         return data

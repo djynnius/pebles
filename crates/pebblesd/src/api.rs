@@ -1282,16 +1282,20 @@ async fn nkoyo_chat(
         None
     };
 
+    let asker_name = body.username.clone();
     let run_op = |op: Value| {
         let broker = broker.clone();
+        let asker = asker_name.clone();
         async move {
             // Catalog listing is pebblesd-level metadata, not a kernel op.
             if op["op"] == "list_catalogs" {
-                let catalogs = tokio::task::spawn_blocking(catalog::list_catalogs)
+                // Only what THIS user can open (REQ-45: Nkoyo sees no more
+                // than its user).
+                let who = asker.clone();
+                let names = tokio::task::spawn_blocking(move || catalog::accessible_catalogs(&who))
                     .await
                     .map_err(|e| e.to_string())?
                     .map_err(|e| e.to_string())?;
-                let names: Vec<&str> = catalogs.iter().map(|c| c.name.as_str()).collect();
                 return Ok(serde_json::json!({"ok": true, "catalogs": names}));
             }
             match (broker, session) {
@@ -1490,6 +1494,7 @@ fn describe_catalog(info: CatalogInfo) -> CatalogDescriptor {
         database: info.database,
         data_path: info.data_path,
         sql,
+        accessible: None,
     }
 }
 
@@ -1522,10 +1527,31 @@ async fn create_catalog(Json(req): Json<CreateCatalogRequest>) -> ApiResult<Cata
     Ok(Json(describe_catalog(info)))
 }
 
-async fn list_catalogs() -> ApiResult<Vec<CatalogDescriptor>> {
-    let catalogs = tokio::task::spawn_blocking(catalog::list_catalogs)
-        .await
-        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?
-        .map_err(catalog_error)?;
-    Ok(Json(catalogs.into_iter().map(describe_catalog).collect()))
+async fn list_catalogs(
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> ApiResult<Vec<CatalogDescriptor>> {
+    let user = q.get("user").cloned();
+    let (catalogs, accessible) = tokio::task::spawn_blocking(move || {
+        let all = catalog::list_catalogs()?;
+        let ok = match &user {
+            Some(u) => Some(catalog::accessible_catalogs(u)?),
+            None => None,
+        };
+        Ok::<_, CatalogError>((all, ok))
+    })
+    .await
+    .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e))?
+    .map_err(catalog_error)?;
+    Ok(Json(
+        catalogs
+            .into_iter()
+            .map(|c| {
+                let flag = accessible.as_ref().map(|names| names.contains(&c.name));
+                CatalogDescriptor {
+                    accessible: flag,
+                    ..describe_catalog(c)
+                }
+            })
+            .collect(),
+    ))
 }

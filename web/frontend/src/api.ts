@@ -6,6 +6,8 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    /** The parsed JSON body of the failed response (`{}` when none). */
+    public data: Record<string, unknown> = {},
   ) {
     super(message);
   }
@@ -38,7 +40,7 @@ export function errorText(e: unknown): string {
 function check(res: Response, data: { error?: string }): void {
   if (res.ok) return;
   if (res.status === 401) onUnauthorized?.();
-  throw new ApiError(res.status, data.error ?? res.statusText);
+  throw new ApiError(res.status, data.error ?? res.statusText, data as Record<string, unknown>);
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -99,6 +101,25 @@ export interface User {
 
 /** A row of a query result — DuckDB values arrive as JSON scalars. */
 export type Row = Record<string, unknown>;
+
+/**
+ * The column list of a result, in SELECT order. The wire preserves column
+ * order in each row object, so this is `Object.keys(firstRow)` — extended with
+ * any key a later row adds, in first-seen order. Never sort these.
+ */
+export function columnsOf(rows: readonly Row[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const r of rows) {
+    for (const k of Object.keys(r)) {
+      if (!seen.has(k)) {
+        seen.add(k);
+        out.push(k);
+      }
+    }
+  }
+  return out;
+}
 
 export interface SqlResult {
   ok: boolean;

@@ -686,6 +686,17 @@ mod tests {
     }
 
     #[test]
+    fn result_rows_keep_select_column_order() {
+        // UAT: rows came back alphabetized (amount, filed_date, id, state) —
+        // serde_json sorts object keys unless preserve_order is on.
+        let rows = last_json_array("[{\"state\":\"CA\",\"id\":1,\"amount\":2.5}]");
+        let keys: Vec<&String> = rows[0].as_object().unwrap().keys().collect();
+        assert_eq!(keys, ["state", "id", "amount"]);
+        let wire = serde_json::to_string(&rows).unwrap();
+        assert!(wire.find("state").unwrap() < wire.find("amount").unwrap());
+    }
+
+    #[test]
     fn parses_single_line_and_multi_line_result_arrays() {
         assert_eq!(last_json_array("[{\"c\":3}]"), json!([{"c": 3}]));
         // Multi-row: the CLI spreads one array over several lines, and earlier

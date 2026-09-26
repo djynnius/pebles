@@ -6,6 +6,34 @@ All notable changes to Pebbles are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+- **Catalogs are private to their owner until granted.** Postgres grants
+  `CONNECT` to `PUBLIC` on every new database, so any user could attach any
+  catalog database (table privileges still blocked the data). New catalogs
+  revoke it at creation; existing ones are hardened once at boot. Grants to
+  groups are unchanged.
+
+### Fixed (UAT Phase 3 — correctness)
+- **Result columns keep their SELECT order.** Two layers sorted JSON object
+  keys (Rust's `serde_json` without `preserve_order`, and Flask's `jsonify`),
+  so every grid, CSV export and dashboard tile came back alphabetized.
+- **"Run now" right after "Save" works.** A brand-new job wasn't in Airflow
+  until the scheduler's next scan, so triggering it returned a raw
+  `DagNotFound` traceback; pebblesd now registers that one DAG and retries.
+- **Catalogs you can't open say so** — flagged `accessible: false`, locked in
+  the tree, and a clear "ask the owner" message instead of "No schemas yet".
+  Nkoyo's `list_catalogs` tool now lists only what the user can open.
+- **Auto ETL models real data sensibly:** identifiers (`id`, `*_id`, `*_key`,
+  near-unique integers) stay on the fact instead of being summed as measures;
+  dates stay as attributes instead of becoming dimension tables; a column
+  must repeat (distinct/rows ≤ 0.5) to become a dimension.
+- **Nkoyo is honest about cloud models:** `:cloud` Ollama models run on
+  ollama.com, and the UI now warns instead of claiming no data leaves the
+  hosts.
+- **Files** hides dotfiles by default, and `.pgpass` (Pebbles-managed) can't be
+  deleted or renamed. "Query" from the catalog reuses a matching SQL tab
+  instead of opening a new one every time.
+
 ### Added
 - **Account lifecycle for admins (UAT Phase 2).** Users can be **deleted**
   (optionally with their home directory — off by default), **disabled**

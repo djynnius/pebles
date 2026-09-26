@@ -25,6 +25,19 @@ TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}")
 TEMPORAL_NAME = re.compile(r"(date|time|_at$|_on$|timestamp)", re.IGNORECASE)
 
 TICK_AT = 0.8
+#: a dimension must repeat: distinct values at most half the rows
+DIM_MAX_RATIO = 0.5
+#: numeric columns this unique are identifiers, not measures
+KEY_UNIQUE_RATIO = 0.95
+KEY_NAME = re.compile(r"(^id$|_id$|^id_|_key$|^key$|uuid|guid)", re.IGNORECASE)
+TEMPORAL_TYPE = re.compile(r"DATE|TIME", re.IGNORECASE)
+
+
+def is_key(name: str, ctype: str, unique_ratio: float) -> bool:
+    """Identifiers: named like one, or a (near-)unique integer column."""
+    if KEY_NAME.search(name):
+        return True
+    return bool(re.search(r"INT", ctype, re.IGNORECASE)) and unique_ratio >= KEY_UNIQUE_RATIO
 
 
 def source_expr(source: dict) -> str | None:
@@ -162,8 +175,9 @@ def propose(columns: list, row_count: int, source: dict) -> dict:
     # anything with a drop *proposal* (ticked or not) makes a poor dimension —
     # if the user keeps it, it stays as a plain column instead
     drop_proposed = {s["column"] for s in steps if s["kind"] == "drop_column"}
+    # columns that become dates/timestamps via a proposed cast behave as dates
+    cast_temporal = {s["column"] for s in steps if s["kind"] == "cast"}
     dims, measures, keeps = [], [], []
-    # generous: 51 US states in a small file is a canonical dimension
     dim_cap = max(200, row_count // 20) if row_count else 200
     for col in columns:
         name = col.get("column_name", "")
@@ -172,9 +186,18 @@ def propose(columns: list, row_count: int, source: dict) -> dict:
         final = renames.get(name, name)
         ctype = str(col.get("column_type", ""))
         uniq = int(col.get("approx_unique") or 0)
-        if NUMERIC.search(ctype):
+        ratio = (uniq / row_count) if row_count else 1.0
+        if is_key(final, ctype, ratio):
+            keeps.append(final)  # identifiers ride on the fact, never summed
+        elif TEMPORAL_TYPE.search(ctype) or name in cast_temporal:
+            keeps.append(final)  # dates are fact attributes, not dim tables
+        elif NUMERIC.search(ctype):
             measures.append(final)
-        elif 2 <= uniq <= dim_cap and name not in drop_proposed:
+        elif (
+            2 <= uniq <= dim_cap
+            and ratio <= DIM_MAX_RATIO
+            and name not in drop_proposed
+        ):
             dims.append({"column": final, "table": f"dim_{final}"})
         else:
             keeps.append(final)

@@ -4,13 +4,16 @@
 // permission-filtered — there is no client-side visibility logic.
 
 import { useEffect, useState } from "react";
-import { api, errorText, type Row } from "./api";
+import { api, ApiError, errorText, type Row } from "./api";
 
 export interface Catalog {
   name: string;
   owner: string;
   database: string;
   data_path: string;
+  /** Whether the signed-in user can open this catalog. `false` means it is
+   * listed (so it can be asked for) but its tree and tables answer 403. */
+  accessible?: boolean;
   /** Only present on the create response (REQ-25: form and SQL are one op). */
   sql?: string;
 }
@@ -53,6 +56,23 @@ export interface Engine {
   state: string;
   sessions: number;
   resources: { cpus: number; memory_bytes: number };
+}
+
+/** The server's 403 body for a catalog the user can't open. */
+export interface AccessDenied {
+  catalog: string;
+  owner: string;
+  message: string;
+}
+
+/** Recognises the `{error, access:false, owner}` 403 from the catalog routes. */
+export function accessDenied(e: unknown, catalog: string): AccessDenied | null {
+  if (!(e instanceof ApiError) || e.status !== 403 || e.data.access !== false) return null;
+  return {
+    catalog,
+    owner: typeof e.data.owner === "string" ? e.data.owner : "",
+    message: e.message,
+  };
 }
 
 /** `catalog.schema.table`, quoted so odd identifiers survive a paste. */

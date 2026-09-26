@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { useSearchParams } from "react-router-dom";
-import { sse, type Row } from "../api";
+import { columnsOf, sse, type Row } from "../api";
 import { qualify, useCatalogs } from "../catalogs";
 import { CatalogPanel } from "../components/CatalogTree";
 import { Workbench } from "../components/Workbench";
@@ -95,16 +95,21 @@ export function Sql() {
   docsRef.current = docs;
 
   // ?q= / ?catalog= — how Catalog's Query and Time-travel buttons arrive here.
+  // Clicking Query on the same table twice must not pile up identical tabs:
+  // a document with the same SQL and catalog is reactivated instead.
   useEffect(() => {
     const q = params.get("q");
     if (q === null) return;
     const cur = docsRef.current;
-    const fresh: SqlDoc = {
-      ...blank(cur.length + 1),
-      sql: q.endsWith("\n") ? q : `${q}\n`,
-      catalog: params.get("catalog"),
-    };
-    commit([...cur, fresh], fresh.id);
+    const sql = q.endsWith("\n") ? q : `${q}\n`;
+    const catalog = params.get("catalog");
+    const existing = cur.find((d) => d.sql === sql && d.catalog === catalog);
+    if (existing) {
+      setActiveId(existing.id);
+    } else {
+      const fresh: SqlDoc = { ...blank(cur.length + 1), sql, catalog };
+      commit([...cur, fresh], fresh.id);
+    }
     setParams({}, { replace: true });
   }, [params, setParams, commit]);
 
@@ -160,7 +165,7 @@ export function Sql() {
 
   const downloadCsv = () => {
     if (!rows || rows.length === 0) return;
-    const cols = Array.from(new Set(rows.flatMap((r) => Object.keys(r))));
+    const cols = columnsOf(rows);
     const esc = (v: unknown) => {
       const s = v === null || v === undefined ? "" : cell(v) === "∅" ? "" : cell(v);
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;

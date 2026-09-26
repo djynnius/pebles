@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, errorText, type Row, type User } from "../api";
+import { api, columnsOf, errorText, type Row, type User } from "../api";
 import {
+  accessDenied,
   qualify,
   useCatalogs,
+  type AccessDenied,
   type Engine,
   type Grant,
   type Group,
@@ -37,6 +39,8 @@ export function Catalog({ user }: { user: User }) {
   const [selected, setSelected] = useState<TableRef | null>(null);
   const [detail, setDetail] = useState<TableDetail | null>(null);
   const [detailError, setDetailError] = useState("");
+  /** A catalog the user can't open — shown as a "No access" state, not an error. */
+  const [denied, setDenied] = useState<AccessDenied | null>(null);
   const [tab, setTab] = useState<TabId>("schema");
 
   useEffect(() => {
@@ -58,7 +62,15 @@ export function Catalog({ user }: { user: User }) {
         )}/${encodeURIComponent(table)}`,
       )
       .then(setDetail)
-      .catch((e) => setDetailError(errorText(e)));
+      .catch((e) => {
+        const d = accessDenied(e, catalog);
+        if (d) {
+          setDenied(d);
+          setSelected(null);
+        } else {
+          setDetailError(errorText(e));
+        }
+      });
   }, [selected]);
 
   const catalogRow = catalogs?.find((c) => c.name === selected?.catalog) ?? null;
@@ -135,8 +147,13 @@ export function Catalog({ user }: { user: User }) {
               filter={filter}
               selected={selected}
               onPick={(ref) => {
+                setDenied(null);
                 setSelected(ref);
                 setTab("schema");
+              }}
+              onDenied={(d) => {
+                setSelected(null);
+                setDenied(d);
               }}
             />
           )}
@@ -162,6 +179,8 @@ export function Catalog({ user }: { user: User }) {
             <Loading label="Loading catalogs…" />
           ) : catalogs.length === 0 ? (
             <EmptyLake onCreate={() => navigate("/newcatalog")} />
+          ) : denied ? (
+            <NoAccess denied={denied} />
           ) : !selected ? (
             <PickATable />
           ) : (
@@ -638,13 +657,7 @@ function PermissionsTab({ catalog, canGrant }: { catalog: string; canGrant: bool
 /* ---- shared bits ------------------------------------------------------- */
 
 export function ResultGrid({ rows }: { rows: Row[] }) {
-  const columns = useMemo(() => {
-    const seen: string[] = [];
-    for (const r of rows) {
-      for (const k of Object.keys(r)) if (!seen.includes(k)) seen.push(k);
-    }
-    return seen;
-  }, [rows]);
+  const columns = useMemo(() => columnsOf(rows), [rows]);
 
   return (
     <div
@@ -762,6 +775,18 @@ function EmptyLake({ onCreate }: { onCreate: () => void }) {
       title="Your lake is empty"
       body="A catalog is a DuckLake namespace — Parquet on your disks, catalogued in Postgres, with time travel from the first write."
       action={<EmptyAction onClick={onCreate}>New catalog</EmptyAction>}
+    />
+  );
+}
+
+function NoAccess({ denied }: { denied: AccessDenied }) {
+  return (
+    <Empty
+      inline
+      style={{ maxWidth: 440, margin: "90px auto 0" }}
+      glyph="⊘"
+      title={`No access to ${denied.catalog}`}
+      body={denied.message}
     />
   );
 }

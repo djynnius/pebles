@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, errorText } from "../api";
 import { AccentButton, Page } from "../components/Page";
+import { InlineConfirm } from "../components/Form";
 import { Empty, ErrorBlock, Loading } from "../components/State";
 import { DOC_NAME } from "./Notebooks";
 
@@ -55,12 +56,28 @@ export function Dashboards() {
       .finally(() => setBusy(false));
   };
 
+  // Inline "Delete x? [Delete] [Cancel]" instead of window.confirm.
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+
   const remove = (n: string) => {
-    if (!confirm(`Delete dashboard “${n}”? This removes ~/dashboards/${n}.json.`)) return;
+    setConfirming(n);
+    setDeleteError("");
+  };
+
+  const confirmRemove = () => {
+    if (!confirming) return;
+    setDeleting(true);
+    setDeleteError("");
     api
-      .del(`/dashboards/${encodeURIComponent(n)}`)
-      .then(load)
-      .catch((e) => setError(errorText(e)));
+      .del(`/dashboards/${encodeURIComponent(confirming)}`)
+      .then(() => {
+        setConfirming(null);
+        load();
+      })
+      .catch((e) => setDeleteError(errorText(e)))
+      .finally(() => setDeleting(false));
   };
 
   return (
@@ -108,6 +125,19 @@ export function Dashboards() {
 
       {error && <ErrorBlock error={error} />}
       {!error && names === null && <Loading />}
+      {confirming && (
+        <div style={{ marginBottom: 14 }}>
+          <InlineConfirm
+            message={`Delete dashboard “${confirming}”? This removes ~/dashboards/${confirming}.json.`}
+            confirmLabel="Delete"
+            busyLabel="Deleting…"
+            busy={deleting}
+            error={deleteError}
+            onConfirm={confirmRemove}
+            onCancel={() => setConfirming(null)}
+          />
+        </div>
+      )}
 
       {names && names.length > 0 ? (
         <div

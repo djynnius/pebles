@@ -206,8 +206,13 @@ class FakeDaemon:
         yield {"id": None, "rows": [{"answer": 43}]}
         yield {"id": None, "ok": True, "done": True, "truncated": False}
 
-    def list_catalogs(self):
-        return list(self.catalogs)
+    def list_catalogs(self, user=None):
+        if user is None:
+            return list(self.catalogs)
+        return [
+            {**c, "accessible": c["owner"] == user or user in getattr(self, "granted", {}).get(c["name"], [])}
+            for c in self.catalogs
+        ]
 
     def list_users(self):
         return [
@@ -763,7 +768,10 @@ def test_autoetl_propose_rules():
     assert p["name"] == "claims_2025"
     assert model["kind"] == "star"
     assert {"column": "state", "table": "dim_state"} in model["dims"]
-    assert "amount" in model["measures"] and "claim_id" in model["measures"]
+    # UAT: ids were proposed as measures and dates became dimension tables
+    assert model["measures"] == ["amount"]
+    assert "claim_id" in model["keeps"] and "filed_date" in model["keeps"]
+    assert all(d["column"] != "filed_date" for d in model["dims"])
 
     # approve only the ticked steps → deterministic SQL plan
     approved = [s for s in p["cleaning"] if s["ticked"]]
@@ -993,3 +1001,71 @@ def test_engine_access_is_validated_and_admin_only():
     assert signed_in_as("tomas").post(
         "/api/engines/worker-1/access", json={"access": "everyone"}
     ).status_code == 403
+
+
+def test_result_columns_keep_select_order_on_the_wire():
+    # Flask's jsonify sorts keys by default — that alphabetized every grid.
+    d = FakeDaemon()
+    orig = d.exec_in_session
+    d.exec_in_session = lambda sid, p: (
+        {"id": None, "ok": True, "rows": [{"state": "CA", "id": 1, "amount": 2.5}]}
+        if p.get("op") == "sql" else orig(sid, p)
+    )
+    body = api_signed_in(d).post("/api/sql", json={"sql": "SELECT state, id, amount"}).get_data(
+        as_text=True
+    )
+    row = body[body.index('"rows"'):]
+    assert row.index('"state"') < row.index('"id"') < row.index('"amount"')
+
+
+def test_catalogs_you_cannot_open_are_flagged_and_refused_not_empty():
+    # UAT: another user's catalog showed "No schemas yet" — a permission
+    # denial masquerading as an empty catalog.
+    d = FakeDaemon()
+    maya, tomas = signed_in_as("maya", d), signed_in_as("tomas", d)
+    maya.post("/api/catalogs", json={"name": "claims"})
+    listed = {c["name"]: c for c in tomas.get("/api/catalogs").get_json()}
+    assert listed["claims"]["accessible"] is False
+    tree = tomas.get("/api/catalogs/claims/tree")
+    assert tree.status_code == 403
+    assert "maya" in tree.get_json()["error"] and tree.get_json()["access"] is False
+    assert tomas.get("/api/catalogs/claims/tables/main/t").status_code == 403
+    assert maya.get("/api/catalogs/claims/tree").status_code == 200
+    d.granted = {"claims": ["tomas"]}
+    assert tomas.get("/api/catalogs/claims/tree").status_code == 200
+
+
+def test_autoetl_small_or_unique_columns_do_not_become_dimensions():
+    from pebbles_web.autoetl import propose
+
+    cols = [
+        {"column_name": "id", "column_type": "BIGINT", "approx_unique": 3, "null_percentage": 0},
+        {"column_name": "state", "column_type": "VARCHAR", "approx_unique": 2,
+         "null_percentage": 0, "min": "CA", "max": "NY"},
+        {"column_name": "filed_date", "column_type": "DATE", "approx_unique": 3, "null_percentage": 0},
+        {"column_name": "amount", "column_type": "DOUBLE", "approx_unique": 3, "null_percentage": 0},
+        {"column_name": "order_no", "column_type": "INTEGER", "approx_unique": 3, "null_percentage": 0},
+    ]
+    # the exact UAT dataset: 3 rows
+    m = propose(cols, 3, {"kind": "file", "path": "claims.csv"})["model"]
+    assert m["measures"] == ["amount"]
+    assert set(m["keeps"]) >= {"id", "filed_date", "order_no"}
+    assert m["dims"] == [] and m["kind"] == "table"  # 2 states in 3 rows isn't a dimension
+
+
+def test_nkoyo_config_flags_cloud_models():
+    d = FakeDaemon()
+    d.nkoyo_config = lambda: {"endpoints": ["http://h:11434"], "planner_model": "glm-5.2:cloud",
+                              "coder_model": "qwen3-coder", "embed_model": "nomic-embed-text",
+                              "max_steps": 16}
+    cfg = api_signed_in(d).get("/api/nkoyo/config").get_json()
+    assert cfg["cloud_models"] == ["glm-5.2:cloud"]
+    d.nkoyo_config = lambda: {"planner_model": "llama3.2", "coder_model": "llama3.2",
+                              "embed_model": "nomic-embed-text", "endpoints": []}
+    assert api_signed_in(d).get("/api/nkoyo/config").get_json()["cloud_models"] == []
+
+
+def test_managed_pgpass_cannot_be_deleted_or_renamed():
+    c = api_signed_in()
+    assert c.post("/api/files/delete", json={"path": ".pgpass"}).status_code == 409
+    assert c.post("/api/files/rename", json={"path": "./.pgpass", "to": "x"}).status_code == 409

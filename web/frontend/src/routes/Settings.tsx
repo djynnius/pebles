@@ -8,6 +8,7 @@ import {
 } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, errorText, type User } from "../api";
+import { CloudModelsWarning } from "../components/CloudModels";
 import { Empty, EmptyAction, ErrorBlock, Loading } from "../components/State";
 import {
   Field,
@@ -718,6 +719,8 @@ interface NkoyoConfig {
   coder_model: string;
   embed_model: string;
   max_steps: number;
+  /** Configured models that run on Ollama's cloud — data leaves the cluster. */
+  cloud_models?: string[];
 }
 
 interface Detected {
@@ -749,6 +752,7 @@ function NkoyoPane({ admin }: { admin: boolean }) {
   }
 
   const patch = (changes: Partial<NkoyoConfig>) => setCfg({ ...cfg, ...changes });
+  const cloudModels = Array.isArray(cfg.cloud_models) ? cfg.cloud_models : [];
 
   const save = () => {
     setBusy(true);
@@ -756,13 +760,22 @@ function NkoyoPane({ admin }: { admin: boolean }) {
     setError("");
     api
       .post<NkoyoConfig>("/nkoyo/config", {
-        ...cfg,
+        planner_model: cfg.planner_model,
+        coder_model: cfg.coder_model,
+        embed_model: cfg.embed_model,
+        max_steps: cfg.max_steps,
         endpoints: endpoints.split("\n").map((e) => e.trim()).filter(Boolean),
       })
       .then((c) => {
         setCfg(c);
         setEndpoints((c.endpoints ?? []).join("\n"));
         setStatus("Saved.");
+        // The save answer doesn't carry cloud_models; re-read so the cloud
+        // warning tracks the models just saved.
+        return api
+          .get<NkoyoConfig>("/nkoyo/config")
+          .then(setCfg)
+          .catch(() => undefined);
       })
       .catch((e) => setError(errorText(e)))
       .finally(() => setBusy(false));
@@ -800,6 +813,7 @@ function NkoyoPane({ admin }: { admin: boolean }) {
             style={{ ...input, resize: "vertical", fontSize: 12.5 }}
           />
         </Labelled>
+        {cloudModels.length > 0 && <CloudModelsWarning models={cloudModels} />}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 14 }}>
           <Labelled label="Planning model">
             <input
@@ -856,7 +870,9 @@ function NkoyoPane({ admin }: { admin: boolean }) {
           </div>
         )}
         <Note>
-          Local Ollama only — endpoints are probed across the fleet and nothing leaves your hosts.
+          {cloudModels.length > 0
+            ? "Endpoints are probed across the fleet. Models served from ollama.com run off-cluster."
+            : "Local Ollama only — endpoints are probed across the fleet and nothing leaves your hosts."}
         </Note>
       </Card>
 

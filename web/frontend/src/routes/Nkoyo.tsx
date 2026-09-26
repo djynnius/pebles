@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useLocation } from "react-router-dom";
 import { api, errorText, type User } from "../api";
 import { NkoyoAvatar } from "../components/Avatar";
+import { CloudModelsWarning } from "../components/CloudModels";
 import { ErrorBlock } from "../components/State";
 
 /*
@@ -67,6 +68,15 @@ export function Nkoyo({ user }: { user: User }) {
   const [approved, setApproved] = useState<string[]>([]);
   const lastPrompt = useRef("");
   const scroller = useRef<HTMLDivElement | null>(null);
+  // Models that run on ollama.com — when non-empty, data does leave the cluster.
+  const [cloudModels, setCloudModels] = useState<string[]>([]);
+
+  useEffect(() => {
+    api
+      .get<{ cloud_models?: string[] }>("/nkoyo/config")
+      .then((c) => setCloudModels(Array.isArray(c.cloud_models) ? c.cloud_models : []))
+      .catch(() => setCloudModels([]));
+  }, []);
 
   useEffect(() => {
     api
@@ -195,7 +205,11 @@ export function Nkoyo({ user }: { user: User }) {
             paddingTop: 12,
           }}
         >
-          Runs entirely on your cluster. No data leaves your hosts.
+          {cloudModels.length > 0 ? (
+            <CloudModelsWarning models={cloudModels} />
+          ) : (
+            "Runs entirely on your cluster. No data leaves your hosts."
+          )}
         </div>
       </aside>
 

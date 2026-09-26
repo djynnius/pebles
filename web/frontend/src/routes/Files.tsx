@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { api, errorText, type User } from "../api";
+import { InlineConfirm, InlinePanel, SmallButton, TextInput } from "../components/Form";
+import { Switch } from "../components/Page";
 import { ErrorBlock } from "../components/State";
 import { Workbench } from "../components/Workbench";
 
@@ -28,6 +30,25 @@ const SECTIONS: { id: Section; label: string; glyph: string }[] = [
   { id: "trash", label: "Trash", glyph: "⌫" },
 ];
 
+/** Files Pebbles itself writes into a home and keeps (server answers 409). */
+const MANAGED = new Set([".pgpass"]);
+
+const HIDDEN_KEY = "pebbles.files.showHidden";
+
+function readShowHidden(): boolean {
+  try {
+    return localStorage.getItem(HIDDEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** The inline action in progress — the replacement for prompt()/confirm(). */
+type Pending =
+  | { kind: "delete"; item: FileItem }
+  | { kind: "rename"; item: FileItem }
+  | { kind: "mkdir" };
+
 interface Menu {
   x: number;
   y: number;
@@ -44,6 +65,20 @@ export function Files({ user }: { user: User }) {
   const [newMenu, setNewMenu] = useState(false);
   const [uploading, setUploading] = useState(false);
   const upload = useRef<HTMLInputElement>(null);
+  const [showHidden, setShowHidden] = useState(readShowHidden);
+  const [pending, setPending] = useState<Pending | null>(null);
+  const [pendingName, setPendingName] = useState("");
+  const [pendingBusy, setPendingBusy] = useState(false);
+
+  const toggleHidden = () =>
+    setShowHidden((v) => {
+      try {
+        localStorage.setItem(HIDDEN_KEY, v ? "0" : "1");
+      } catch {
+        /* storage blocked — the toggle still works for this visit */
+      }
+      return !v;
+    });
 
   const load = useCallback((p: string) => {
     setItems(null);
@@ -76,29 +111,58 @@ export function Files({ user }: { user: User }) {
     };
   }, [menu, newMenu]);
 
-  const act = (p: Promise<unknown>) =>
-    p
-      .then(() => load(path))
-      .catch((e) => setError(errorText(e)));
-
   const rel = (name: string) => (path ? `${path}/${name}` : name);
+  // Managed files live at the home root (e.g. ~/.pgpass).
+  const managed = (item: FileItem) => path === "" && MANAGED.has(item.name);
+
+  // Runs the pending action. Failures — including the 409 the server returns
+  // for a Pebbles-managed file — land in the page's ErrorBlock.
+  const act = (p: Promise<unknown>) => {
+    setPendingBusy(true);
+    setError("");
+    return p
+      .then(() => load(path))
+      .catch((e) => setError(errorText(e)))
+      .finally(() => {
+        setPendingBusy(false);
+        setPending(null);
+      });
+  };
+
+  // Leaving a folder abandons any half-finished inline action.
+  useEffect(() => setPending(null), [path, section]);
 
   const onDownload = (item: FileItem) => {
     window.open(`/api/files/download?path=${encodeURIComponent(rel(item.name))}`, "_blank");
   };
   const onRename = (item: FileItem) => {
-    const to = window.prompt(`Rename “${item.name}” to`, item.name);
-    if (!to || to === item.name) return;
-    act(api.post("/files/rename", { path: rel(item.name), to: path ? `${path}/${to}` : to }));
+    setPendingName(item.name);
+    setPending({ kind: "rename", item });
   };
-  const onDelete = (item: FileItem) => {
-    if (!window.confirm(`Delete “${item.name}”? This cannot be undone.`)) return;
-    act(api.post("/files/delete", { path: rel(item.name) }));
-  };
+  const onDelete = (item: FileItem) => setPending({ kind: "delete", item });
   const onNewFolder = () => {
-    const name = window.prompt("New folder name");
+    setPendingName("");
+    setPending({ kind: "mkdir" });
+  };
+  const submitPending = () => {
+    if (!pending || pendingBusy) return;
+    if (pending.kind === "delete") {
+      void act(api.post("/files/delete", { path: rel(pending.item.name) }));
+      return;
+    }
+    const name = pendingName.trim();
     if (!name) return;
-    act(api.post("/files/mkdir", { dir: path, name }));
+    if (pending.kind === "rename") {
+      if (name === pending.item.name) {
+        setPending(null);
+        return;
+      }
+      void act(
+        api.post("/files/rename", { path: rel(pending.item.name), to: path ? `${path}/${name}` : name }),
+      );
+    } else {
+      void act(api.post("/files/mkdir", { dir: path, name }));
+    }
   };
   const onUpload = (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -118,7 +182,9 @@ export function Files({ user }: { user: User }) {
 
   const crumbs = path ? path.split("/") : [];
   const q = filter.trim().toLowerCase();
-  const shown = (items ?? []).filter((i) => !q || i.name.toLowerCase().includes(q));
+  const visible = (items ?? []).filter((i) => showHidden || !i.name.startsWith("."));
+  const hiddenCount = (items?.length ?? 0) - visible.length;
+  const shown = visible.filter((i) => !q || i.name.toLowerCase().includes(q));
 
   return (
     <Workbench
@@ -206,7 +272,8 @@ export function Files({ user }: { user: User }) {
                 <div className="mono" style={{ fontSize: 11.5, color: "var(--text-dim)", marginTop: 4 }}>
                   /home/{user.username}
                   {path ? `/${path}` : ""} · uid {user.uid} ·{" "}
-                  {items ? `${items.length} item${items.length === 1 ? "" : "s"}` : "…"}
+                  {items ? `${visible.length} item${visible.length === 1 ? "" : "s"}` : "…"}
+                  {hiddenCount > 0 ? ` · ${hiddenCount} hidden` : ""}
                 </div>
               </div>
               <div style={{ display: "flex", gap: 8, position: "relative" }}>
@@ -269,19 +336,28 @@ export function Files({ user }: { user: User }) {
               </div>
             </div>
 
-            {/* filter */}
+            {/* filter + hidden-files toggle */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 16,
+                flexWrap: "wrap",
+                marginBottom: 14,
+              }}
+            >
             <div
               style={{
                 display: "flex",
                 alignItems: "center",
                 gap: 7,
                 height: 32,
-                maxWidth: 320,
+                flex: "0 1 320px",
+                minWidth: 200,
                 padding: "0 11px",
                 borderRadius: 11,
                 background: "var(--surface)",
                 border: "1px solid var(--border)",
-                marginBottom: 14,
               }}
             >
               <span style={{ color: "var(--text-faint)", fontSize: 12 }}>⌕</span>
@@ -300,8 +376,58 @@ export function Files({ user }: { user: User }) {
                 }}
               />
             </div>
+            <Switch label="Show hidden files" on={showHidden} onToggle={toggleHidden} />
+            </div>
 
             {error && <ErrorBlock error={error} />}
+
+            {pending?.kind === "delete" && (
+              <InlineConfirm
+                message={`Delete “${pending.item.name}”? This cannot be undone.`}
+                confirmLabel="Delete"
+                busyLabel="Deleting…"
+                busy={pendingBusy}
+                onConfirm={submitPending}
+                onCancel={() => setPending(null)}
+              />
+            )}
+            {(pending?.kind === "rename" || pending?.kind === "mkdir") && (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  submitPending();
+                }}
+              >
+                <InlinePanel>
+                  <span style={{ color: "var(--text-mid)", flex: "0 0 auto" }}>
+                    {pending.kind === "rename" ? `Rename “${pending.item.name}” to` : "New folder"}
+                  </span>
+                  <div style={{ flex: "1 1 220px", minWidth: 180 }}>
+                    <TextInput
+                      value={pendingName}
+                      onChange={setPendingName}
+                      autoFocus
+                      ariaLabel={pending.kind === "rename" ? "New name" : "Folder name"}
+                      placeholder={pending.kind === "rename" ? undefined : "folder-name"}
+                      style={{ padding: "6px 10px", borderRadius: 9 }}
+                    />
+                  </div>
+                  <SmallButton type="submit" primary disabled={pendingBusy || !pendingName.trim()}>
+                    {pendingBusy
+                      ? pending.kind === "rename"
+                        ? "Renaming…"
+                        : "Creating…"
+                      : pending.kind === "rename"
+                        ? "Rename"
+                        : "Create"}
+                  </SmallButton>
+                  <SmallButton disabled={pendingBusy} onClick={() => setPending(null)}>
+                    Cancel
+                  </SmallButton>
+                </InlinePanel>
+              </form>
+            )}
+            {pending && <div style={{ height: 14 }} />}
 
             <div
               style={{
@@ -351,6 +477,22 @@ export function Files({ user }: { user: User }) {
                             {item.dir ? "▸" : "▪"}
                           </span>
                           {item.name}
+                          {managed(item) && (
+                            <span
+                              title="Managed by Pebbles — can't be renamed or deleted"
+                              style={{
+                                padding: "1px 7px",
+                                borderRadius: 20,
+                                background: "var(--track)",
+                                color: "var(--text-dim)",
+                                fontSize: 10,
+                                fontWeight: 600,
+                                letterSpacing: "0.3px",
+                              }}
+                            >
+                              managed
+                            </span>
+                          )}
                         </button>
                       </td>
                       <td style={{ ...td, color: "var(--text-dim)" }}>
@@ -390,7 +532,9 @@ export function Files({ user }: { user: User }) {
                       <td colSpan={5} style={{ ...td, color: "var(--text-dim)" }}>
                         {items.length === 0
                           ? "This folder is empty — Upload, or New folder ▾, to fill it."
-                          : "Nothing matches the filter."}
+                          : visible.length === 0
+                            ? "Only hidden files here — turn on Show hidden files to see them."
+                            : "Nothing matches the filter."}
                       </td>
                     </tr>
                   )}
@@ -422,23 +566,32 @@ export function Files({ user }: { user: User }) {
               }}
             />
           )}
-          <MenuItem
-            label="Rename…"
-            onClick={() => {
-              const it = menu.item;
-              setMenu(null);
-              onRename(it);
-            }}
-          />
-          <MenuItem
-            label="Delete"
-            danger
-            onClick={() => {
-              const it = menu.item;
-              setMenu(null);
-              onDelete(it);
-            }}
-          />
+          {!managed(menu.item) && (
+            <>
+              <MenuItem
+                label="Rename…"
+                onClick={() => {
+                  const it = menu.item;
+                  setMenu(null);
+                  onRename(it);
+                }}
+              />
+              <MenuItem
+                label="Delete"
+                danger
+                onClick={() => {
+                  const it = menu.item;
+                  setMenu(null);
+                  onDelete(it);
+                }}
+              />
+            </>
+          )}
+          {managed(menu.item) && (
+            <div style={{ padding: "8px 14px", fontSize: 11.5, color: "var(--text-dim)" }}>
+              Managed by Pebbles
+            </div>
+          )}
         </div>
       )}
     </Workbench>

@@ -116,6 +116,23 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(migrations::run(cfg.config_dir.clone()));
         // REQ-50: daily catalog dump + lake manifest, with retention.
         tokio::spawn(backups::scheduled_loop(cfg.config_dir.clone()));
+        // Catalogs made before PUBLIC-connect was revoked get the same
+        // privacy retroactively, once postgres is up.
+        tokio::spawn(async {
+            for _ in 0..120 {
+                if std::path::Path::new("/run/postgresql/.s.PGSQL.5432").exists() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+            match tokio::task::spawn_blocking(catalog::revoke_public_connect_all).await {
+                Ok(Ok(n)) if n > 0 => {
+                    tracing::info!(catalogs = n, "catalog connect privacy enforced")
+                }
+                Ok(Err(err)) => tracing::warn!(%err, "catalog privacy hardening deferred"),
+                _ => {}
+            }
+        });
     }
     let clu = cluster::Cluster::load(&cfg.config_dir);
     if cfg.role == pebbles_api::Role::Main {
