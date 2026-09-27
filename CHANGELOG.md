@@ -6,6 +6,27 @@ All notable changes to Pebbles are documented here. The format follows
 
 ## [Unreleased]
 
+### Added (workspace tree, result tabs, table import)
+- **Notebooks in folders, Databricks-style.** Notebooks live in a project
+  folder tree under `~/notebooks`; the Notebooks page shows it on the left
+  (new notebooks and imports go into the selected folder, with the target
+  path shown), and inside a notebook the side panel shows the tree under the
+  table of contents. Folders can be created, and notebooks/folders renamed or
+  deleted from the tree. Creating a notebook no longer silently overwrites an
+  existing one of the same name. Nkoyo's `create_notebook` accepts folders too.
+- **SQL results in tabs.** Every run opens its own result tab under the
+  query (closable with ×; the last 10 per query are kept); Download CSV and
+  Add to dashboard act on the selected one.
+- **"+ New → Table".** Upload a CSV, TSV, Parquet, JSON or **Excel (.xlsx)**
+  file, choose catalog and schema (or create a schema inline), name the
+  table(s) and load. Excel sheets are cleaned first on your engine session:
+  the header row is found and title, blank, note, total and repeated-header
+  rows and empty columns are dropped — the wizard lists what was removed per
+  sheet — column names become lowercase_with_underscores and numeric/date
+  columns are typed. Every sheet becomes a table named after the sheet
+  (rename or untick any). The Catalog tree's "Upload table…" uses the same
+  wizard.
+
 ### Added (skills, catalog actions, Nkoyo that knows Pebbles)
 - **Install agent skills by name** (Settings → Agent skills): type `owner/repo`
   or `owner/repo/skill` — the names `npx skills add` takes — or a git URL.

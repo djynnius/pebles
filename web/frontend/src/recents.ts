@@ -3,6 +3,7 @@
 // of item opens at. Kept together so Home and the search dropdown agree on
 // where a "table" or a "query" goes.
 import { api } from "./api";
+import { notebookUrl } from "./notebooks";
 
 export type RecentKind = "notebook" | "dashboard" | "query" | "table" | "job";
 export type SearchKind = "notebook" | "dashboard" | "job" | "catalog" | "table";
@@ -71,7 +72,7 @@ function tableParam(catalog: string | null | undefined, qualified: string): stri
 export function recentPath(r: Recent): string {
   switch (r.kind) {
     case "notebook":
-      return `/notebooks/${enc(r.name)}`;
+      return notebookUrl(r.name);
     case "dashboard":
       return `/dashboards/${enc(r.name)}`;
     case "job":
@@ -88,7 +89,7 @@ export function recentPath(r: Recent): string {
 export function hitPath(h: SearchHit): string {
   switch (h.kind) {
     case "notebook":
-      return `/notebooks/${enc(h.name)}`;
+      return notebookUrl(h.name);
     case "dashboard":
       return `/dashboards/${enc(h.name)}`;
     case "job":

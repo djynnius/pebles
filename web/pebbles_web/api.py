@@ -10,6 +10,7 @@ permission system to drift.
 
 import base64
 import functools
+import hashlib
 import json
 import os
 import re
@@ -23,6 +24,19 @@ from pebbles_web.pebblesd_client import PebblesdClient, PebblesdError
 
 #: home-relative document names (notebooks, dashboards, repos)
 DOC_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+#: notebook folders below ~/notebooks (Databricks-style workspace tree)
+NOTEBOOK_MAX_DEPTH = 4
+#: segments that would collide with the notebook API's own sub-routes
+NOTEBOOK_RESERVED = {"ipynb", "cells", "import", "tree", "folders"}
+
+
+def _notebook_path(name: str) -> bool:
+    """`claims-eda` or `projects/hedis/q1` — DOC_NAME segments, bounded depth."""
+    parts = (name or "").split("/")
+    return (
+        0 < len(parts) <= NOTEBOOK_MAX_DEPTH + 1
+        and all(DOC_NAME.match(p) and p not in NOTEBOOK_RESERVED for p in parts)
+    )
 #: the Pebbles group whose members administer the install (pebblesd admins.rs)
 ADMIN_GROUP = "admins"
 #: Home's recently-opened list
@@ -62,6 +76,12 @@ SKILL_SPEC = re.compile(r"^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(?:/([A-Za-z0-9_.-
 SKILL_URL = re.compile(r"^(https://[A-Za-z0-9.-]+(?::\d+)?/[A-Za-z0-9._/~-]+|git@[A-Za-z0-9.-]+:[A-Za-z0-9._/~-]+)$")
 #: where `owner/repo` resolves; point at an internal mirror when air-gapped
 SKILLS_GIT_BASE = os.environ.get("PEBBLES_SKILLS_GIT_BASE", "https://github.com").rstrip("/")
+#: engine-side Excel cleaner and the interpreter that runs it (image conda env)
+ETL_SCRIPT = "/opt/pebbles/etl/tabular_import.py"
+ETL_PYTHON = os.environ.get("PEBBLES_ETL_PYTHON", "/opt/conda/envs/pebbles/bin/python")
+#: where cleaned sheets wait between inspect and commit (in the user's home)
+IMPORT_STAGE = ".pebbles/import"
+EXCEL_EXT = ("xlsx", "xlsm")
 #: skills baked into the image (read-only for everyone)
 WORKSPACE_SKILLS = "/opt/pebbles/skills"
 PERSONAL_SKILLS = ".pebbles/skills"
@@ -310,7 +330,26 @@ def register_api(app, client: PebblesdClient) -> None:
         doc.setdefault("catalog", None)
         return doc
 
+    def _notebook_tree(username: str) -> tuple[list, list]:
+        """(folders, notebooks) under ~/notebooks, as paths relative to it."""
+        folders, found, queue = [], [], [""]
+        while queue:
+            rel = queue.pop(0)
+            got = _session_op(username, {"op": "browse", "path": f"notebooks/{rel}".rstrip("/")})
+            for item in got.get("items", []) if got.get("ok") else []:
+                name = item.get("name", "")
+                path = f"{rel}/{name}" if rel else name
+                if item.get("dir"):
+                    if DOC_NAME.match(name) and path.count("/") < NOTEBOOK_MAX_DEPTH:
+                        folders.append(path)
+                        queue.append(path)
+                elif name.endswith(".json") and _notebook_path(path[: -len(".json")]):
+                    found.append(path[: -len(".json")])
+        return sorted(folders), sorted(found)
+
     def _list_docs(username: str, kind: str) -> list:
+        if kind == "notebooks":
+            return _notebook_tree(username)[1]
         listing = _session_op(username, {"op": "list", "path": kind})
         if not listing.get("ok"):
             return []
@@ -742,6 +781,135 @@ def register_api(app, client: PebblesdClient) -> None:
         count = _rows(username, f"SELECT count(*) AS n FROM {target}", cat)
         return jsonify({"ok": True, "table": name, "rows": count[0].get("n") if count else None})
 
+    # ---- import a data file as table(s) ("+ New → Table") -------------------
+
+    def _import_kind(path: str) -> str | None:
+        ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+        if ext in EXCEL_EXT:
+            return "excel"
+        if autoetl.source_expr({"kind": "file", "path": path}) is not None:
+            return "file"
+        return None
+
+    def _stage_dir(path: str) -> str:
+        return f"{IMPORT_STAGE}/{hashlib.sha1(path.encode()).hexdigest()[:12]}"
+
+    def _inspect_excel(username: str, path: str) -> tuple[dict | None, str | None]:
+        stage = _stage_dir(path)
+        got = _session_op(username, {
+            "op": "shell",
+            "command": f"{shlex.quote(ETL_PYTHON)} {ETL_SCRIPT} inspect "
+            f"{shlex.quote(path)} {shlex.quote(stage)}",
+        })
+        try:
+            out = json.loads((got.get("stdout") or "").strip().splitlines()[-1])
+        except (IndexError, json.JSONDecodeError):
+            return None, (got.get("stderr") or got.get("error") or "the Excel reader failed").strip()
+        if "error" in out:
+            return None, out["error"]
+        return out, None
+
+    def _inspect_file(username: str, path: str) -> dict:
+        source = autoetl.source_expr({"kind": "file", "path": path})
+        got = _run_sql(username, f"DESCRIBE SELECT * FROM {source}", None)
+        if not got.get("ok"):
+            raise ValueError(got.get("error", "couldn't read the file"))
+        columns = [
+            {"name": r.get("column_name"), "type": r.get("column_type")}
+            for r in got.get("rows") or []
+        ]
+        count = _run_sql(username, f"SELECT count(*) AS n FROM {source}", None)
+        preview = _run_sql(username, f"SELECT * FROM {source} LIMIT 5", None)
+        return {
+            "key": "",
+            "name": autoetl.base_name({"path": path}),
+            "rows": ((count.get("rows") or [{}])[0]).get("n"),
+            "columns": columns,
+            "preview": preview.get("rows") or [],
+            "cleaning": [],
+            "empty": False,
+        }
+
+    @app.post("/api/import/inspect")
+    @authed
+    def api_import_inspect(user):  # pyright: ignore[reportUnusedFunction]
+        path = _safe_rel((request.get_json(silent=True) or {}).get("path") or "")
+        if not path or "'" in path:
+            return jsonify({"error": "bad path"}), 422
+        if path.lower().endswith(".xls"):
+            return jsonify({"error": "old .xls workbooks aren't supported — save it as .xlsx"}), 422
+        kind = _import_kind(path)
+        if kind is None:
+            return jsonify({"error": "pick a CSV, TSV, Parquet, JSON or Excel (.xlsx) file"}), 422
+        username = user["username"]
+        if kind == "excel":
+            out, err = _inspect_excel(username, path)
+            if err is not None:
+                status = 404 if "No such file" in err or "FileNotFound" in err else 422
+                return jsonify({"error": err}), status
+            return jsonify({"path": path, "kind": kind, "tables": out["tables"]})
+        try:
+            table = _inspect_file(username, path)
+        except ValueError as exc:
+            status = 404 if "No files found" in str(exc) else 422
+            return jsonify({"error": str(exc)}), status
+        return jsonify({"path": path, "kind": kind, "tables": [table]})
+
+    @app.post("/api/import/commit")
+    @authed
+    def api_import_commit(user):  # pyright: ignore[reportUnusedFunction]
+        body = request.get_json(silent=True) or {}
+        path = _safe_rel(body.get("path") or "")
+        cat, schema = (body.get("catalog") or "").strip(), (body.get("schema") or "").strip()
+        wanted = [t for t in body.get("tables") or [] if isinstance(t, dict)]
+        denied = _catalog_write(user, cat, schema)
+        if denied:
+            return denied
+        kind = _import_kind(path or "") if path and "'" not in path else None
+        if kind is None:
+            return jsonify({"error": "bad path"}), 422
+        if not wanted:
+            return jsonify({"error": "choose at least one table"}), 422
+        username = user["username"]
+        if not _schema_exists(username, cat, schema):
+            return jsonify({"error": f"no schema {cat}.{schema}"}), 404
+        sources: dict = {}
+        if kind == "excel":
+            got = _session_op(username, {"op": "read", "path": f"{_stage_dir(path)}/manifest.json"})
+            if not got.get("ok"):
+                _, err = _inspect_excel(username, path)  # stage was cleared: redo it
+                if err is not None:
+                    return jsonify({"error": err}), 422
+                got = _session_op(
+                    username, {"op": "read", "path": f"{_stage_dir(path)}/manifest.json"}
+                )
+            sheets = json.loads(got.get("content") or "{}").get("sheets", {})
+            sources = {k: f"read_parquet('{v}')" for k, v in sheets.items() if "'" not in v}
+        else:
+            sources = {"": autoetl.source_expr({"kind": "file", "path": path})}
+        existing = set(_schema_tables(username, cat, schema))
+        created, errors, names = [], [], set()
+        for t in wanted:
+            key, name = str(t.get("key", "")), str(t.get("name", "")).strip()
+            if not IDENT.match(name):
+                errors.append({"key": key, "error": f"{name!r} isn't a valid table name"})
+            elif name in existing or name in names:
+                errors.append({"key": key, "error": f"{cat}.{schema}.{name} already exists"})
+            elif key not in sources:
+                errors.append({"key": key, "error": "that sheet has no data to load"})
+            else:
+                names.add(name)
+                target = f"{_q(cat)}.{_q(schema)}.{_q(name)}"
+                got = _run_sql(username, f"CREATE TABLE {target} AS SELECT * FROM {sources[key]}", cat)
+                if not got.get("ok"):
+                    errors.append({"key": key, "error": got.get("error", "load failed")})
+                    continue
+                count = _rows(username, f"SELECT count(*) AS n FROM {target}", cat)
+                created.append({"name": name, "rows": count[0].get("n") if count else None})
+        if kind == "excel" and not errors:
+            _session_op(username, {"op": "delete", "path": _stage_dir(path)})
+        return jsonify({"created": created, "errors": errors})
+
     # ---- SQL ---------------------------------------------------------------
 
     @app.post("/api/sql")
@@ -908,9 +1076,10 @@ def register_api(app, client: PebblesdClient) -> None:
 
     # ---- notebooks & dashboards (JSON documents in the user's home) ---------
 
-    def _doc_routes(kind: str, defaults: dict, sanitize):
+    def _doc_routes(kind: str, defaults: dict, sanitize, valid=DOC_NAME.match, conv=""):
         """Notebooks and dashboards share one CRUD shape; only the payload
-        sanitizer differs. `kind` is 'notebooks' or 'dashboards'."""
+        sanitizer differs. `kind` is 'notebooks' or 'dashboards'. Notebook
+        names are paths below ~/notebooks (`conv="path:"`)."""
 
         @app.get(f"/api/{kind}", endpoint=f"api_{kind}_list")
         @authed
@@ -922,8 +1091,10 @@ def register_api(app, client: PebblesdClient) -> None:
         def _create(user):
             body = request.get_json(silent=True) or {}
             name = (body.get("name") or "").strip()
-            if not DOC_NAME.match(name):
+            if not valid(name):
                 return jsonify({"error": "invalid name"}), 422
+            if name in _list_docs(user["username"], kind):
+                return jsonify({"error": f"{name!r} already exists"}), 409
             _session_op(
                 user["username"],
                 {
@@ -934,10 +1105,10 @@ def register_api(app, client: PebblesdClient) -> None:
             )
             return jsonify({"name": name, **defaults})
 
-        @app.get(f"/api/{kind}/<name>", endpoint=f"api_{kind}_get")
+        @app.get(f"/api/{kind}/<{conv}name>", endpoint=f"api_{kind}_get")
         @authed
         def _get(user, name):
-            if not DOC_NAME.match(name):
+            if not valid(name):
                 return jsonify({"error": "invalid name"}), 422
             doc = _load_doc(user["username"], kind, name)
             if doc is None:
@@ -946,10 +1117,10 @@ def register_api(app, client: PebblesdClient) -> None:
                 doc.setdefault(key, value)
             return jsonify(doc)
 
-        @app.put(f"/api/{kind}/<name>", endpoint=f"api_{kind}_save")
+        @app.put(f"/api/{kind}/<{conv}name>", endpoint=f"api_{kind}_save")
         @authed
         def _save(user, name):
-            if not DOC_NAME.match(name):
+            if not valid(name):
                 return jsonify({"error": "invalid name"}), 422
             payload = sanitize(request.get_json(silent=True) or {})
             _session_op(
@@ -962,10 +1133,10 @@ def register_api(app, client: PebblesdClient) -> None:
             )
             return jsonify({"saved": True})
 
-        @app.delete(f"/api/{kind}/<name>", endpoint=f"api_{kind}_delete")
+        @app.delete(f"/api/{kind}/<{conv}name>", endpoint=f"api_{kind}_delete")
         @authed
         def _delete(user, name):
-            if not DOC_NAME.match(name):
+            if not valid(name):
                 return jsonify({"error": "invalid name"}), 422
             return jsonify(
                 _session_op(user["username"], {"op": "delete", "path": f"{kind}/{name}.json"})
@@ -975,21 +1146,43 @@ def register_api(app, client: PebblesdClient) -> None:
 
     _sanitize_dashboard = dashboards.sanitize
 
+    @app.get("/api/notebooks/tree")
+    @authed
+    def api_notebook_tree(user):  # pyright: ignore[reportUnusedFunction]
+        folders, found = _notebook_tree(user["username"])
+        return jsonify({"folders": folders, "notebooks": found})
+
+    @app.post("/api/notebooks/folders")
+    @authed
+    def api_notebook_folder(user):  # pyright: ignore[reportUnusedFunction]
+        path = ((request.get_json(silent=True) or {}).get("path") or "").strip().strip("/")
+        if not _notebook_path(path) or path.count("/") >= NOTEBOOK_MAX_DEPTH:
+            return jsonify({"error": "folder names are lowercase letters, digits, - and _"}), 422
+        folders, _ = _notebook_tree(user["username"])
+        if path in folders:
+            return jsonify({"error": f"{path!r} already exists"}), 409
+        got = _session_op(user["username"], {"op": "mkdir", "path": f"notebooks/{path}"})
+        if not got.get("ok"):
+            return jsonify({"error": got.get("error", "couldn't create the folder")}), 422
+        return jsonify({"ok": True, "path": path})
+
     _doc_routes(
         "notebooks",
         {"catalog": None, "cells": [{"type": "sql", "source": ""}]},
         _sanitize_notebook,
+        valid=_notebook_path,
+        conv="path:",
     )
     _doc_routes(
         "dashboards", {"catalog": None, "filters": [], "tiles": []}, _sanitize_dashboard
     )
 
-    @app.get("/api/notebooks/<name>/cells/<int:index>/stream")
+    @app.get("/api/notebooks/<path:name>/cells/<int:index>/stream")
     def api_notebook_cell_stream(name, index):  # pyright: ignore[reportUnusedFunction]
         user = session.get("user")
         if user is None:
             return jsonify({"error": "unauthenticated"}), 401
-        if not DOC_NAME.match(name):
+        if not _notebook_path(name):
             return jsonify({"error": "invalid name"}), 422
         result, error = None, None
         try:
@@ -1013,10 +1206,10 @@ def register_api(app, client: PebblesdClient) -> None:
             error = str(exc)
         return _sse_response(result, error)
 
-    @app.get("/api/notebooks/<name>/ipynb")
+    @app.get("/api/notebooks/<path:name>/ipynb")
     @authed
     def api_notebook_export(user, name):  # pyright: ignore[reportUnusedFunction]
-        if not DOC_NAME.match(name):
+        if not _notebook_path(name):
             return jsonify({"error": "invalid name"}), 422
         nb = _load_doc(user["username"], "notebooks", name)
         if nb is None:
@@ -1024,21 +1217,25 @@ def register_api(app, client: PebblesdClient) -> None:
         return Response(
             json.dumps(notebooks.to_ipynb(nb), indent=1),
             mimetype="application/x-ipynb+json",
-            headers={"Content-Disposition": f'attachment; filename="{name}.ipynb"'},
+            headers={
+                "Content-Disposition": f'attachment; filename="{name.rsplit("/", 1)[-1]}.ipynb"'
+            },
         )
 
     @app.post("/api/notebooks/import")
     @authed
     def api_notebook_import(user):  # pyright: ignore[reportUnusedFunction]
-        """Multipart: `file` (.ipynb) + optional `name`; refuses to overwrite."""
+        """Multipart: `file` (.ipynb) + optional `name` (a notebook path) or
+        `folder` (where a name derived from the file goes); never overwrites."""
         upload = request.files.get("file")
         if upload is None:
             return jsonify({"error": "attach a .ipynb file"}), 422
         base = (upload.filename or "notebook").rsplit("/", 1)[-1].rsplit(".", 1)[0]
-        name = (request.form.get("name") or "").strip() or re.sub(
-            r"[^a-z0-9_-]+", "-", base.lower()
-        ).strip("-_")
-        if not DOC_NAME.match(name):
+        folder = (request.form.get("folder") or "").strip().strip("/")
+        name = (request.form.get("name") or "").strip() or "/".join(
+            p for p in (folder, re.sub(r"[^a-z0-9_-]+", "-", base.lower()).strip("-_")) if p
+        )
+        if not _notebook_path(name):
             return jsonify({"error": "invalid notebook name"}), 422
         try:
             nb = notebooks.from_ipynb(json.loads(upload.read().decode("utf-8")))

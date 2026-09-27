@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { recordRecent } from "../recents";
 import { api, columnsOf, errorText, type Row, type User } from "../api";
@@ -14,6 +14,7 @@ import {
 } from "../catalogs";
 import { CatalogTree, type TableRef, type TreeTarget } from "../components/CatalogTree";
 import { ContextMenu, Dialog, DialogActions, type MenuEntry } from "../components/Dialog";
+import { ImportTableDialog, TABLES_CHANGED } from "../components/ImportTableDialog";
 import { Field, FormMessage, SmallButton, TextInput, selectStyle } from "../components/Form";
 import { StatusDot } from "../components/Table";
 import { Empty, EmptyAction, ErrorBlock, Loading } from "../components/State";
@@ -53,8 +54,8 @@ export function Catalog({ user }: { user: User }) {
   const [treeVersion, setTreeVersion] = useState(0);
   const [menu, setMenu] = useState<{ target: TreeTarget; x: number; y: number } | null>(null);
   const [dialog, setDialog] = useState<DialogState | null>(null);
-  const uploadInput = useRef<HTMLInputElement>(null);
-  const uploadTarget = useRef<{ catalog: string; schema: string } | null>(null);
+  /** The import wizard, preselected to the schema that was right-clicked. */
+  const [importTo, setImportTo] = useState<{ catalog: string; schema: string } | null>(null);
 
   useEffect(() => {
     api
@@ -106,6 +107,13 @@ export function Catalog({ user }: { user: User }) {
 
   const refreshTree = () => setTreeVersion((v) => v + 1);
 
+  // "+ New → Table" (the sidebar) imports without this screen knowing.
+  useEffect(() => {
+    const bump = () => setTreeVersion((v) => v + 1);
+    window.addEventListener(TABLES_CHANGED, bump);
+    return () => window.removeEventListener(TABLES_CHANGED, bump);
+  }, []);
+
   /** Right-click entries for a tree row. Locked catalogs get nothing mutating. */
   const menuItems = (t: TreeTarget): MenuEntry[] => {
     if (t.kind === "catalog") {
@@ -119,10 +127,7 @@ export function Catalog({ user }: { user: User }) {
       return [
         {
           label: "Upload table…",
-          onSelect: () => {
-            uploadTarget.current = { catalog: t.catalog, schema: t.schema };
-            uploadInput.current?.click();
-          },
+          onSelect: () => setImportTo({ catalog: t.catalog, schema: t.schema }),
         },
         t.schema === "main"
           ? { label: "Rename schema — main can't be renamed", disabled: true }
@@ -419,19 +424,6 @@ export function Catalog({ user }: { user: User }) {
         </div>
       </div>
 
-      <input
-        ref={uploadInput}
-        type="file"
-        hidden
-        accept=".csv,.tsv,.txt,.parquet,.json,.ndjson,.jsonl"
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          e.target.value = "";
-          const t = uploadTarget.current;
-          if (file && t) setDialog({ kind: "upload", catalog: t.catalog, schema: t.schema, file });
-        }}
-      />
-
       {menu && (
         <ContextMenu
           x={menu.x}
@@ -439,6 +431,23 @@ export function Catalog({ user }: { user: User }) {
           header={menuHeader(menu.target)}
           items={menuItems(menu.target)}
           onClose={() => setMenu(null)}
+        />
+      )}
+
+      {importTo && (
+        <ImportTableDialog
+          catalog={importTo.catalog}
+          schema={importTo.schema}
+          onClose={() => setImportTo(null)}
+          onCreated={(catalog, schema, tables) => {
+            refreshTree();
+            // A single new table opens straight away; several leave the tree to show them.
+            if (tables.length === 1) {
+              setDenied(null);
+              setTab("sample");
+              setSelected({ catalog, schema, table: tables[0] });
+            }
+          }}
         />
       )}
 
@@ -464,10 +473,6 @@ export function Catalog({ user }: { user: User }) {
               if (selected.catalog === result.catalog && selected.schema === result.from) {
                 setSelected({ ...selected, schema: result.to });
               }
-            } else if (result.kind === "upload") {
-              setDenied(null);
-              setTab("sample");
-              setSelected({ catalog: result.catalog, schema: result.schema, table: result.table });
             }
           }}
         />
@@ -481,31 +486,15 @@ export function Catalog({ user }: { user: User }) {
 type DialogState =
   | { kind: "newSchema"; catalog: string; pick?: boolean }
   | { kind: "renameSchema"; catalog: string; schema: string }
-  | { kind: "renameTable"; catalog: string; schema: string; table: string }
-  | { kind: "upload"; catalog: string; schema: string; file: File };
+  | { kind: "renameTable"; catalog: string; schema: string; table: string };
 
 type DialogResult =
   | { kind: "newSchema"; catalog: string; schema: string }
   | { kind: "renameSchema"; catalog: string; from: string; to: string }
-  | { kind: "renameTable"; catalog: string; schema: string; from: string; to: string }
-  | { kind: "upload"; catalog: string; schema: string; table: string };
+  | { kind: "renameTable"; catalog: string; schema: string; from: string; to: string };
 
 /** Mirrors the server's identifier rule for schemas and tables. */
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
-/** `Sales Report 2024.csv` → `sales_report_2024`; always a valid identifier. */
-export function snakeStem(filename: string): string {
-  const dot = filename.lastIndexOf(".");
-  const stem = dot > 0 ? filename.slice(0, dot) : filename;
-  let out = stem
-    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-  if (!out) out = "table";
-  if (/^[0-9]/.test(out)) out = `t_${out}`;
-  return out;
-}
 
 const seg = encodeURIComponent;
 
@@ -528,9 +517,7 @@ function CatalogDialog({
       ? state.schema
       : state.kind === "renameTable"
         ? state.table
-        : state.kind === "upload"
-          ? snakeStem(state.file.name)
-          : "",
+        : "",
   );
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -561,20 +548,6 @@ function CatalogDialog({
           { to: trimmed },
         );
         onDone({ kind: "renameTable", catalog, schema: state.schema, from: state.table, to: trimmed });
-      } else {
-        setBusy("Uploading…");
-        const body = new FormData();
-        body.append("dir", "uploads");
-        body.append("file", state.file);
-        const up = await api.upload<{ uploaded?: string[] }>("/files/upload", body);
-        const path = up.uploaded?.[0];
-        if (!path) throw new Error("The upload finished but the server didn't say where the file went.");
-        setBusy("Loading into table…");
-        const made = await api.post<{ table?: string }>(
-          `/catalogs/${seg(catalog)}/schemas/${seg(state.schema)}/tables`,
-          { name: trimmed, path },
-        );
-        onDone({ kind: "upload", catalog, schema: state.schema, table: made.table ?? trimmed });
       }
     } catch (e) {
       setError(errorText(e));
@@ -587,16 +560,9 @@ function CatalogDialog({
       ? "New schema"
       : state.kind === "renameSchema"
         ? `Rename schema ${state.schema}`
-        : state.kind === "renameTable"
-          ? `Rename table ${state.table}`
-          : "Upload table";
+        : `Rename table ${state.table}`;
 
-  const confirm =
-    state.kind === "newSchema"
-      ? "Create schema"
-      : state.kind === "upload"
-        ? "Upload & create table"
-        : "Rename";
+  const confirm = state.kind === "newSchema" ? "Create schema" : "Rename";
 
   return (
     <Dialog title={title} onClose={() => !busy && onClose()} width={460}>
@@ -628,9 +594,7 @@ function CatalogDialog({
               ? `in ${catalog}`
               : state.kind === "renameTable"
                 ? `${catalog}.${state.schema}.${state.table}`
-                : state.kind === "renameSchema"
-                  ? `${catalog}.${state.schema}`
-                  : `${state.file.name} → ${catalog}.${state.schema}`}
+                : `${catalog}.${state.schema}`}
           </div>
         )}
 
@@ -659,12 +623,6 @@ function CatalogDialog({
             notebooks and jobs that name <span className="mono">{state.schema}</span> will need updating.
           </div>
         )}
-        {state.kind === "upload" && (
-          <div style={{ fontSize: "var(--fs-small)", color: "var(--text-dim)" }}>
-            The file is saved to <span className="mono">~/uploads</span> first, then loaded into a new table.
-          </div>
-        )}
-
         {invalid && <FormMessage tone="err">That isn&apos;t a valid name.</FormMessage>}
         {error && <FormMessage tone="err">{error}</FormMessage>}
 

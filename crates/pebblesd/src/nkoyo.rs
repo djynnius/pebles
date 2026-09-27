@@ -250,7 +250,7 @@ pub fn tools() -> Vec<Tool> {
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "description": "lowercase, digits, - and _"},
+                    "name": {"type": "string", "description": "lowercase, digits, - and _; may include folders, e.g. projects/q1"},
                     "catalog": {"type": "string"},
                     "cells": {
                         "type": "array",
@@ -494,8 +494,12 @@ pub fn plan_tool_call(
         }
         ("create_notebook", _) => {
             let name = args["name"].as_str().unwrap_or_default();
-            if !is_doc_name(name) {
-                return Err("notebook names are lowercase letters, digits, - and _".into());
+            // `q1` or a path inside ~/notebooks like `projects/hedis/q1`.
+            let parts: Vec<&str> = name.split('/').collect();
+            if parts.len() > 5 || !parts.iter().all(|p| is_doc_name(p)) {
+                return Err("notebook names are lowercase letters, digits, - and _ \
+                     (folders separated by /)"
+                    .into());
             }
             let cells: Vec<serde_json::Value> = args["cells"]
                 .as_array()

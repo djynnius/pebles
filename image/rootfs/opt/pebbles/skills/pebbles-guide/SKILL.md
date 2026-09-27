@@ -23,9 +23,13 @@ second permission system. Admins are members of the `admins` group.
   Sample, Snapshots (time travel), Lineage and Permissions. A 🔒 catalog is one you
   haven't been granted.
 - **Nkoyo** — this assistant.
-- **Notebooks** — SQL, Python, R and Markdown cells; state carries across cells;
-  files live in `~/notebooks`. Import/export Jupyter `.ipynb`.
-- **SQL editor** — run queries against a catalog; Download CSV; Add to dashboard.
+- **Notebooks** — SQL, Python, R and Markdown cells; state carries across cells.
+  The **Workspace** tree on the left is your project folder, `~/notebooks`, with
+  sub-folders: pick a folder before "New notebook" and it's created there. Inside a
+  notebook the side panel shows the table of contents with the Workspace tree below it.
+  Import/export Jupyter `.ipynb`.
+- **SQL editor** — query tabs on top; every run opens a new result tab below
+  (close one with its ×); Download CSV and Add to dashboard act on the selected result.
 - **Dashboards** — tiles from saved SQL (tables, big numbers, bar/line charts), filters,
   drag to rearrange, full-screen, PDF.
 - **Jobs** — pipelines of tasks (sql/python/r/shell/notebook) run manually or on a cron
@@ -44,8 +48,12 @@ second permission system. Admins are members of the `admins` group.
 - **Create a schema:** right-click the catalog in the Catalog tree → New schema, or the
   "New schema" button on a table's page (pick the catalog, type the name).
   SQL: `CREATE SCHEMA "catalog"."schema";`
-- **Load a file as a table:** right-click a schema → Upload table… (CSV, TSV, Parquet,
-  JSON). Or in SQL: `CREATE TABLE cat.sch.t AS SELECT * FROM read_csv_auto('/home/<you>/file.csv');`
+- **Load a file as a table:** "+ New" → **Table** (or right-click a schema → Upload
+  table…): pick a CSV, TSV, Parquet, JSON or Excel (.xlsx) file, choose the catalog and
+  schema, name the table. For Excel every sheet becomes a table named after the sheet
+  (rename or untick any); Pebbles cleans each sheet first — finds the header row and
+  drops title, blank, note, total and repeated-header rows, and says what it removed.
+  Old .xls files must be saved as .xlsx first. Or in SQL: `CREATE TABLE cat.sch.t AS SELECT * FROM read_csv_auto('/home/<you>/file.csv');`
 - **Rename:** right-click a table → Rename table (keeps history). Right-click a schema →
   Rename schema — this copies its tables into the new schema, so their time-travel history
   does not carry over. Catalogs can't be renamed yet.

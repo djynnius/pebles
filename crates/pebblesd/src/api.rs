@@ -1334,12 +1334,16 @@ async fn nkoyo_chat(
                 // an existing notebook.
                 "create_notebook" => {
                     let name = op["name"].as_str().unwrap_or_default();
-                    let existing = exec(serde_json::json!({"op": "list", "path": "notebooks"}))
+                    let (folder, leaf) = match name.rsplit_once('/') {
+                        Some((folder, leaf)) => (format!("notebooks/{folder}"), leaf),
+                        None => ("notebooks".to_string(), name),
+                    };
+                    let existing = exec(serde_json::json!({"op": "list", "path": folder}))
                         .await
                         .unwrap_or_default();
                     let taken = existing["entries"]
                         .as_array()
-                        .is_some_and(|e| e.iter().any(|n| n == &format!("{name}.json")));
+                        .is_some_and(|e| e.iter().any(|n| n == &format!("{leaf}.json")));
                     if taken {
                         return Err(format!("a notebook named {name:?} already exists"));
                     }

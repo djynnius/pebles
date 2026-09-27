@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, errorText } from "../api";
 import { useCatalogs } from "../catalogs";
+import { useNotebookTree } from "../notebooks";
 import { Switch } from "../components/Page";
 import { ErrorBlock, Loading } from "../components/State";
 import {
@@ -58,6 +59,7 @@ export function JobBuilder() {
   const [params] = useSearchParams();
   const editing = params.get("edit");
   const { catalogs, error: catalogError } = useCatalogs();
+  const { tree: notebookTree } = useNotebookTree();
 
   const [name, setName] = useState(editing ?? "");
   const [schedule, setSchedule] = useState("0 1 * * *");
@@ -473,6 +475,28 @@ export function JobBuilder() {
             </div>
 
             <div style={{ marginTop: 14 }}>
+              {task.task_type === "notebook" && !task.repo && (
+                <select
+                  aria-label="Pick a notebook"
+                  value={
+                    notebookTree?.notebooks.some((n) => `notebooks/${n}.json` === task.payload.trim())
+                      ? task.payload.trim()
+                      : ""
+                  }
+                  onChange={(e) => e.target.value && patch(i, { payload: e.target.value })}
+                  className="mono"
+                  style={{ ...input, marginBottom: 10 }}
+                >
+                  <option value="">
+                    {notebookTree ? "Pick a notebook from ~/notebooks…" : "Loading notebooks…"}
+                  </option>
+                  {(notebookTree?.notebooks ?? []).map((n) => (
+                    <option key={n} value={`notebooks/${n}.json`}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+              )}
               <Field label={payloadLabel(task)}>
                 <textarea
                   value={task.payload}

@@ -1,3 +1,5 @@
+import json
+
 from pebbles_web import create_app
 from pebbles_web.pebblesd_client import PebblesdError
 
@@ -178,17 +180,24 @@ class FakeDaemon:
                 return {"id": None, "ok": True, "stdout": "abc123 first commit\n", "stderr": ""}
             return {"id": None, "ok": True, "stdout": "", "stderr": ""}
         if op == "browse":
-            base = payload["path"].rstrip("/.")
-            items = []
+            # direct children of `path`, folders derived from nested file paths
+            base = payload["path"].rstrip("/")
+            base = "" if base in ("", ".") else base
+            prefix = f"{base}/" if base else ""
+            files, dirs = {}, set()
             for p in sorted(self.files):
-                if "/" in p[len(base) :].lstrip("/") if base else "/" in p:
+                if not p.startswith(prefix):
                     continue
-                if base and not p.startswith(base + "/"):
-                    continue
-                name = p[len(base) :].lstrip("/") if base else p
-                if "/" in name:
-                    continue
-                items.append({"name": name, "dir": False, "size": len(self.files[p]), "mtime": 0})
+                rest = p[len(prefix):]
+                if "/" in rest:
+                    dirs.add(rest.split("/", 1)[0])
+                else:
+                    files[rest] = self.files[p]
+            dirs |= {d[len(prefix):].split("/", 1)[0] for d in getattr(self, "dirs", set())
+                     if d.startswith(prefix) and d != base}
+            items = [{"name": n, "dir": True, "size": 0, "mtime": 0} for n in sorted(dirs)]
+            items += [{"name": n, "dir": False, "size": len(v), "mtime": 0}
+                      for n, v in files.items()]
             return {"id": None, "ok": True, "items": items}
         if op in ("mkdir", "delete", "rename", "upload"):
             if op == "upload":
@@ -201,6 +210,8 @@ class FakeDaemon:
                     self.files[payload["path"]] = raw
             if op == "delete":
                 self.files.pop(payload.get("path", ""), None)
+            if op == "mkdir":
+                self.__dict__.setdefault("dirs", set()).add(payload["path"])
             return {"id": None, "ok": True}
         if op == "list":
             # direct children only, like the kernel's read_dir
@@ -1388,3 +1399,92 @@ def test_skill_draft_passes_through_to_nkoyo():
     r = c.post("/api/skills/draft", json={"name": "hedis", "description": "HEDIS measures"})
     assert r.status_code == 200 and "HEDIS measures" in r.get_json()["content"]
     assert c.post("/api/skills/draft", json={"name": "hedis", "description": ""}).status_code == 422
+
+
+# ---- batch 7: notebooks in folders, import wizard ---------------------------
+
+
+def test_notebooks_live_in_folders_and_never_overwrite():
+    d = FakeDaemon()
+    c = signed_in_as("maya", d)
+    assert c.post("/api/notebooks", json={"name": "projects/hedis/q1"}).status_code == 200
+    assert "notebooks/projects/hedis/q1.json" in d.files
+    assert c.post("/api/notebooks", json={"name": "projects/hedis/q1"}).status_code == 409
+    assert c.get("/api/notebooks/projects/hedis/q1").status_code == 200
+    assert c.put("/api/notebooks/projects/hedis/q1", json={"cells": []}).status_code == 200
+    r = c.get("/api/notebooks/projects/hedis/q1/ipynb")
+    assert r.status_code == 200 and 'filename="q1.ipynb"' in r.headers["Content-Disposition"]
+    for bad in ("../x", "a/../../b", "a/b/c/d/e/f", "tree", "x/ipynb", "Caps"):
+        assert c.post("/api/notebooks", json={"name": bad}).status_code == 422, bad
+
+
+def test_import_ipynb_into_a_folder():
+    import io
+
+    d = FakeDaemon()
+    c = signed_in_as("maya", d)
+    doc = json.dumps({"cells": [{"cell_type": "code", "source": "1+1"}]}).encode()
+    r = c.post(
+        "/api/notebooks/import",
+        data={"file": (io.BytesIO(doc), "My Analysis.ipynb"), "folder": "projects"},
+        content_type="multipart/form-data",
+    )
+    assert r.status_code == 200 and r.get_json()["name"] == "projects/my-analysis"
+
+
+def test_import_inspect_plain_file_uses_duckdb_as_the_user():
+    d = FakeDaemon()
+    c = signed_in_as("maya", d)
+    r = c.post("/api/import/inspect", json={"path": "uploads/Member Roster.csv"})
+    assert r.status_code == 200, r.get_json()
+    body = r.get_json()
+    assert body["kind"] == "file" and body["tables"][0]["name"] == "member_roster"
+    assert any(q.startswith("DESCRIBE SELECT * FROM read_csv_auto(") for q in d.sql_log)
+    assert c.post("/api/import/inspect", json={"path": "old.xls"}).status_code == 422
+    assert c.post("/api/import/inspect", json={"path": "notes.docx"}).status_code == 422
+
+
+def test_import_excel_runs_the_cleaner_then_loads_staged_sheets():
+    d = FakeDaemon()
+    d.catalogs.append({"name": "claims", "owner": "maya", "database": "ducklake_claims"})
+    c = signed_in_as("maya", d)
+    tables = [{"key": "Q1 Sales", "name": "q1_sales", "rows": 3, "columns": [], "preview": [],
+               "cleaning": ["dropped 1 total/subtotal row(s)"], "empty": False},
+              {"key": "Notes", "name": "notes", "rows": 0, "columns": [], "preview": [],
+               "cleaning": [], "empty": True}]
+    d.shell_reply = {"id": None, "ok": True, "stdout": json.dumps({"tables": tables}), "stderr": ""}
+    r = c.post("/api/import/inspect", json={"path": "uploads/sales.xlsx"})
+    assert r.status_code == 200 and r.get_json()["kind"] == "excel"
+    assert "tabular_import.py inspect uploads/sales.xlsx .pebbles/import/" in d.shell_log[-1]
+
+    stage = d.shell_log[-1].split()[-1]
+    d.files[f"{stage}/manifest.json"] = json.dumps(
+        {"sheets": {"Q1 Sales": f"/home/maya/{stage}/0.parquet"}}
+    )
+    r = c.post("/api/import/commit", json={
+        "path": "uploads/sales.xlsx", "catalog": "claims", "schema": "bronze",
+        "tables": [{"key": "Q1 Sales", "name": "q1_sales"}, {"key": "Notes", "name": "notes"},
+                   {"key": "Q1 Sales", "name": "claims"}],
+    })
+    body = r.get_json()
+    assert [t["name"] for t in body["created"]] == ["q1_sales"]
+    assert {e["key"] for e in body["errors"]} == {"Notes", "Q1 Sales"}  # empty sheet; name taken
+    assert any(
+        'CREATE TABLE "claims"."bronze"."q1_sales" AS SELECT * FROM read_parquet(' in q
+        for q in d.sql_log
+    )
+
+
+def test_notebook_tree_lists_folders_even_empty_ones():
+    d = FakeDaemon()
+    c = signed_in_as("maya", d)
+    c.post("/api/notebooks", json={"name": "projects/hedis/q1"})
+    c.post("/api/notebooks", json={"name": "scratch"})
+    assert c.post("/api/notebooks/folders", json={"path": "archive"}).status_code == 200
+    assert c.post("/api/notebooks/folders", json={"path": "archive"}).status_code == 409
+    tree = c.get("/api/notebooks/tree").get_json()
+    assert tree == {
+        "folders": ["archive", "projects", "projects/hedis"],
+        "notebooks": ["projects/hedis/q1", "scratch"],
+    }
+    assert c.get("/api/notebooks").get_json() == ["projects/hedis/q1", "scratch"]

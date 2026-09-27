@@ -17,7 +17,7 @@ import { NewCatalog } from "./routes/NewCatalog";
 import { Files } from "./routes/Files";
 import { Sql } from "./routes/Sql";
 import { Notebooks } from "./routes/Notebooks";
-import { Notebook } from "./routes/Notebook";
+import { NotebookRoute } from "./routes/Notebook";
 import { Dashboards } from "./routes/Dashboards";
 import { Dashboard } from "./routes/Dashboard";
 import { Jobs } from "./routes/Jobs";
@@ -90,7 +90,7 @@ export function App() {
         <Route path="/catalog" element={<Catalog user={user} />} />
         <Route path="/newcatalog" element={<NewCatalog user={user} />} />
         <Route path="/notebooks" element={<Notebooks />} />
-        <Route path="/notebooks/:name" element={<Notebook />} />
+        <Route path="/notebooks/*" element={<NotebookRoute />} />
         <Route path="/sql" element={<Sql />} />
         <Route path="/dashboards" element={<Dashboards />} />
         <Route path="/dashboards/:name" element={<Dashboard />} />

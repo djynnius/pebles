@@ -71,14 +71,15 @@ export function Sql() {
   const [activeId, setActiveId] = useState<string>(seed.current[0].id);
   const [dirty, setDirty] = useState<Record<string, boolean>>({});
 
-  const [running, setRunning] = useState(false);
-  const [rows, setRows] = useState<Row[] | null>(null);
-  const [error, setError] = useState("");
-  const [elapsed, setElapsed] = useState<number | null>(null);
-  /** The last run produced a result (not an error) — gates Add to dashboard. */
-  const [ranOk, setRanOk] = useState(false);
+  /** Result tabs per script (keyed by doc id), oldest first, capped at MAX_RESULTS. */
+  const [results, setResults] = useState<Record<string, RunResult[]>>({});
+  /** The selected result tab per script. */
+  const [picked, setPicked] = useState<Record<string, string>>({});
+  /** Next "Result N" number per script — never reused after a close. */
+  const counters = useRef<Record<string, number>>({});
   const [addOpen, setAddOpen] = useState(false);
-  const cancel = useRef<(() => void) | null>(null);
+  /** One live stream per script; a new run of the same script replaces it. */
+  const cancels = useRef<Record<string, () => void>>({});
 
   const doc = docs.find((d) => d.id === activeId) ?? docs[0];
 
@@ -119,7 +120,12 @@ export function Sql() {
     setParams({}, { replace: true });
   }, [params, setParams, commit]);
 
-  useEffect(() => () => cancel.current?.(), []);
+  useEffect(() => {
+    const live = cancels.current;
+    return () => {
+      for (const stop of Object.values(live)) stop();
+    };
+  }, []);
 
   const update = (patch: Partial<SqlDoc>, markDirty = true) => {
     setDocs((cur) => cur.map((d) => (d.id === doc.id ? { ...d, ...patch } : d)));
@@ -137,47 +143,95 @@ export function Sql() {
   };
 
   const closeDoc = (id: string) => {
+    cancels.current[id]?.();
+    delete cancels.current[id];
+    setResults((cur) => {
+      const rest = { ...cur };
+      delete rest[id];
+      return rest;
+    });
     const next = docs.filter((d) => d.id !== id);
     const kept = next.length > 0 ? next : [blank(1)];
     commit(kept, id === activeId ? kept[0].id : undefined);
   };
 
+  const docResults = results[doc.id] ?? [];
+  const selected = docResults.find((r) => r.id === picked[doc.id]) ?? docResults[docResults.length - 1] ?? null;
+  const running = docResults.some((r) => r.running);
+  const rows = selected?.rows ?? null;
+  const ranOk = Boolean(selected && !selected.running && !selected.error && selected.rows);
+
+  /** Patch one result of one script, wherever it now sits in the list. */
+  const patchResult = (docId: string, id: string, patch: Partial<RunResult>) =>
+    setResults((cur) => ({
+      ...cur,
+      [docId]: (cur[docId] ?? []).map((r) => (r.id === id ? { ...r, ...patch } : r)),
+    }));
+
+  const closeResult = (id: string) => {
+    const docId = doc.id;
+    const gone = (results[docId] ?? []).find((r) => r.id === id);
+    if (gone?.running) {
+      cancels.current[docId]?.();
+      delete cancels.current[docId];
+    }
+    setResults((cur) => ({ ...cur, [docId]: (cur[docId] ?? []).filter((r) => r.id !== id) }));
+  };
+
   const run = () => {
-    cancel.current?.();
-    setRunning(true);
-    setRows(null);
-    setError("");
-    setElapsed(null);
-    setRanOk(false);
+    const docId = doc.id;
+    // A still-running previous run of this script stops and keeps what it had.
+    cancels.current[docId]?.();
+    const n = (counters.current[docId] ?? 0) + 1;
+    counters.current[docId] = n;
+    const id = `${docId}:${n}`;
+    const entry: RunResult = {
+      id,
+      n,
+      at: new Date().toLocaleTimeString(undefined, { hour12: false }),
+      sql: doc.sql,
+      catalog: doc.catalog,
+      rows: null,
+      error: "",
+      running: true,
+    };
+    setResults((cur) => {
+      const list = (cur[docId] ?? []).map((r) => (r.running ? { ...r, running: false } : r));
+      return { ...cur, [docId]: [...list, entry].slice(-MAX_RESULTS) };
+    });
+    setPicked((cur) => ({ ...cur, [docId]: id }));
+    setAddOpen(false);
     const started = performance.now();
     const ran = { name: doc.name, catalog: doc.catalog };
     const query = `q=${encodeURIComponent(doc.sql)}${
       doc.catalog ? `&catalog=${encodeURIComponent(doc.catalog)}` : ""
     }`;
-    cancel.current = sse(`/sql/stream?${query}`, {
+    // Progressive rows accumulate here and reach state in their batches.
+    let acc: Row[] = [];
+    cancels.current[docId] = sse(`/sql/stream?${query}`, {
       // Progressive rendering (REQ-31): batches paint as they arrive; the
       // final `result` replaces with the authoritative complete set.
-      rows: (b) => setRows((prev) => [...(prev ?? []), ...b.rows]),
+      rows: (b) => {
+        acc = [...acc, ...b.rows];
+        patchResult(docId, id, { rows: acc });
+      },
       result: (r) => {
-        setRows(r.rows ?? []);
-        setRanOk(true);
+        patchResult(docId, id, {
+          rows: r.rows ?? [],
+          truncated: Boolean(r.truncated),
+        });
         recordRecent("query", ran.name, ran.catalog);
-        if (r.truncated) setError("Result truncated at 100,000 rows — refine the query.");
       },
-      error: (m) => {
-        setError(m);
-        setRanOk(false);
-      },
+      error: (m) => patchResult(docId, id, { error: m }),
       done: () => {
-        setElapsed((performance.now() - started) / 1000);
-        setRunning(false);
-        cancel.current = null;
+        patchResult(docId, id, { running: false, elapsed: (performance.now() - started) / 1000 });
+        delete cancels.current[docId];
       },
     });
   };
 
   const downloadCsv = () => {
-    if (!rows || rows.length === 0) return;
+    if (!selected || !rows || rows.length === 0) return;
     const cols = columnsOf(rows);
     const esc = (v: unknown) => {
       const s = v === null || v === undefined ? "" : cell(v) === "∅" ? "" : cell(v);
@@ -189,7 +243,7 @@ export function Sql() {
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
     const a = document.createElement("a");
     a.href = url;
-    a.download = doc.name.replace(/\.sql$/, "") + ".csv";
+    a.download = `${doc.name.replace(/\.sql$/, "")}-result-${selected.n}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -294,6 +348,31 @@ export function Sql() {
             background: "var(--surface-alt)",
           }}
         >
+          {/* result tabs — newest right, selected one drives the toolbar */}
+          {docResults.length > 0 && (
+            <div
+              role="tablist"
+              aria-label="Results"
+              style={{
+                flex: "0 0 auto",
+                display: "flex",
+                alignItems: "stretch",
+                overflowX: "auto",
+                borderBottom: "1px solid var(--border)",
+                background: "var(--surface-alt)",
+              }}
+            >
+              {docResults.map((r) => (
+                <ResultTab
+                  key={r.id}
+                  result={r}
+                  on={r.id === selected?.id}
+                  onSelect={() => setPicked((cur) => ({ ...cur, [doc.id]: r.id }))}
+                  onClose={() => closeResult(r.id)}
+                />
+              ))}
+            </div>
+          )}
           <div
             style={{
               flex: "0 0 auto",
@@ -307,14 +386,19 @@ export function Sql() {
               color: "var(--text-muted)",
             }}
           >
-            {running && <span>Running on your engine session…</span>}
-            {!running && rows && (
+            {selected?.running && <span>Running on your engine session…</span>}
+            {selected && !selected.running && !selected.error && rows && (
               <span style={{ color: "var(--ok-ink)", fontWeight: 600 }}>
                 ✓ {rows.length.toLocaleString()} row{rows.length === 1 ? "" : "s"}
               </span>
             )}
-            {!running && !rows && !error && <span>Results appear here after a run.</span>}
-            {elapsed !== null && !running && <span>{elapsed.toFixed(2)} s</span>}
+            {selected && !selected.running && selected.error && (
+              <span style={{ color: "var(--err)", fontWeight: 600 }}>✕ Failed</span>
+            )}
+            {!selected && <span>Results appear here after a run — each run opens its own tab.</span>}
+            {selected?.elapsed !== undefined && !selected.running && (
+              <span>{selected.elapsed.toFixed(2)} s</span>
+            )}
             <div style={{ flex: 1 }} />
             <button
               type="button"
@@ -330,25 +414,25 @@ export function Sql() {
             <div style={{ position: "relative" }}>
               <button
                 type="button"
-                disabled={!ranOk || running}
-                title={ranOk ? undefined : "Run the query first"}
+                disabled={!ranOk}
+                title={ranOk ? "Adds the SQL that produced this result" : "Run the query first"}
                 onClick={(e) => {
                   e.stopPropagation();
                   setAddOpen((v) => !v);
                 }}
                 style={{
                   ...ghostSmall,
-                  color: ranOk && !running ? "var(--text-mid)" : "var(--text-faint)",
-                  cursor: ranOk && !running ? "pointer" : "not-allowed",
+                  color: ranOk ? "var(--text-mid)" : "var(--text-faint)",
+                  cursor: ranOk ? "pointer" : "not-allowed",
                 }}
               >
                 Add to dashboard
               </button>
-              {addOpen && ranOk && (
+              {addOpen && ranOk && selected && (
                 <AddToDashboard
-                  key={doc.id}
-                  sql={doc.sql}
-                  catalog={doc.catalog}
+                  key={selected.id}
+                  sql={selected.sql}
+                  catalog={selected.catalog}
                   defaultTitle={doc.name.replace(/\.sql$/, "")}
                   onClose={() => setAddOpen(false)}
                 />
@@ -357,7 +441,7 @@ export function Sql() {
           </div>
 
           <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 18 }}>
-            {error && (
+            {selected?.error && (
               <div
                 style={{
                   background: "var(--accent-tint)",
@@ -366,14 +450,20 @@ export function Sql() {
                   padding: "12px 14px",
                   color: "var(--err)",
                   fontSize: "var(--fs-body)",
+                  whiteSpace: "pre-wrap",
                 }}
                 className="mono"
               >
-                {error}
+                {selected.error}
               </div>
             )}
-            {!error && rows && rows.length > 0 && <ResultGrid rows={rows} />}
-            {!error && rows && rows.length === 0 && (
+            {selected?.truncated && !selected.error && (
+              <div style={{ fontSize: "var(--fs-meta)", color: "var(--warn)", marginBottom: 10 }}>
+                Result truncated at 100,000 rows — refine the query.
+              </div>
+            )}
+            {!selected?.error && rows && rows.length > 0 && <ResultGrid rows={rows} />}
+            {selected && !selected.running && !selected.error && rows && rows.length === 0 && (
               <div style={{ fontSize: "var(--fs-body)", color: "var(--text-dim)" }}>
                 The query returned no rows.
               </div>
@@ -382,6 +472,110 @@ export function Sql() {
         </div>
       </div>
     </Workbench>
+  );
+}
+
+/* ---- result tabs --------------------------------------------------------- */
+
+/** Result tabs kept per script; the oldest drops off when a run exceeds this. */
+const MAX_RESULTS = 10;
+
+interface RunResult {
+  id: string;
+  /** "Result N" — per script, counting every run. */
+  n: number;
+  /** Wall-clock start, HH:MM:SS. */
+  at: string;
+  /** The SQL and catalog that produced this result (the editor may have moved on). */
+  sql: string;
+  catalog: string | null;
+  rows: Row[] | null;
+  error: string;
+  running: boolean;
+  truncated?: boolean;
+  elapsed?: number;
+}
+
+function ResultTab({
+  result: r,
+  on,
+  onSelect,
+  onClose,
+}: {
+  result: RunResult;
+  on: boolean;
+  onSelect: () => void;
+  onClose: () => void;
+}) {
+  const meta = r.running
+    ? "running…"
+    : r.error
+      ? "error"
+      : `${(r.rows?.length ?? 0).toLocaleString()} row${r.rows?.length === 1 ? "" : "s"}${
+          r.elapsed !== undefined ? ` · ${r.elapsed.toFixed(2)} s` : ""
+        }`;
+  return (
+    <div
+      role="tab"
+      aria-selected={on}
+      tabIndex={0}
+      title={r.sql}
+      onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        flexShrink: 0,
+        padding: "7px 10px 7px 14px",
+        borderRight: "1px solid var(--border)",
+        cursor: "pointer",
+        whiteSpace: "nowrap",
+        background: on ? "var(--surface)" : "transparent",
+        boxShadow: on ? "inset 0 2px 0 var(--accent)" : "none",
+      }}
+    >
+      <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.25 }}>
+        <span style={{ fontSize: "var(--fs-meta)", color: on ? "var(--text)" : "var(--text-muted)" }}>
+          Result {r.n} · <span className="mono">{r.at}</span>
+        </span>
+        <span
+          className="mono"
+          style={{
+            fontSize: "var(--fs-xs)",
+            color: r.error ? "var(--err)" : r.running ? "var(--text-dim)" : "var(--text-faint)",
+          }}
+        >
+          {meta}
+        </span>
+      </span>
+      <button
+        type="button"
+        title={`Close result ${r.n}`}
+        aria-label={`Close result ${r.n}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose();
+        }}
+        style={{
+          width: 18,
+          height: 18,
+          border: "none",
+          borderRadius: 5,
+          background: "transparent",
+          color: "var(--text-faint)",
+          fontSize: "var(--fs-xs)",
+          lineHeight: 1,
+        }}
+      >
+        ✕
+      </button>
+    </div>
   );
 }
 

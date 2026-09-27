@@ -13,6 +13,11 @@ dependencies = [
 dev = [
     "pytest>=8",
     "ruff>=0.5",
+    # test-only: the engine-side Excel cleaner (image/rootfs/opt/pebbles/etl)
+    # runs on the image's conda env; these mirror its versions for the tests.
+    "pandas>=3",
+    "openpyxl>=3.1",
+    "duckdb>=1.5,<1.6",
 ]
 
 [build-system]

@@ -1,11 +1,17 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { NAV, SETTINGS_ID, activeNavId } from "../nav";
 import { Wordmark } from "./Wordmark";
 import { APP_VERSION } from "../version";
+import { ImportTableDialog } from "./ImportTableDialog";
 
-/** What "+ New" can make. Each is an existing route that starts the thing. */
+/**
+ * What "+ New" can make. Each is an existing route that starts the thing,
+ * except Table, which opens the import wizard in place (no route of its own).
+ */
 const NEW_ITEMS: { label: string; glyph: string; path: string }[] = [
+  { label: "Table", glyph: "▤", path: "" },
   { label: "Notebook", glyph: "▧", path: "/notebooks" },
   { label: "SQL query", glyph: "›_", path: "/sql" },
   { label: "Dashboard", glyph: "▦", path: "/dashboards" },
@@ -16,6 +22,7 @@ const NEW_ITEMS: { label: string; glyph: string; path: string }[] = [
 export function Sidebar({ admin }: { admin: boolean }) {
   const [collapsed, setCollapsed] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
+  const [importing, setImporting] = useState(false);
   const nav = useNavigate();
   const loc = useLocation();
 
@@ -136,7 +143,8 @@ export function Sidebar({ admin }: { admin: boolean }) {
                 role="menuitem"
                 onClick={() => {
                   setNewOpen(false);
-                  nav(item.path);
+                  if (item.path) nav(item.path);
+                  else setImporting(true);
                 }}
                 style={{
                   display: "flex",
@@ -161,6 +169,10 @@ export function Sidebar({ admin }: { admin: boolean }) {
           </div>
         )}
       </div>
+
+      {/* Portalled: the sticky rail is its own stacking context, and the
+          dialog must sit above the workbench, not inside the sidebar. */}
+      {importing && createPortal(<ImportTableDialog onClose={() => setImporting(false)} />, document.body)}
 
       {/* nav groups — the only part that scrolls. `minHeight: 0` lets the
           flex item shrink below its content so it scrolls inside the rail

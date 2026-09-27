@@ -129,6 +129,23 @@ a **New schema** button. Renaming a table keeps its history; renaming a schema
 copies its tables into the new schema (DuckDB can't rename schemas yet), so
 their time-travel history starts over. Catalogs can't be renamed yet.
 
+## Import files as tables
+
+**+ New → Table** takes a CSV, TSV, Parquet, JSON or Excel (.xlsx) file: pick
+the catalog and schema, check the suggested table name(s), load. An Excel
+workbook becomes one table per sheet (named after the sheet — rename or untick
+any); each sheet is cleaned first — the header row is detected and title,
+blank, note, total and repeated-header rows are dropped, and the wizard shows
+what was removed. Save old `.xls` files as `.xlsx` first.
+
+## Notebook folders
+
+Notebooks live in `~/notebooks` and can be organised in folders (up to four
+levels). The Notebooks page shows the tree on the left — select a folder and
+"New notebook" / "Import .ipynb" go there; inside a notebook the tree sits
+under the table of contents. A job's notebook task takes the same path
+(`projects/hedis/q1`).
+
 ## Agent skills
 
 Settings → **Agent skills** lists the skills Nkoyo reads (yours in

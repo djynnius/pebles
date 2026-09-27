@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, errorText, sse, type Row } from "../api";
 import { recordRecent } from "../recents";
@@ -6,10 +6,12 @@ import { qualify, useCatalogs } from "../catalogs";
 import { CatalogPanel } from "../components/CatalogTree";
 import { Markdown, markdownHeadings } from "../components/Markdown";
 import { Workbench } from "../components/Workbench";
+import { WorkspaceTree } from "../components/WorkspaceTree";
+import { leafOf, notebookApi, notebookUrl, useNotebookTree } from "../notebooks";
 import { ResultGrid } from "./Catalog";
 
 /*
- * /notebooks/:name — the notebook document (spec §5 "notebook"), on the
+ * /notebooks/<path> — the notebook document (spec §5 "notebook"), on the
  * workbench shell: icon rail → table of contents / catalog panels, then the
  * document header and a vertical run of cells.
  *
@@ -70,10 +72,18 @@ interface CellOut extends CellResult {
 const BADGE: Record<CellType, string> = { sql: "SQL", python: "PY", r: "R", md: "MD" };
 const CELL_TYPES: CellType[] = ["sql", "python", "r", "md"];
 
-export function Notebook() {
-  const { name = "" } = useParams();
+/** The `/notebooks/*` route: the splat is the notebook's path in ~/notebooks. */
+export function NotebookRoute() {
+  const path = (useParams()["*"] ?? "").replace(/^\/+|\/+$/g, "");
+  // Keyed by path: switching notebooks from the workspace tree starts clean
+  // instead of carrying the last document's outputs and streams across.
+  return <Notebook key={path} name={path} />;
+}
+
+export function Notebook({ name }: { name: string }) {
   const nav = useNavigate();
   const { catalogs, error: catalogError } = useCatalogs();
+  const workspace = useNotebookTree();
 
   const [doc, setDoc] = useState<NotebookDoc | null>(null);
   const [outs, setOuts] = useState<CellOut[]>([]);
@@ -96,7 +106,7 @@ export function Notebook() {
 
   useEffect(() => {
     api
-      .get<NotebookDoc>(`/notebooks/${encodeURIComponent(name)}`)
+      .get<NotebookDoc>(notebookApi(name))
       .then((d) => {
         const loaded: Cell[] = d.cells?.length ? d.cells : [{ type: "sql", source: "" }];
         const cells = loaded.map((c) => ({
@@ -188,7 +198,7 @@ export function Notebook() {
     };
     setSaving(true);
     try {
-      await api.put(`/notebooks/${encodeURIComponent(name)}`, payload);
+      await api.put(notebookApi(name), payload);
       setDirty(false);
       setError("");
     } catch (e) {
@@ -213,7 +223,7 @@ export function Notebook() {
       setOuts((cur) => cur.map((o, j) => (j === i ? { running: true } : o)));
       const started = performance.now();
       let acc: CellOut = {};
-      cancels.current[i] = sse(`/notebooks/${encodeURIComponent(name)}/cells/${i}/stream`, {
+      cancels.current[i] = sse(`${notebookApi(name)}/cells/${i}/stream`, {
         result: (r) => {
           const d = r as CellResult;
           acc = {
@@ -275,9 +285,21 @@ export function Notebook() {
       }
     }
     const a = document.createElement("a");
-    a.href = `/api/notebooks/${encodeURIComponent(name)}/ipynb`;
-    a.download = `${name}.ipynb`;
+    a.href = `/api${notebookApi(name)}/ipynb`;
+    a.download = `${leafOf(name)}.ipynb`;
     a.click();
+  };
+
+  /** Switching notebooks from the workspace tree keeps unsaved edits. */
+  const openOther = async (path: string) => {
+    if (dirty) {
+      try {
+        await save();
+      } catch {
+        return; // the save error is on screen; staying keeps the edits
+      }
+    }
+    nav(notebookUrl(path));
   };
 
   const toc = (doc?.cells ?? []).flatMap((c, i) => {
@@ -304,13 +326,14 @@ export function Notebook() {
   return (
     <Workbench
       rail={[
-        { id: "toc", icon: "toc", title: "Table of contents" },
+        { id: "toc", icon: "toc", title: "Contents & workspace" },
         { id: "catalog", icon: "catalog", title: "Catalog" },
       ]}
       defaultPanel="toc"
       panels={{
         toc: (
-          <div style={{ padding: "6px 0 12px" }}>
+          <div style={{ paddingBottom: 12 }}>
+            <PanelSection title="Contents">
             <div style={{ padding: "4px 12px 8px", fontSize: "var(--fs-label)", color: "var(--text-dim)" }}>
               {doc ? `${doc.cells.length} cell${doc.cells.length === 1 ? "" : "s"}` : "…"}
             </div>
@@ -352,6 +375,16 @@ export function Notebook() {
                 </span>
               </button>
             ))}
+            </PanelSection>
+            <PanelSection title="Workspace">
+              <WorkspaceTree
+                tree={workspace.tree}
+                error={workspace.error}
+                reload={workspace.reload}
+                current={name}
+                onOpen={(p) => void openOther(p)}
+              />
+            </PanelSection>
           </div>
         ),
         catalog: (
@@ -363,7 +396,7 @@ export function Notebook() {
         ),
       }}
       tabs={{
-        items: [{ id: name, name: dirty ? `${name} •` : name, icon: "▧" }],
+        items: [{ id: name, name: dirty ? `${leafOf(name)} •` : leafOf(name), icon: "▧" }],
         activeId: name,
       }}
     >
@@ -387,9 +420,7 @@ export function Notebook() {
           <button type="button" onClick={() => nav("/notebooks")} style={crumbBtn}>
             ‹ Notebooks
           </button>
-          <span className="mono" style={{ fontSize: "var(--fs-body)", fontWeight: 600 }}>
-            ~/notebooks/{name}.json
-          </span>
+          <Breadcrumb path={name} onFolder={(f) => nav(f ? `/notebooks?folder=${encodeURIComponent(f)}` : "/notebooks")} />
           {dirty && (
             <span style={{ fontSize: "var(--fs-label)", color: "var(--accent-ink)" }}>unsaved changes</span>
           )}
@@ -633,6 +664,71 @@ export function Notebook() {
 }
 
 /* ---- pieces ------------------------------------------------------------- */
+
+/** `~/notebooks / projects / hedis / q1.json` — each folder opens the index there. */
+function Breadcrumb({ path, onFolder }: { path: string; onFolder: (folder: string) => void }) {
+  const segs = path.split("/");
+  const folders = segs.slice(0, -1);
+  return (
+    <span
+      className="mono"
+      title={`~/notebooks/${path}.json`}
+      style={{ display: "flex", alignItems: "center", flexWrap: "wrap", fontSize: "var(--fs-body)", minWidth: 0 }}
+    >
+      <button type="button" onClick={() => onFolder("")} style={{ ...crumbBtn, fontSize: "var(--fs-body)" }}>
+        ~/notebooks
+      </button>
+      {folders.map((f, i) => (
+        <span key={i} style={{ display: "inline-flex", alignItems: "center" }}>
+          <span style={{ color: "var(--text-faint)" }}>/</span>
+          <button
+            type="button"
+            onClick={() => onFolder(folders.slice(0, i + 1).join("/"))}
+            style={{ ...crumbBtn, fontSize: "var(--fs-body)" }}
+          >
+            {f}
+          </button>
+        </span>
+      ))}
+      <span style={{ color: "var(--text-faint)" }}>/</span>
+      <span style={{ fontWeight: 600 }}>{segs[segs.length - 1]}.json</span>
+    </span>
+  );
+}
+
+/** A collapsible block inside the workbench panel (Contents, Workspace). */
+function PanelSection({ title, children }: { title: string; children: ReactNode }) {
+  const [open, setOpen] = useState(true);
+  return (
+    <section style={{ borderBottom: "1px solid var(--border-soft)" }}>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          width: "100%",
+          border: "none",
+          background: "transparent",
+          padding: "9px 12px 6px",
+          fontFamily: "inherit",
+          fontSize: "var(--fs-eyebrow)",
+          fontWeight: 600,
+          letterSpacing: "0.8px",
+          textTransform: "uppercase",
+          color: "var(--text-faint)",
+          textAlign: "left",
+        }}
+      >
+        <span style={{ width: 10 }}>{open ? "▾" : "▸"}</span>
+        {title}
+      </button>
+      {open && <div style={{ paddingBottom: 6 }}>{children}</div>}
+    </section>
+  );
+}
 
 function Output({ out }: { out?: CellOut }) {
   if (!out || (!hasOutput(out) && !out.running)) return null;

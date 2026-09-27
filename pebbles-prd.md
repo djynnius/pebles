@@ -125,7 +125,7 @@ Priorities: **P0** = MVP, cannot ship without · **P1** = v1.0 release · **P2**
 | ID | Requirement | Priority |
 |---|---|---|
 | REQ-24 | Lake storage is **DuckLake**: plain files with the catalog in Postgres on the main. Tables carry snapshots with **time travel**. | P0 |
-| REQ-25 | Create Catalog via form **or** SQL (`CREATE CATALOG` / `CREATE SCHEMA` / `GRANT`); the form shows the equivalent SQL live. Both paths are the same operation. The Catalog tree has right-click actions: new schema, upload a file as a table, rename schema/table (schema rename copies tables — time-travel history does not carry over; catalog rename is deferred). | P0 |
+| REQ-25 | Create Catalog via form **or** SQL (`CREATE CATALOG` / `CREATE SCHEMA` / `GRANT`); the form shows the equivalent SQL live. Both paths are the same operation. "+ New → Table" (and the Catalog tree's upload action) imports CSV/TSV/Parquet/JSON or Excel (.xlsx) into a chosen catalog and schema; each Excel sheet becomes a table (default name = sheet name, editable), cleaned first on the user's engine (header detection; title/blank/note/total/repeated-header rows dropped and reported). The Catalog tree has right-click actions: new schema, upload a file as a table, rename schema/table (schema rename copies tables — time-travel history does not carry over; catalog rename is deferred). | P0 |
 | REQ-26 | Catalog storage roots must be reachable from every engine; engine registration verifies reachability and fails loudly if the lake path is absent. Multi-host storage guidance (NFS / object storage) documented; design pending (§9). | P0 (verify) / P1 (multi-host design) |
 | REQ-27 | UI vocabulary: **Lake**, **Engine**, `catalog / schema / table`. "DuckDB" appears only in detail views. Usage screens show host resource use, never "credits". | P0 |
 
@@ -133,7 +133,7 @@ Priorities: **P0** = MVP, cannot ship without · **P1** = v1.0 release · **P2**
 
 | ID | Requirement | Priority |
 |---|---|---|
-| REQ-28 | Notebook editor with Python, SQL (P0) and R (P1) cells; SQL editor with results grid; dashboard gallery and rearrangeable single-dashboard view. | P0 |
+| REQ-28 | Notebook editor with Python, SQL (P0) and R (P1) cells; SQL editor with results grid; dashboard gallery and rearrangeable single-dashboard view. Notebooks live in a project folder tree (`~/notebooks/<folders>/<name>`) shown beside the notebook list and under the notebook's table of contents (Databricks-style workspace). Each SQL run opens its own closable result tab. | P0 |
 | REQ-29 | All four analysis routes share one shell: 46 px icon rail with Files, Contents (context-sensitive), Dashboards, Catalog, and **Source control** panels; JupyterLab-style routing document tabs. | P0 |
 | REQ-30 | Responsive rule: below 1280 px rail panels overlay with a scrim and the Nkoyo drawer unpins; above 1280 px panels push and dock. Panels folded by default at every width; navigation closes an overlaying panel. | P0 |
 | REQ-31 | Cell output and job logs stream live (SSE/WebSockets). | P0 |
